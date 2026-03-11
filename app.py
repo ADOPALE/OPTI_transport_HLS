@@ -1,54 +1,65 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 
-st.set_page_config(layout="wide")
+# Configuration de la page
+st.set_page_config(layout="wide", page_title="Expert Logistique & Bio")
 
 # --- BARRE LATÉRALE ---
 with st.sidebar:
-    st.title("Mon App Logistique")
+    st.markdown("### 🚀 Menu Principal")
     
-    # Configuration du menu avec icônes (Bootstrap Icons)
     selected = option_menu(
-        menu_title="Navigation",  # Titre du menu (ou None pour masquer)
+        menu_title=None, # Pas de titre interne pour un look plus épuré
         options=[
             "Accueil", 
             "Paramétrage", 
-            "Volumes", 
+            "Volumes Distribution", 
             "Biologie", 
             "Optimisation"
         ],
+        # Sélection d'icônes Bootstrap cohérentes
         icons=[
-            "house",           # Accueil
-            "gear",            # Paramétrage
-            "box-seam",        # Volumes
-            "microscope",      # Biologie
-            "command"          # Optimisation
+            "house",          # Accueil
+            "gear-fill",      # Paramétrage
+            "box-seam",       # Volumes
+            "vial",           # Biologie (Icône de tube à essai)
+            "diagram-3"       # Optimisation (Icône de réseau/tournées)
         ], 
-        menu_icon="cast",      # Icône du titre du menu
-        default_index=0,       # Option sélectionnée par défaut
+        default_index=0,
         styles={
-            "container": {"padding": "5!important", "background-color": "#fafafa"},
-            "icon": {"color": "orange", "font-size": "20px"}, 
+            "container": {"padding": "0!important", "background-color": "#ffffff"},
+            "icon": {"color": "#444444", "font-size": "18px"}, 
             "nav-link": {
-                "font-size": "16px", 
+                "font-size": "15px", 
                 "text-align": "left", 
-                "margin": "0px", 
-                "--hover-color": "#eee"
+                "margin": "5px", 
+                "color": "black",          # <<-- Texte en noir ici
+                "font-weight": "500",      # Un peu plus épais pour la lisibilité
+                "--hover-color": "#f0f2f6" # Gris très léger au survol
             },
-            "nav-link-selected": {"background-color": "#02ab21"}, # Couleur de l'élément actif
+            "nav-link-selected": {
+                "background-color": "#e1e4e8", # Fond gris clair pour l'élément actif
+                "color": "black",              # Texte reste noir quand sélectionné
+                "font-weight": "bold"
+            },
         }
     )
+    st.divider()
 
-# --- LOGIQUE DE NAVIGATION ---
+# --- LOGIQUE D'AFFICHAGE (CONTENU) ---
 if selected == "Accueil":
-    st.title("🏠 Bienvenue")
-    st.info("Présentation des fonctionnalités...")
+    st.title("🏠 Écran d'Accueil")
+    # ... votre contenu d'accueil
 
 elif selected == "Paramétrage":
-    st.title("⚙️ Paramétrage")
-    # Votre code d'import ici
+    st.title("⚙️ Paramétrage des données")
 
-elif selected == "Volumes":
-    st.title("📦 Analyse des Volumes")
+elif selected == "Volumes Distribution":
+    st.title("📦 Volumes de distribution")
 
-# ... Répétez pour les autres options
+elif selected == "Biologie":
+    st.title("🔬 Passages de Biologie")
+    st.info("Visualisation des flux biologiques et prélèvements.")
+
+elif selected == "Optimisation":
+    st.title("🏎️ Optimisation des Tournées")
