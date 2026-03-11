@@ -71,10 +71,6 @@ with st.sidebar:
 # --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
 
 if selected == "Accueil":
-    # On peut remettre les logos en grand ici aussi pour l'accueil
-    col_logo1, col_logo2, col_text = st.columns([1, 1, 4])
-    with col_logo2:
-        if os.path.exists(logo_chu): st.image(logo_chu, width=200)
     
     st.title("📍 Optimisation des flux logistiques")
     st.markdown("---")
