@@ -5,22 +5,19 @@ import os
 # --- 1. CONFIGURATION & IMPORTS ---
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 
-# Initialisation de la variable de simulation dans la mémoire de l'app
+# Initialisation de la variable de simulation
 if 'sim_lancee' not in st.session_state:
     st.session_state['sim_lancee'] = False
 
 # Import des fonctions modules
 from modules.Import import show_import
-# Assurez-vous que ces fonctions sont bien définies dans vos fichiers respectifs
 #from modules.dataViz import show_volumes, show_biologie
 #from modules.paramSim import show_simulation
 
-# --- 2. STYLE CSS (SIDEBAR BLANCHE ET TEXTE GRAS) ---
+# --- 2. STYLE CSS ---
 st.markdown("""
     <style>
-        [data-testid="stSidebar"] {
-            background-color: white !important;
-        }
+        [data-testid="stSidebar"] { background-color: white !important; }
         [data-testid="stSidebar"] .stText, [data-testid="stSidebar"] p, [data-testid="stSidebar"] h3 {
             color: black !important;
             font-weight: bold !important;
@@ -43,7 +40,7 @@ with st.sidebar:
     
     st.divider()
 
-    # Définition dynamique des options du menu
+    # Définition dynamique des options
     options = ["Accueil", "Importer Données", "Volumes Distribution", "Passages Biologie", "Simuler & Optimiser"]
     icons = ["house", "cloud-upload", "truck", "microscope", "play-circle"]
 
@@ -59,29 +56,23 @@ with st.sidebar:
         styles={
             "container": {"background-color": "white", "border-radius": "0"},
             "icon": {"color": "black", "font-size": "18px"}, 
-            "nav-link": {
-                "color": "black", 
-                "font-size": "15px",
-                "font-weight": "bold",
-                "text-align": "left", 
-                "margin": "5px", 
-                "--hover-color": "#f0f2f6"
-            },
-            "nav-link-selected": {
-                "background-color": "#e1e4e8", 
-                "color": "black",
-                "font-weight": "900"
-            },
+            "nav-link": {"color": "black", "font-size": "15px", "font-weight": "bold", "text-align": "left", "margin": "5px", "--hover-color": "#f0f2f6"},
+            "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
     )
+
+    # --- BOUTON DE RÉINITIALISATION ---
+    if st.session_state['sim_lancee']:
+        st.sidebar.markdown("---")
+        if st.sidebar.button("🔄 Réinitialiser la simulation", use_container_width=True, help="Efface les résultats et masque les onglets de sortie"):
+            st.session_state['sim_lancee'] = False
+            st.rerun()
 
 # --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
 
 if selected == "Accueil":
     st.title("📍 Optimisation des flux logistiques")
-    st.markdown("### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes")
-    st.write("Cet outil permet de modéliser vos tournées et d'optimiser les passages.")
-    st.download_button("📥 Télécharger le fichier de paramétrage vierge", data="Données de test", file_name="template.xlsx")
+    st.write("Bienvenue sur l'outil...")
 
 elif selected == "Importer Données":
     show_import()
@@ -94,26 +85,17 @@ elif selected == "Passages Biologie":
 
 elif selected == "Simuler & Optimiser":
     st.title("🏎️ Optimisation")
-    # Appel de la fonction du module paramSim
-    # On lui passe une fonction ou on gère le bouton ici
-    #show_simulation()
-    
-    st.divider()
-    if st.button("🚀 Lancer la simulation définitive"):
-        with st.spinner("Calcul des tournées en cours..."):
-            # Ici votre logique de calcul (Phase_0.py etc.)
-            st.session_state['sim_lancee'] = True
-            st.success("Simulation terminée ! Les résultats sont disponibles dans le menu.")
-            st.rerun()
+    show_simulation()
+    if st.button("🚀 Lancer la simulation"):
+        st.session_state['sim_lancee'] = True
+        st.rerun()
 
+# Affichage conditionnel des nouveaux onglets
 elif selected == "Synthèse":
     st.title("📊 Synthèse des résultats")
-    # show_results_summary()
 
 elif selected == "Détail tournées":
     st.title("📍 Détail des tournées")
-    # show_tournees_detail()
 
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
-    # show_export_logic()
