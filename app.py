@@ -23,6 +23,11 @@ st.markdown("""
         [data-testid="stSidebarNav"] {
             background-color: white !important;
         }
+        /* Tout le texte de la sidebar en noir et gras */
+        [data-testid="stSidebar"] .stText, [data-testid="stSidebar"] p, [data-testid="stSidebar"] h3 {
+            color: black !important;
+            font-weight: bold !important;
+        }
     </style>
 """, unsafe_allow_html=True)
 
