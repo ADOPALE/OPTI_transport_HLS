@@ -62,7 +62,8 @@ with st.sidebar:
             "icon": {"color": "black", "font-size": "18px"}, 
             "nav-link": {
                 "color": "black", 
-                "font-size": "15px", 
+                "font-size": "15px",
+                "font-weight": "bold",
                 "text-align": "left", 
                 "margin": "5px", 
                 "--hover-color": "#f0f2f6" # Gris très léger au survol
@@ -70,7 +71,7 @@ with st.sidebar:
             "nav-link-selected": {
                 "background-color": "#e1e4e8", # Gris clair pour l'onglet actif
                 "color": "black",
-                "font-weight": "bold"
+                "font-weight": "900"
             },
         }
     )
