@@ -5,11 +5,13 @@ from streamlit_option_menu import option_menu
 st.set_page_config(layout="wide", page_title="Expert Logistique & Bio")
 
 # --- BARRE LATÉRALE ---
+import streamlit as st
+from streamlit_option_menu import option_menu
+
 with st.sidebar:
-    st.markdown("### 🚀 Menu Principal")
-    
+    st.markdown("### 🚀 Menu")
     selected = option_menu(
-        menu_title=None, # Pas de titre interne pour un look plus épuré
+        menu_title=None,
         options=[
             "Accueil", 
             "Paramétrage", 
@@ -17,34 +19,20 @@ with st.sidebar:
             "Biologie", 
             "Optimisation"
         ],
-        # Sélection d'icônes Bootstrap cohérentes
-        icons=[
-            "house",          # Accueil
-            "gear-fill",      # Paramétrage
-            "box-seam",       # Volumes
-            "biotechnology",           # Biologie (Icône de tube à essai)
-            "diagram-3"       # Optimisation (Icône de réseau/tournées)
-        ], 
-        default_index=0,
+        # On intègre l'icône directement dans le texte pour un rendu garanti
+        icons=["house", "gear", "box", "microscope", "map"], 
         styles={
-            "container": {"padding": "0!important", "background-color": "#ffffff"},
-            "icon": {"color": "#444444", "font-size": "18px"}, 
+            "container": {"background-color": "white"},
+            "icon": {"color": "black", "font-size": "18px"},
             "nav-link": {
+                "color": "black", 
                 "font-size": "15px", 
-                "text-align": "left", 
-                "margin": "5px", 
-                "color": "black",          # <<-- Texte en noir ici
-                "font-weight": "500",      # Un peu plus épais pour la lisibilité
-                "--hover-color": "#f0f2f6" # Gris très léger au survol
+                "text-align": "left",
+                "--hover-color": "#eee"
             },
-            "nav-link-selected": {
-                "background-color": "#e1e4e8", # Fond gris clair pour l'élément actif
-                "color": "black",              # Texte reste noir quand sélectionné
-                "font-weight": "bold"
-            },
+            "nav-link-selected": {"background-color": "#e1e4e8", "color": "black"}
         }
     )
-    st.divider()
 
 # --- LOGIQUE D'AFFICHAGE (CONTENU) ---
 if selected == "Accueil":
