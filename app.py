@@ -35,8 +35,11 @@ logo_chu = os.path.join(curr_dir, "assets", "Logo_CHU.png")
 
 # --- SIDEBAR ---
 with st.sidebar:
-    if os.path.exists(logo_adopale):
-        st.image(logo_adopale, width=150)
+    col_l1, col_l2 = st.columns(2)
+    with col_l1:
+        if os.path.exists(logo_adopale): st.image(logo_adopale, use_container_width=True)
+    with col_l2:
+        if os.path.exists(logo_chu): st.image(logo_chu, use_container_width=True)
     
     st.divider()
 
