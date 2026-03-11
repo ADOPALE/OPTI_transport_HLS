@@ -11,38 +11,59 @@ from modules.Import import show_import
 # CONFIGURATION PAGE
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 
+
+# --- INJECTION CSS POUR FORCE LE BLANC SUR TOUTE LA SIDEBAR ---
+st.markdown("""
+    <style>
+        /* Force le fond de la sidebar en blanc */
+        [data-testid="stSidebar"] {
+            background-color: white !important;
+        }
+        /* Ajuste la ligne de séparation si nécessaire */
+        [data-testid="stSidebarNav"] {
+            background-color: white !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+
 # GESTION DES CHEMINS LOGOS
 curr_dir = os.path.dirname(os.path.abspath(__file__))
 logo_adopale = os.path.join(curr_dir, "assets", "ADOPALE.jpeg")
 logo_chu = os.path.join(curr_dir, "assets", "Logo_CHU.png")
 
+
 # --- SIDEBAR ---
 with st.sidebar:
-    # Affichage des logos
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        if os.path.exists(logo_adopale): st.image(logo_adopale, use_container_width=True)
-    with col_l2:
-        if os.path.exists(logo_chu): st.image(logo_chu, use_container_width=True)
+    if os.path.exists(logo_adopale):
+        st.image(logo_adopale, width=150)
     
     st.divider()
 
     # MENU DE NAVIGATION
-    # On définit les options dynamiquement
-    menu_options = ["Accueil", "Importer Données", "Volumes Distribution", "Passages Biologie", "Simuler & Optimiser"]
-    
-    # Condition pour afficher les résultats (simulé ici par une variable en session_state)
-    if st.session_state.get('sim_complete', False):
-        menu_options.append("Résultats")
-        menu_options.append("Exporter")
-
     selected = option_menu(
         menu_title=None,
-        options=menu_options,
-        icons=["house", "cloud-upload", "truck", "microscope", "play-circle", "clipboard-data", "file-earmark-pdf"],
+        options=["Accueil", "Importer Données", "Volumes", "Biologie", "Optimisation"],
+        icons=["house", "cloud-upload", "truck", "microscope", "play-circle"],
         styles={
-            "nav-link": {"color": "black", "text-align": "left", "font-size": "14px"},
-            "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "bold"},
+            "container": {
+                "padding": "0!important", 
+                "background-color": "white", # Fond du menu en blanc
+                "border-radius": "0"
+            },
+            "icon": {"color": "black", "font-size": "18px"}, 
+            "nav-link": {
+                "color": "black", 
+                "font-size": "15px", 
+                "text-align": "left", 
+                "margin": "5px", 
+                "--hover-color": "#f0f2f6" # Gris très léger au survol
+            },
+            "nav-link-selected": {
+                "background-color": "#e1e4e8", # Gris clair pour l'onglet actif
+                "color": "black",
+                "font-weight": "bold"
+            },
         }
     )
 
