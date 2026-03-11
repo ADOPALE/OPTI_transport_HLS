@@ -85,7 +85,7 @@ elif selected == "Passages Biologie":
 
 elif selected == "Simuler & Optimiser":
     st.title("🏎️ Optimisation")
-    show_simulation()
+    #show_simulation()
     if st.button("🚀 Lancer la simulation"):
         st.session_state['sim_lancee'] = True
         st.rerun()
