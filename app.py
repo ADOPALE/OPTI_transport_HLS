@@ -69,7 +69,6 @@ with st.sidebar:
             st.rerun()
 
 # --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
-# --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
 
 if selected == "Accueil":
     # On peut remettre les logos en grand ici aussi pour l'accueil
@@ -94,7 +93,7 @@ if selected == "Accueil":
 
     # --- LE BOUTON DE TÉLÉCHARGEMENT RÉTABLI ---
     # Pour un vrai fichier Excel, il faudra lire un fichier local ou générer un buffer
-    with open("assets/template_vierge.xlsx", "rb") as file:
+    with open("assets/Template_vierge.xlsx", "rb") as file:
         st.download_button(
             label="📥 Télécharger le fichier de paramétrage vierge",
             data=file,
