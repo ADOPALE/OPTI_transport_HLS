@@ -1,0 +1,8 @@
+streamlit>=1.30.0
+pandas>=2.0.0
+openpyxl>=3.1.0        # Pour lire les fichiers Excel (.xlsx)
+plotly>=5.18.0         # Pour des graphiques de volumes interactifs
+folium>=0.15.0         # Pour la cartographie des tournées
+streamlit-folium>=0.17.0
+scipy>=1.11.0          # Souvent requis pour l'optimisation
+# ortools>=9.8.0       # Optionnel : Si vous utilisez Google OR-Tools pour les tournées
