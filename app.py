@@ -14,7 +14,7 @@ with st.sidebar:
             "Accueil", 
             "Paramétrage", 
             "Volumes Distribution", 
-            "🔬 Biologie", 
+            "Biologie", 
             "Optimisation"
         ],
         # Sélection d'icônes Bootstrap cohérentes
