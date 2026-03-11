@@ -3,7 +3,7 @@ from streamlit_option_menu import option_menu
 import os
 
 # Import des fonctions modules (vérifiez que vos fichiers ont ces noms dans /modules)
-from modules.import import show_import
+from modules.Import import show_import
 #from modules.dataViz import show_volumes, show_biologie
 #from modules.paramSim import show_simulation
 # Note : Les résultats ne s'affichent que si une condition est remplie
