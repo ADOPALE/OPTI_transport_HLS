@@ -69,10 +69,42 @@ with st.sidebar:
             st.rerun()
 
 # --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
+# --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
 
 if selected == "Accueil":
+    # On peut remettre les logos en grand ici aussi pour l'accueil
+    col_logo1, col_logo2, col_text = st.columns([1, 1, 4])
+    with col_logo1:
+        if os.path.exists(logo_adopale): st.image(logo_adopale, width=120)
+    with col_logo2:
+        if os.path.exists(logo_chu): st.image(logo_chu, width=120)
+    
     st.title("📍 Optimisation des flux logistiques")
-    st.write("Bienvenue sur l'outil...")
+    st.markdown("---")
+    
+    st.markdown("""
+    ### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes
+    Cet outil vous permet de modéliser, visualiser et optimiser vos tournées de distribution et de biologie.
+    
+    **Comment procéder ?**
+    1. **Téléchargez** le template ci-dessous.
+    2. **Remplissez** vos données de sites, de volumes et de fréquences.
+    3. **Importez** le fichier dans l'onglet dédié pour lancer vos analyses.
+    """)
+
+    # --- LE BOUTON DE TÉLÉCHARGEMENT RÉTABLI ---
+    # Pour un vrai fichier Excel, il faudra lire un fichier local ou générer un buffer
+    with open("assets/template_vierge.xlsx", "rb") as file:
+        st.download_button(
+            label="📥 Télécharger le fichier de paramétrage vierge",
+            data=file,
+            file_name="template_parametrage_ADOPALE.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Cliquez ici pour obtenir le modèle Excel à remplir"
+        )
+    
+    st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
+
 
 elif selected == "Importer Données":
     show_import()
