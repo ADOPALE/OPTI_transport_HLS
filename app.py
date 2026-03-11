@@ -14,7 +14,7 @@ st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 # GESTION DES CHEMINS LOGOS
 curr_dir = os.path.dirname(os.path.abspath(__file__))
 logo_adopale = os.path.join(curr_dir, "assets", "ADOPALE.jpeg")
-logo_chu = os.path.join(curr_dir, "assets", "logo_CHU.png")
+logo_chu = os.path.join(curr_dir, "assets", "Logo_CHU.png")
 
 # --- SIDEBAR ---
 with st.sidebar:
