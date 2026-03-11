@@ -22,7 +22,7 @@ with st.sidebar:
             "house",          # Accueil
             "gear-fill",      # Paramétrage
             "box-seam",       # Volumes
-            "microscope",           # Biologie (Icône de tube à essai)
+            "biotechnology",           # Biologie (Icône de tube à essai)
             "diagram-3"       # Optimisation (Icône de réseau/tournées)
         ], 
         default_index=0,
