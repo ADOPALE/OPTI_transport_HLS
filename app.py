@@ -96,7 +96,7 @@ elif selected == "Simuler & Optimiser":
     st.title("🏎️ Optimisation")
     # Appel de la fonction du module paramSim
     # On lui passe une fonction ou on gère le bouton ici
-    show_simulation()
+    #show_simulation()
     
     st.divider()
     if st.button("🚀 Lancer la simulation définitive"):
