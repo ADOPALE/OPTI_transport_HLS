@@ -13,7 +13,6 @@ if 'sim_lancee' not in st.session_state:
 from modules.Import import show_import
 #from modules.dataViz import show_volumes, show_biologie
 #from modules.paramSim import show_simulation
-#coucou !!
 
 # --- 2. STYLE CSS ---
 st.markdown("""
