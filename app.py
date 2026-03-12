@@ -73,20 +73,13 @@ def show_simulation_page():
 
 
 with st.sidebar:
-
-    st.markdown('<div class="sidebar-top">', unsafe_allow_html=True)
-
-    col_l1, col_l2 = st.columns(2)
-
-    with col_l1:
-        if os.path.exists(logo_adopale):
-            st.image(logo_adopale, use_container_width=True)
-
-    with col_l2:
-        if os.path.exists(logo_chu):
-            st.image(logo_chu, use_container_width=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        if LOGO_ADOPALE.exists():
+            st.image(str(LOGO_ADOPALE), use_container_width=True)
+    with col2:
+        if LOGO_CHU.exists():
+            st.image(str(LOGO_CHU), use_container_width=True)
 
     st.divider()
 
