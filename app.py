@@ -1,53 +1,94 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
-import os
+from pathlib import Path
 
-# --- 1. CONFIGURATION & IMPORTS ---
+from modules.Import import show_import
+
+try:
+    from modules.dataViz import show_volumes, show_biologie
+except ImportError:
+    show_volumes = None
+    show_biologie = None
+
+
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 
-# Initialisation de la variable de simulation
-if 'sim_lancee' not in st.session_state:
-    st.session_state['sim_lancee'] = False
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
 
-# Import des fonctions modules
-from modules.Import import show_import
-#from modules.dataViz import show_volumes, show_biologie
-#from modules.paramSim import show_simulation
+LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.png"
+LOGO_CHU = ASSETS_DIR / "Logo_CHU.png"
+TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 
-# --- 2. STYLE CSS ---
-st.markdown("""
-    <style>
-        [data-testid="stSidebar"] { background-color: white !important; }
-        [data-testid="stSidebar"] .stText, [data-testid="stSidebar"] p, [data-testid="stSidebar"] h3 {
-            color: black !important;
-            font-weight: bold !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
+if "sim_lancee" not in st.session_state:
+    st.session_state.sim_lancee = False
 
-# --- 3. GESTION DES LOGOS ---
-curr_dir = os.path.dirname(os.path.abspath(__file__))
-logo_adopale = os.path.join(curr_dir, "assets", "ADOPALE.png")
-logo_chu = os.path.join(curr_dir, "assets", "Logo_CHU.png")
 
-# --- 4. SIDEBAR & NAVIGATION ---
+def show_home():
+    st.title("📍 Optimisation des flux logistiques")
+    st.markdown("---")
+    st.markdown("""
+    ### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes
+    Cet outil vous permet de modéliser, visualiser et optimiser vos tournées de distribution et de biologie.
+
+    **Comment procéder ?**
+    1. **Téléchargez** le template ci-dessous.
+    2. **Remplissez** vos données de sites, de volumes et de fréquences.
+    3. **Importez** le fichier dans l'onglet dédié pour lancer vos analyses.
+    """)
+
+    if TEMPLATE_FILE.exists():
+        with open(TEMPLATE_FILE, "rb") as file:
+            st.download_button(
+                label="📥 Télécharger le fichier de paramétrage vierge",
+                data=file,
+                file_name="template_parametrage_ADOPALE.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    else:
+        st.error("Le fichier template est introuvable.")
+
+    st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
+
+
+def show_volumes_page():
+    if show_volumes:
+        show_volumes()
+    else:
+        st.warning("Le module de visualisation des volumes n'est pas disponible.")
+
+
+def show_biologie_page():
+    if show_biologie:
+        show_biologie()
+    else:
+        st.warning("Le module biologie n'est pas disponible.")
+
+
+def show_simulation_page():
+    st.title("🏎️ Optimisation")
+    if st.button("🚀 Lancer la simulation"):
+        st.session_state.sim_lancee = True
+        st.rerun()
+
+
 with st.sidebar:
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        if os.path.exists(logo_adopale): st.image(logo_adopale, use_container_width=True)
-    with col_l2:
-        if os.path.exists(logo_chu): st.image(logo_chu, use_container_width=True)
-    
+    col1, col2 = st.columns(2)
+    with col1:
+        if LOGO_ADOPALE.exists():
+            st.image(str(LOGO_ADOPALE), use_container_width=True)
+    with col2:
+        if LOGO_CHU.exists():
+            st.image(str(LOGO_CHU), use_container_width=True)
+
     st.divider()
 
-    # Définition dynamique des options
     options = ["Accueil", "Importer Données", "Volumes Distribution", "Passages Biologie", "Simuler & Optimiser"]
     icons = ["house", "cloud-upload", "truck", "microscope", "play-circle"]
 
-    # Ajout des fenêtres de résultats si la simulation est faite
-    if st.session_state['sim_lancee']:
-        options.extend(["Synthèse", "Détail tournées", "Exporter"])
-        icons.extend(["clipboard-data", "map", "file-earmark-pdf"])
+    if st.session_state.sim_lancee:
+        options += ["Synthèse", "Détail tournées", "Exporter"]
+        icons += ["clipboard-data", "map", "file-earmark-pdf"]
 
     selected = option_menu(
         menu_title=None,
@@ -55,72 +96,39 @@ with st.sidebar:
         icons=icons,
         styles={
             "container": {"background-color": "white", "border-radius": "0"},
-            "icon": {"color": "black", "font-size": "18px"}, 
-            "nav-link": {"color": "black", "font-size": "15px", "font-weight": "bold", "text-align": "left", "margin": "5px", "--hover-color": "#f0f2f6"},
+            "icon": {"color": "black", "font-size": "18px"},
+            "nav-link": {
+                "color": "black",
+                "font-size": "15px",
+                "font-weight": "bold",
+                "text-align": "left",
+                "margin": "5px",
+                "--hover-color": "#f0f2f6"
+            },
             "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
     )
 
-    # --- BOUTON DE RÉINITIALISATION ---
-    if st.session_state['sim_lancee']:
-        st.sidebar.markdown("---")
-        if st.sidebar.button("🔄 Réinitialiser la simulation", use_container_width=True, help="Efface les résultats et masque les onglets de sortie"):
-            st.session_state['sim_lancee'] = False
+    if st.session_state.sim_lancee:
+        st.markdown("---")
+        if st.button("🔄 Réinitialiser la simulation", use_container_width=True):
+            st.session_state.sim_lancee = False
             st.rerun()
 
-# --- 5. LOGIQUE D'AFFICHAGE DES FENÊTRES ---
 
 if selected == "Accueil":
-    
-    st.title("📍 Optimisation des flux logistiques")
-    st.markdown("---")
-    
-    st.markdown("""
-    ### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes
-    Cet outil vous permet de modéliser, visualiser et optimiser vos tournées de distribution et de biologie.
-    
-    **Comment procéder ?**
-    1. **Téléchargez** le template ci-dessous.
-    2. **Remplissez** vos données de sites, de volumes et de fréquences.
-    3. **Importez** le fichier dans l'onglet dédié pour lancer vos analyses.
-    """)
-
-    # --- LE BOUTON DE TÉLÉCHARGEMENT RÉTABLI ---
-    # Pour un vrai fichier Excel, il faudra lire un fichier local ou générer un buffer
-    with open("assets/Template_vierge.xlsx", "rb") as file:
-        st.download_button(
-            label="📥 Télécharger le fichier de paramétrage vierge",
-            data=file,
-            file_name="template_parametrage_ADOPALE.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            help="Cliquez ici pour obtenir le modèle Excel à remplir"
-        )
-    
-    st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
-
-
+    show_home()
 elif selected == "Importer Données":
     show_import()
-
 elif selected == "Volumes Distribution":
-    show_volumes()
-
+    show_volumes_page()
 elif selected == "Passages Biologie":
-    show_biologie()
-
+    show_biologie_page()
 elif selected == "Simuler & Optimiser":
-    st.title("🏎️ Optimisation")
-    #show_simulation()
-    if st.button("🚀 Lancer la simulation"):
-        st.session_state['sim_lancee'] = True
-        st.rerun()
-
-# Affichage conditionnel des nouveaux onglets
+    show_simulation_page()
 elif selected == "Synthèse":
     st.title("📊 Synthèse des résultats")
-
 elif selected == "Détail tournées":
     st.title("📍 Détail des tournées")
-
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
