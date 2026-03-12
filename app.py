@@ -71,23 +71,6 @@ def show_simulation_page():
         st.session_state.sim_lancee = True
         st.rerun()
 
-st.markdown("""
-<style>
-
-[data-testid="stSidebar"] {
-    background-color: #f0f2f6;
-}
-
-/* zone blanche en haut */
-.sidebar-top {
-    background-color: white;
-    padding: 10px;
-    border-radius: 0px;
-    margin-bottom: 10px;
-}
-
-</style>
-""", unsafe_allow_html=True)
 
 with st.sidebar:
 
