@@ -71,15 +71,39 @@ def show_simulation_page():
         st.session_state.sim_lancee = True
         st.rerun()
 
+st.markdown("""
+<style>
+
+[data-testid="stSidebar"] {
+    background-color: #f0f2f6;
+}
+
+/* zone blanche en haut */
+.sidebar-top {
+    background-color: white;
+    padding: 10px;
+    border-radius: 0px;
+    margin-bottom: 10px;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
-    col1, col2 = st.columns(2)
-    with col1:
-        if LOGO_ADOPALE.exists():
-            st.image(str(LOGO_ADOPALE), use_container_width=True)
-    with col2:
-        if LOGO_CHU.exists():
-            st.image(str(LOGO_CHU), use_container_width=True)
+
+    st.markdown('<div class="sidebar-top">', unsafe_allow_html=True)
+
+    col_l1, col_l2 = st.columns(2)
+
+    with col_l1:
+        if os.path.exists(logo_adopale):
+            st.image(logo_adopale, use_container_width=True)
+
+    with col_l2:
+        if os.path.exists(logo_chu):
+            st.image(logo_chu, use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
 
