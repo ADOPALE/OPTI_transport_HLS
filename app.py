@@ -56,24 +56,31 @@ def show_home():
 
 
 def show_volumes_page():
-    if show_volumes:
-        show_volumes()
+    if "data" in st.session_state:
+        if show_volumes:
+            show_volumes()
+        else:
+            st.warning("Le module de visualisation des volumes n'est pas disponible.")
     else:
-        st.warning("Le module de visualisation des volumes n'est pas disponible.")
-
+        st.error("⚠️ Aucune donnée disponible. Veuillez d'abord importer votre fichier Excel dans l'onglet 'Importer Données'.")
 
 def show_biologie_page():
-    if show_biologie:
-        show_biologie()
+    if "data" in st.session_state:
+        if show_biologie:
+            show_biologie()
+        else:
+            st.warning("Le module biologie n'est pas disponible.")
     else:
-        st.warning("Le module biologie n'est pas disponible.")
-
+        st.error("⚠️ Aucune donnée disponible. Veuillez d'abord importer votre fichier Excel dans l'onglet 'Importer Données'.")
 
 def show_simulation_page():
     st.title("🏎️ Optimisation")
-    if st.button("🚀 Lancer la simulation"):
-        st.session_state.sim_lancee = True
-        st.rerun()
+    if "data" in st.session_state:
+        if st.button("🚀 Lancer la simulation"):
+            st.session_state.sim_lancee = True
+            st.rerun()
+    else:
+        st.error("⚠️ Impossible de lancer la simulation sans données. Importez le fichier Excel de paramétrage.")
 
 
 with st.sidebar:
