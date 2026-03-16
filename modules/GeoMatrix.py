@@ -90,18 +90,25 @@ def run_matrix_tool():
     st.subheader("1. Saisie des sites et adresses")
     st.info("Astuce : Vous pouvez copier-coller directement vos colonnes depuis Excel.")
     
-    # DataFrame initial vide pour le tableau de saisie
-    init_data = pd.DataFrame([{"site": "", "adresse": ""}], index=[0])
+    # --- MODIFICATION ICI ---
+    # Nous créons un index clair [0, 1] pour forcer la reconnaissance des lignes
+    init_data = pd.DataFrame(
+        [{"site": "", "adresse": ""}, {"site": "", "adresse": ""}], 
+        index=[0, 1] # Index explicite
+    )
     
     df_input = st.data_editor(
         init_data,
         num_rows="dynamic",
         use_container_width=True,
+        hide_index=True, # <--- ON CACHE L'INDEX (la colonne de gauche avec les 0, 1)
         column_config={
+            # Ces colonnes sont obligatoires, peu importe le nom dans Excel
             "site": st.column_config.TextColumn("Nom du Site", width="medium"),
             "adresse": st.column_config.TextColumn("Adresse Complète", width="large")
         }
     )
+    # -------------------------
 
     # 2. Bouton d'action
     if st.button("🚀 Générer les matrices", type="primary"):
