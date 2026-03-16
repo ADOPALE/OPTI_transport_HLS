@@ -14,24 +14,32 @@ from io import BytesIO
 # ==========================================
 
 def get_coordinates(df_clean, progress_bar, status_text):
-    """Géocodage avec suivi par ligne utilisateur."""
-    geolocator = Nominatim(user_agent="adopale_hospital_sim")
+    # 1. Initialisation avec un User-Agent unique pour demain
+    # Le timeout est bien placé ICI et non dans le RateLimiter
+    geolocator = Nominatim(user_agent="outil_chu_nantes_final_check", timeout=10)
+    
+    # 2. Configuration du limiteur (1.1s est le minimum recommandé)
     geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
     
     cache_coords = {}
     total_lignes = len(df_clean)
 
     for i, row in enumerate(df_clean.itertuples()):
-        addr = row.adresse
+        # NETTOYAGE : On s'assure que l'adresse est une chaîne propre
+        addr = str(row.adresse).strip().replace('\n', ' ')
+        
         status_text.text(f"🌍 Géocodage : ligne {i+1} / {total_lignes}")
         progress_bar.progress((i + 1) / total_lignes)
         
-        # On ne requête l'API que si l'adresse n'est pas déjà connue
         if addr not in cache_coords:
             try:
                 location = geocode(addr)
-                cache_coords[addr] = (location.latitude, location.longitude) if location else (None, None)
+                if location:
+                    cache_coords[addr] = (location.latitude, location.longitude)
+                else:
+                    cache_coords[addr] = (None, None)
             except Exception:
+                # En cas d'erreur réseau, on marque vide et on continue
                 cache_coords[addr] = (None, None)
         
     return cache_coords
