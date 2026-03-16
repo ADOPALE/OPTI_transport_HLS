@@ -88,20 +88,19 @@ def run_matrix_tool():
 
     # 1. Zone de saisie
     st.subheader("1. Saisie des sites et adresses")
-    st.info("Astuce : Sélectionnez vos deux colonnes dans Excel, faites Ctrl+C, puis cliquez sur la première cellule en haut à gauche ici et faites Ctrl+V.")
+    st.info("💡 **Instruction pour le collage :** Sélectionnez vos données dans Excel, faites Ctrl+C. Revenez ici, cliquez **UNE SEULE FOIS** sur la première case vide (elle doit avoir un contour bleu sans curseur clignotant) et faites Ctrl+V.")
     
-    # On crée une structure vide avec les bons types
-    # Cela permet de coller 2 ou 200 lignes sans restriction
-    df_base = pd.DataFrame(columns=["site", "adresse"])
+    # On pré-remplit avec 5 lignes vides pour faciliter le "réceptacle" du copier-coller
+    df_base = pd.DataFrame([{"site": "", "adresse": ""} for _ in range(5)])
     
     df_input = st.data_editor(
         df_base,
-        num_rows="dynamic", # Permet d'ajouter des lignes automatiquement au collage
+        num_rows="dynamic", 
         use_container_width=True,
-        hide_index=True,    # Cache la colonne d'index (0, 1, 2...) pour éviter la confusion
+        hide_index=True,
         column_config={
-            "site": st.column_config.TextColumn("Nom du Site (ex: HLS)", width="medium"),
-            "adresse": st.column_config.TextColumn("Adresse Complète (ex: Boulevard Jacques Monod, Nantes)", width="large")
+            "site": st.column_config.TextColumn("Nom du Site", width="medium"),
+            "adresse": st.column_config.TextColumn("Adresse Complète", width="large")
         }
     )
 
