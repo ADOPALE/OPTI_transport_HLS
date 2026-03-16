@@ -105,12 +105,34 @@ def run_matrix_tool():
 
     # 2. Bouton d'action
     if st.button("🚀 Générer les matrices", type="primary"):
-        # Nettoyage des données
-        df_clean = df_input.dropna(subset=['site', 'adresse']).copy()
-        df_clean = df_clean[(df_clean['site'] != "") & (df_clean['adresse'] != "")]
+        # On travaille sur une copie
+        df_clean = df_input.copy()
+
+        # RÈGLE D'OR : On renomme par position pour éviter les erreurs de casse/nom
+        # Col 0 -> site, Col 1 -> adresse
+        if len(df_clean.columns) >= 2:
+            df_clean.columns = ['site', 'adresse'] + list(df_clean.columns[2:])
+        else:
+            st.error("❌ Le tableau doit comporter au moins deux colonnes (Site et Adresse).")
+            return
+
+        # Nettoyage des espaces et suppression des lignes vides
+        df_clean['site'] = df_clean['site'].astype(str).str.strip()
+        df_clean['adresse'] = df_clean['adresse'].astype(str).str.strip()
+
+        # Filtrage : On retire les lignes vides ou de remplissage par défaut
+        df_clean = df_clean[
+            (df_clean['site'] != "") & 
+            (df_clean['site'] != "None") & 
+            (df_clean['site'] != "nan") &
+            (df_clean['adresse'] != "") &
+            (df_clean['adresse'] != "None") &
+            (df_clean['adresse'] != "nan")
+        ]
 
         if len(df_clean) < 2:
-            st.error("❌ Veuillez saisir au moins deux sites valides.")
+            st.error(f"❌ Veuillez saisir au moins deux sites valides. (Détectés : {len(df_clean)})")
+            # st.write(df_clean) # Décommenter pour voir le résultat du nettoyage si besoin
             return
 
         # Initialisation de la progression
