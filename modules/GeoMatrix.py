@@ -13,45 +13,29 @@ from io import BytesIO
 # PARTIE 1 : LOGIQUE MÉTIER (Calculs)
 # ==========================================
 
-#modif LM 16/03 15h48
 def get_coordinates(df_clean, progress_bar, status_text):
-    # On change radicalement le user_agent pour réinitialiser la connexion
-    geolocator = Nominatim(user_agent="adopale_hospital_sim_prod_test") 
-    
-    # On augmente le délai à 2 secondes (limite stricte OSM)
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=2.0, timeout=10)
+    """Géocodage avec suivi par ligne utilisateur."""
+    geolocator = Nominatim(user_agent="adopale_hospital_sim")
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
     
     cache_coords = {}
     total_lignes = len(df_clean)
 
     for i, row in enumerate(df_clean.itertuples()):
-        # NETTOYAGE CRUCIAL : on enlève les caractères spéciaux invisibles
-        addr = str(row.adresse).replace('\n', ' ').replace('\r', ' ').strip()
-        
+        addr = row.adresse
         status_text.text(f"🌍 Géocodage : ligne {i+1} / {total_lignes}")
         progress_bar.progress((i + 1) / total_lignes)
         
+        # On ne requête l'API que si l'adresse n'est pas déjà connue
         if addr not in cache_coords:
             try:
-                # Tentative 1 : Adresse complète
                 location = geocode(addr)
-                
-                # Tentative 2 : Si échec, on essaie sans le nom de l'hôpital (juste la rue)
-                if not location and "," in addr:
-                    short_addr = addr.split(",", 1)[-1].strip()
-                    location = geocode(short_addr)
-                
-                if location:
-                    cache_coords[addr] = (location.latitude, location.longitude)
-                else:
-                    cache_coords[addr] = (None, None)
+                cache_coords[addr] = (location.latitude, location.longitude) if location else (None, None)
             except Exception:
-                time.sleep(2) # Pause forcée en cas d'erreur réseau
                 cache_coords[addr] = (None, None)
         
     return cache_coords
 
-# fin modif
 def calculate_osrm_matrices(df_sites, progress_bar, status_text):
     """Calcul des matrices avec suivi par case (n * n)."""
     n = len(df_sites)
