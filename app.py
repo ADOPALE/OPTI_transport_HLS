@@ -20,8 +20,8 @@ st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 
-LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.jpg"
-LOGO_CHU = ASSETS_DIR / "CHU Nantes.png"
+LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.png"
+LOGO_CHU = ASSETS_DIR / "Logo_CHU.png"
 TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 
 if "sim_lancee" not in st.session_state:
@@ -54,34 +54,27 @@ def show_home():
 
     st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
 
-#Modif LM 
+
 def show_volumes_page():
-    if "data" in st.session_state:
-        if show_volumes:
-            show_volumes()
-        else:
-            st.warning("Le module de visualisation des volumes n'est pas disponible.")
+    if show_volumes:
+        show_volumes()
     else:
-        st.error("⚠️ Aucune donnée disponible. Veuillez d'abord importer votre fichier Excel dans l'onglet 'Importer Données'.")
+        st.warning("Le module de visualisation des volumes n'est pas disponible.")
+
 
 def show_biologie_page():
-    if "data" in st.session_state:
-        if show_biologie:
-            show_biologie()
-        else:
-            st.warning("Le module biologie n'est pas disponible.")
+    if show_biologie:
+        show_biologie()
     else:
-        st.error("⚠️ Aucune donnée disponible. Veuillez d'abord importer votre fichier Excel dans l'onglet 'Importer Données'.")
+        st.warning("Le module biologie n'est pas disponible.")
+
 
 def show_simulation_page():
     st.title("🏎️ Optimisation")
-    if "data" in st.session_state:
-        if st.button("🚀 Lancer la simulation"):
-            st.session_state.sim_lancee = True
-            st.rerun()
-    else:
-        st.error("⚠️ Impossible de lancer la simulation sans données. Importez le fichier Excel de paramétrage.")
-#fin modif LM
+    if st.button("🚀 Lancer la simulation"):
+        st.session_state.sim_lancee = True
+        st.rerun()
+
 
 with st.sidebar:
     col1, col2 = st.columns(2)
