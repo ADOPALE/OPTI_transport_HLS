@@ -20,8 +20,8 @@ st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 
-LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.png"
-LOGO_CHU = ASSETS_DIR / "Logo_CHU.png"
+LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.jpg"
+LOGO_CHU = ASSETS_DIR / "CHU Nantes.png"
 TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 
 if "sim_lancee" not in st.session_state:
