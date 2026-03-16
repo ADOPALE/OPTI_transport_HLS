@@ -85,7 +85,7 @@ def run_matrix_tool():
 
     # 1. Zone de saisie
     st.subheader("1. Saisie des sites et adresses")
-    st.info("💡 **Instruction pour le collage :** Sélectionnez vos données dans Excel, faites Ctrl+C. Revenez ici, cliquez **UNE SEULE FOIS** sur la première case vide (elle doit avoir un contour bleu sans curseur clignotant) et faites Ctrl+V.")
+    st.info("💡 **Instruction pour le collage :** Sélectionnez vos données dans Excel, faites Ctrl+C. Revenez ici, cliquez **UNE SEULE FOIS** sur la première case vide (elle doit avoir un contour rouge et faites Ctrl+V.")
     
     # On pré-remplit avec 5 lignes vides pour faciliter le "réceptacle" du copier-coller
     df_base = pd.DataFrame([{"site": "", "adresse": ""} for _ in range(5)])
