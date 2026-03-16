@@ -13,29 +13,38 @@ from io import BytesIO
 # PARTIE 1 : LOGIQUE MÉTIER (Calculs)
 # ==========================================
 
+#modif LM 16/03 15h48
 def get_coordinates(df_clean, progress_bar, status_text):
-    """Géocodage avec suivi par ligne utilisateur."""
-    geolocator = Nominatim(user_agent="adopale_hospital_sim")
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
+    """Géocodage avec suivi par ligne utilisateur et gestion d'erreurs."""
+    geolocator = Nominatim(user_agent="adopale_hospital_sim_v2") # Nouveau user_agent
+    # On passe à 1.5s de délai pour éviter d'être banni par le serveur public
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5, error_wait_seconds=5.0)
     
     cache_coords = {}
     total_lignes = len(df_clean)
 
     for i, row in enumerate(df_clean.itertuples()):
-        addr = row.adresse
+        addr = str(row.adresse).strip()
         status_text.text(f"🌍 Géocodage : ligne {i+1} / {total_lignes}")
         progress_bar.progress((i + 1) / total_lignes)
         
-        # On ne requête l'API que si l'adresse n'est pas déjà connue
         if addr not in cache_coords:
             try:
+                # Tentative de géocodage
                 location = geocode(addr)
-                cache_coords[addr] = (location.latitude, location.longitude) if location else (None, None)
-            except Exception:
+                if location:
+                    cache_coords[addr] = (location.latitude, location.longitude)
+                else:
+                    # Si l'adresse complète échoue, on peut tenter d'extraire le code postal/ville
+                    # mais pour l'instant on marque None
+                    cache_coords[addr] = (None, None)
+            except Exception as e:
+                st.error(f"Erreur technique sur l'adresse : {addr}")
                 cache_coords[addr] = (None, None)
         
     return cache_coords
 
+# fin modif
 def calculate_osrm_matrices(df_sites, progress_bar, status_text):
     """Calcul des matrices avec suivi par case (n * n)."""
     n = len(df_sites)
