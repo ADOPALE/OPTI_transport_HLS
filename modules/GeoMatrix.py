@@ -105,34 +105,31 @@ def run_matrix_tool():
 
     # 2. Bouton d'action
     if st.button("🚀 Générer les matrices", type="primary"):
-        # On travaille sur une copie
+        # 1. Conversion forcée en chaînes de caractères et renommage
         df_clean = df_input.copy()
-
-        # RÈGLE D'OR : On renomme par position pour éviter les erreurs de casse/nom
-        # Col 0 -> site, Col 1 -> adresse
-        if len(df_clean.columns) >= 2:
-            df_clean.columns = ['site', 'adresse'] + list(df_clean.columns[2:])
-        else:
-            st.error("❌ Le tableau doit comporter au moins deux colonnes (Site et Adresse).")
+        
+        # On s'assure qu'on a au moins 2 colonnes
+        if df_clean.shape[1] < 2:
+            st.error("Le tableau doit avoir au moins 2 colonnes.")
             return
 
-        # Nettoyage des espaces et suppression des lignes vides
-        df_clean['site'] = df_clean['site'].astype(str).str.strip()
-        df_clean['adresse'] = df_clean['adresse'].astype(str).str.strip()
+        # On renomme et on nettoie
+        df_clean.columns = ['site', 'adresse'] + list(df_clean.columns[2:])
+        
+        for col in ['site', 'adresse']:
+            df_clean[col] = df_clean[col].astype(str).replace(['None', 'nan', 'NaN'], '')
+            df_clean[col] = df_clean[col].str.strip()
 
-        # Filtrage : On retire les lignes vides ou de remplissage par défaut
-        df_clean = df_clean[
-            (df_clean['site'] != "") & 
-            (df_clean['site'] != "None") & 
-            (df_clean['site'] != "nan") &
-            (df_clean['adresse'] != "") &
-            (df_clean['adresse'] != "None") &
-            (df_clean['adresse'] != "nan")
-        ]
+        # 2. Filtrage : on ne garde que ce qui n'est pas vide
+        df_clean = df_clean[(df_clean['site'] != "") & (df_clean['adresse'] != "")]
+
+        # --- DEBUG VISUEL (Temporaire) ---
+        # st.write("Données détectées :", df_clean) 
+        # ---------------------------------
 
         if len(df_clean) < 2:
             st.error(f"❌ Veuillez saisir au moins deux sites valides. (Détectés : {len(df_clean)})")
-            # st.write(df_clean) # Décommenter pour voir le résultat du nettoyage si besoin
+            st.info("💡 Astuce : Cliquez en dehors du tableau après avoir collé vos données pour valider la saisie.")
             return
 
         # Initialisation de la progression
