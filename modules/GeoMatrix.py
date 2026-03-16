@@ -98,8 +98,8 @@ def run_matrix_tool():
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "site": st.column_config.TextColumn("Nom du Site", placeholder="ex: CHU Nantes", width="medium"),
-            "adresse": st.column_config.TextColumn("Adresse Complète", placeholder="ex: 1 place Alexis-Ricordeau, 44000 Nantes", width="large")
+            "site": st.column_config.TextColumn("Nom du Site", width="medium"),
+            "adresse": st.column_config.TextColumn("Adresse Complète", width="large")
         }
     )
 
