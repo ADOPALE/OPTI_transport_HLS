@@ -4,6 +4,10 @@ from pathlib import Path
 
 from modules.Import import show_import
 
+#__ajout LM 16/03
+from modules.GeoMatrix import run_matrix_tool
+#__fin ajout
+
 try:
     from modules.dataViz import show_volumes, show_biologie
 except ImportError:
@@ -82,9 +86,9 @@ with st.sidebar:
             st.image(str(LOGO_CHU), use_container_width=True)
 
     st.divider()
-
-    options = ["Accueil", "Importer Données", "Volumes Distribution", "Passages Biologie", "Simuler & Optimiser"]
-    icons = ["house", "cloud-upload", "truck", "microscope", "play-circle"]
+#__ajout LM 16/03 "Calcul Matrices" et "geo-alt"
+    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "Passages Biologie", "Simuler & Optimiser"]
+    icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle"]
 
     if st.session_state.sim_lancee:
         options += ["Synthèse", "Détail tournées", "Exporter"]
@@ -118,6 +122,10 @@ with st.sidebar:
 
 if selected == "Accueil":
     show_home()
+    #__ajout LM 16/03 
+elif selected == "Calcul Matrices":
+    run_matrix_tool()
+    #fin ajout
 elif selected == "Importer Données":
     show_import()
 elif selected == "Volumes Distribution":
