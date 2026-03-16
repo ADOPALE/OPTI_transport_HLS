@@ -7,3 +7,7 @@ streamlit-folium>=0.17.0
 scipy>=1.11.0          # Souvent requis pour l'optimisation
 streamlit-option-menu
 # ortools>=9.8.0       # Optionnel : Si vous utilisez Google OR-Tools pour les tournées
+
+#__ajout LM 16/03
+geopy>=2.4.0
+requests>=2.31.0
