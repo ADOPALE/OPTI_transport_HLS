@@ -88,27 +88,22 @@ def run_matrix_tool():
 
     # 1. Zone de saisie
     st.subheader("1. Saisie des sites et adresses")
-    st.info("Astuce : Vous pouvez copier-coller directement vos colonnes depuis Excel.")
+    st.info("Astuce : Sélectionnez vos deux colonnes dans Excel, faites Ctrl+C, puis cliquez sur la première cellule en haut à gauche ici et faites Ctrl+V.")
     
-    # --- MODIFICATION ICI ---
-    # Nous créons un index clair [0, 1] pour forcer la reconnaissance des lignes
-    init_data = pd.DataFrame(
-        [{"site": "", "adresse": ""}, {"site": "", "adresse": ""}], 
-        index=[0, 1] # Index explicite
-    )
+    # On crée une structure vide avec les bons types
+    # Cela permet de coller 2 ou 200 lignes sans restriction
+    df_base = pd.DataFrame(columns=["site", "adresse"])
     
     df_input = st.data_editor(
-        init_data,
-        num_rows="dynamic",
+        df_base,
+        num_rows="dynamic", # Permet d'ajouter des lignes automatiquement au collage
         use_container_width=True,
-        hide_index=True, # <--- ON CACHE L'INDEX (la colonne de gauche avec les 0, 1)
+        hide_index=True,    # Cache la colonne d'index (0, 1, 2...) pour éviter la confusion
         column_config={
-            # Ces colonnes sont obligatoires, peu importe le nom dans Excel
-            "site": st.column_config.TextColumn("Nom du Site", width="medium"),
-            "adresse": st.column_config.TextColumn("Adresse Complète", width="large")
+            "site": st.column_config.TextColumn("Nom du Site (ex: HLS)", width="medium"),
+            "adresse": st.column_config.TextColumn("Adresse Complète (ex: Boulevard Jacques Monod, Nantes)", width="large")
         }
     )
-    # -------------------------
 
     # 2. Bouton d'action
     if st.button("🚀 Générer les matrices", type="primary"):
