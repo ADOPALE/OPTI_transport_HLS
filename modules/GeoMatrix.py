@@ -13,64 +13,61 @@ from io import BytesIO
 # PARTIE 1 : LOGIQUE MÉTIER (Calculs)
 # ==========================================
 
-def get_coordinates(df_input, progress_bar, status_text):
-    """
-    Géocode les adresses uniques.
-    Retourne un dictionnaire {adresse: (lat, lon)}
-    """
+def get_coordinates(df_clean, progress_bar, status_text):
+    """Géocodage avec suivi par ligne utilisateur."""
     geolocator = Nominatim(user_agent="adopale_hospital_sim")
-    # RateLimiter respecte la politique d'OSM (1 requête/sec)
     geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
     
-    unique_addresses = df_input['adresse'].unique()
     cache_coords = {}
-    total = len(unique_addresses)
+    total_lignes = len(df_clean)
 
-    for i, addr in enumerate(unique_addresses):
-        status_text.text(f"🌍 Géocodage : {i+1} / {total} adresses")
-        progress_bar.progress((i + 1) / total)
+    for i, row in enumerate(df_clean.itertuples()):
+        addr = row.adresse
+        status_text.text(f"🌍 Géocodage : ligne {i+1} / {total_lignes}")
+        progress_bar.progress((i + 1) / total_lignes)
         
-        try:
-            location = geocode(addr)
-            if location:
-                cache_coords[addr] = (location.latitude, location.longitude)
-            else:
+        # On ne requête l'API que si l'adresse n'est pas déjà connue
+        if addr not in cache_coords:
+            try:
+                location = geocode(addr)
+                cache_coords[addr] = (location.latitude, location.longitude) if location else (None, None)
+            except Exception:
                 cache_coords[addr] = (None, None)
-        except Exception:
-            cache_coords[addr] = (None, None)
-            
+        
     return cache_coords
 
 def calculate_osrm_matrices(df_sites, progress_bar, status_text):
-    """
-    Calcule les matrices via l'API OSRM.
-    Gère la règle métier : même adresse = 0.
-    """
+    """Calcul des matrices avec suivi par case (n * n)."""
     n = len(df_sites)
+    total_cases = n * n
     dist_matrix = np.zeros((n, n))
     dur_matrix = np.zeros((n, n))
     
-    # Extraction des coordonnées pour l'API (format lon,lat)
+    # Extraction des coordonnées pour l'API
     coords_str = ";".join([f"{row['lon']},{row['lat']}" for _, row in df_sites.iterrows()])
     url = f"http://router.project-osrm.org/table/v1/driving/{coords_str}?annotations=distance,duration"
     
-    status_text.text("🛣️ Calcul des itinéraires en cours...")
-    progress_bar.progress(0.9) # On simule une fin proche
-
+    status_text.text("🛣️ Interrogation du moteur d'itinéraires...")
+    
     try:
-        response = requests.get(url, timeout=10).json()
+        response = requests.get(url, timeout=15).json()
         if response.get('code') == 'Ok':
             raw_dist = response['distances']
             raw_dur = response['durations']
             
+            compteur = 0
             for i in range(n):
                 for j in range(n):
-                    # RÈGLE MÉTIER : Adresses identiques ou diagonale = 0
+                    compteur += 1
+                    # Mise à jour du statut toutes les quelques cases pour la fluidité
+                    if compteur % 5 == 0 or compteur == total_cases:
+                        status_text.text(f"🔢 Calcul matrices : {compteur} / {total_cases} cases")
+                        progress_bar.progress(compteur / total_cases)
+
                     if i == j or df_sites.iloc[i]['adresse'] == df_sites.iloc[j]['adresse']:
                         dist_matrix[i][j] = 0.0
                         dur_matrix[i][j] = 0.0
                     else:
-                        # Conversion : mètres -> km (arrondi 2), secondes -> min (arrondi 1)
                         dist_matrix[i][j] = round(raw_dist[i][j] / 1000, 2)
                         dur_matrix[i][j] = round(raw_dur[i][j] / 60, 1)
             return dist_matrix, dur_matrix
