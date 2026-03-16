@@ -15,31 +15,38 @@ from io import BytesIO
 
 #modif LM 16/03 15h48
 def get_coordinates(df_clean, progress_bar, status_text):
-    """Géocodage avec suivi par ligne utilisateur et gestion d'erreurs."""
-    geolocator = Nominatim(user_agent="adopale_hospital_sim_v2") # Nouveau user_agent
-    # On passe à 1.5s de délai pour éviter d'être banni par le serveur public
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5, error_wait_seconds=5.0)
+    # On change radicalement le user_agent pour réinitialiser la connexion
+    geolocator = Nominatim(user_agent="adopale_hospital_sim_prod_test") 
+    
+    # On augmente le délai à 2 secondes (limite stricte OSM)
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=2.0, timeout=10)
     
     cache_coords = {}
     total_lignes = len(df_clean)
 
     for i, row in enumerate(df_clean.itertuples()):
-        addr = str(row.adresse).strip()
+        # NETTOYAGE CRUCIAL : on enlève les caractères spéciaux invisibles
+        addr = str(row.adresse).replace('\n', ' ').replace('\r', ' ').strip()
+        
         status_text.text(f"🌍 Géocodage : ligne {i+1} / {total_lignes}")
         progress_bar.progress((i + 1) / total_lignes)
         
         if addr not in cache_coords:
             try:
-                # Tentative de géocodage
+                # Tentative 1 : Adresse complète
                 location = geocode(addr)
+                
+                # Tentative 2 : Si échec, on essaie sans le nom de l'hôpital (juste la rue)
+                if not location and "," in addr:
+                    short_addr = addr.split(",", 1)[-1].strip()
+                    location = geocode(short_addr)
+                
                 if location:
                     cache_coords[addr] = (location.latitude, location.longitude)
                 else:
-                    # Si l'adresse complète échoue, on peut tenter d'extraire le code postal/ville
-                    # mais pour l'instant on marque None
                     cache_coords[addr] = (None, None)
-            except Exception as e:
-                st.error(f"Erreur technique sur l'adresse : {addr}")
+            except Exception:
+                time.sleep(2) # Pause forcée en cas d'erreur réseau
                 cache_coords[addr] = (None, None)
         
     return cache_coords
