@@ -54,7 +54,7 @@ def show_home():
 
     st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
 
-
+#Modif LM 
 def show_volumes_page():
     if "data" in st.session_state:
         if show_volumes:
@@ -81,7 +81,7 @@ def show_simulation_page():
             st.rerun()
     else:
         st.error("⚠️ Impossible de lancer la simulation sans données. Importez le fichier Excel de paramétrage.")
-
+#fin modif LM
 
 with st.sidebar:
     col1, col2 = st.columns(2)
