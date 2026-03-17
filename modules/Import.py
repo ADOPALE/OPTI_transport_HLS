@@ -49,10 +49,30 @@ def show_import():
 
     # --- SECTION VÉRIFICATION VISUELLE ---
     if "data" in st.session_state:
-        data = st.session_state["data"]
-        
         st.divider()
-        st.subheader("🔍 Contenu des variables extraites")
+        st.subheader("🔍 Vérification du contenu des variables")
+        
+        data_calculee = st.session_state["data"]
+        
+        # On crée un dictionnaire de correspondance pour des titres plus propres
+        titres = {
+            "matrice_distance": "📏 Matrice des Distances",
+            "matrice_duree": "⏱️ Matrice des Durées",
+            "m_flux": "📦 Flux (M flux)",
+            "param_contenants": "🗑️ Paramètres Contenants",
+            "param_vehicules": "🚛 Paramètres Véhicules",
+            "accessibilite_sites": "🏢 Accessibilité des Sites"
+        }
+
+        # On affiche chaque table dans un expander dédié
+        for key, label in titres.items():
+            if key in data_calculee:
+                with st.expander(label, expanded=False):
+                    st.write(f"**Variable :** `st.session_state['data']['{key}']`")
+                    st.write(f"**Format :** {data_calculee[key].shape[0]} lignes x {data_calculee[key].shape[1]} colonnes")
+                    st.dataframe(data_calculee[key], use_container_width=True)
+            else:
+                st.error(f"La variable {key} n'a pas pu être extraite.")
         
         # Affichage structuré pour vérification rapide
         with st.expander("1. Matrice Distance", expanded=False):
