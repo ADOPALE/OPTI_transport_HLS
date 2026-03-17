@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 
 def extraction_donnees(fichier_excel):
-    """Logique d'extraction multi-onglets"""
+    """Extraction des onglets et stockage dans un dictionnaire unique"""
     mapping = {
         "matrice_distance": "matrice Dist",
         "matrice_duree": "matrice Durée",
@@ -16,16 +16,15 @@ def extraction_donnees(fichier_excel):
     
     data = {}
     try:
-        # Utilisation de pd.ExcelFile pour ne pas rouvrir le fichier 6 fois
         with pd.ExcelFile(fichier_excel, engine='openpyxl') as xl:
             for var_name, sheet_name in mapping.items():
                 if sheet_name not in xl.sheet_names:
-                    st.error(f"⚠️ Onglet manquant : '{sheet_name}'")
+                    st.error(f"⚠️ Onglet '{sheet_name}' introuvable.")
                     return None
                 
                 df = pd.read_excel(xl, sheet_name=sheet_name)
                 
-                # Extraction spécifique pour l'accessibilité (Colonnes A et C)
+                # Nettoyage spécifique Accessibilité (Col A et C)
                 if var_name == "accessibilite_sites":
                     df = df.iloc[:, [0, 2]]
                     df.columns = ["site", "accessibilite"]
@@ -33,26 +32,43 @@ def extraction_donnees(fichier_excel):
                 data[var_name] = df
         return data
     except Exception as e:
-        st.error(f"❌ Erreur lors de la lecture : {e}")
+        st.error(f"❌ Erreur critique : {e}")
         return None
 
 def show_import():
     st.header("⚙️ Importation des données")
+    
     uploaded_file = st.file_uploader("Charger le fichier Excel de paramétrage", type=["xlsx"])
     
     if uploaded_file:
-        if st.button("Lancer l'extraction des tables", use_container_width=True):
+        if st.button("Lancer l'extraction et vérifier les données", use_container_width=True):
             resultat = extraction_donnees(uploaded_file)
             if resultat:
-                # Stockage dans la variable unique demandée
                 st.session_state["data"] = resultat
-                st.success("✅ Toutes les tables ont été extraites et stockées !")
+                st.success("✅ Données extraites avec succès !")
 
-    # Vérification visuelle si les données sont en mémoire
+    # --- SECTION VÉRIFICATION VISUELLE ---
     if "data" in st.session_state:
-        d = st.session_state["data"]
-        st.divider()
+        data = st.session_state["data"]
         
-        # Affichage sélectif pour ne pas encombrer l'écran
-        choix = st.selectbox("Visualiser une table :", list(d.keys()))
-        st.dataframe(d[choix], use_container_width=True)
+        st.divider()
+        st.subheader("🔍 Contenu des variables extraites")
+        
+        # Affichage structuré pour vérification rapide
+        with st.expander("1. Matrice Distance", expanded=False):
+            st.dataframe(data["matrice_distance"], use_container_width=True)
+            
+        with st.expander("2. Matrice Durée", expanded=False):
+            st.dataframe(data["matrice_duree"], use_container_width=True)
+            
+        with st.expander("3. Tableau Flux (M flux)", expanded=False):
+            st.dataframe(data["m_flux"], use_container_width=True)
+            
+        with st.expander("4. Paramètres Contenants", expanded=False):
+            st.dataframe(data["param_contenants"], use_container_width=True)
+            
+        with st.expander("5. Paramètres Véhicules", expanded=False):
+            st.dataframe(data["param_vehicules"], use_container_width=True)
+            
+        with st.expander("6. Accessibilité Sites", expanded=False):
+            st.dataframe(data["accessibilite_sites"], use_container_width=True)
