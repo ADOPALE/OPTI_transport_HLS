@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 
 def extraction_donnees(fichier_excel):
-    """Extraction des onglets et stockage dans un dictionnaire unique"""
     mapping = {
         "matrice_distance": "matrice Dist",
         "matrice_duree": "matrice Durée",
@@ -14,81 +13,62 @@ def extraction_donnees(fichier_excel):
         "accessibilite_sites": "param Sites"
     }
     
-    data = {}
+    data_dict = {}
     try:
         with pd.ExcelFile(fichier_excel, engine='openpyxl') as xl:
             for var_name, sheet_name in mapping.items():
                 if sheet_name not in xl.sheet_names:
-                    st.error(f"⚠️ Onglet '{sheet_name}' introuvable.")
+                    st.error(f"⚠️ Onglet manquant : {sheet_name}")
                     return None
                 
                 df = pd.read_excel(xl, sheet_name=sheet_name)
                 
-                # Nettoyage spécifique Accessibilité (Col A et C)
                 if var_name == "accessibilite_sites":
                     df = df.iloc[:, [0, 2]]
                     df.columns = ["site", "accessibilite"]
                 
-                data[var_name] = df
-        return data
+                data_dict[var_name] = df
+        return data_dict
     except Exception as e:
-        st.error(f"❌ Erreur critique : {e}")
+        st.error(f"Erreur : {e}")
         return None
 
 def show_import():
     st.header("⚙️ Importation des données")
-    
-    uploaded_file = st.file_uploader("Charger le fichier Excel de paramétrage", type=["xlsx"])
+    uploaded_file = st.file_uploader("Charger le fichier Excel", type=["xlsx"])
     
     if uploaded_file:
-        if st.button("Lancer l'extraction et vérifier les données", use_container_width=True):
+        if st.button("Lancer l'extraction", use_container_width=True):
             resultat = extraction_donnees(uploaded_file)
             if resultat:
                 st.session_state["data"] = resultat
-                st.success("✅ Données extraites avec succès !")
+                st.success("✅ Données chargées !")
 
-    # --- SECTION VÉRIFICATION VISUELLE ---
+    # --- LA CORRECTION EST ICI ---
     if "data" in st.session_state:
+        # On récupère l'objet du session_state pour l'utiliser localement
+        data = st.session_state["data"] 
+        
         st.divider()
-        st.subheader("🔍 Vérification du contenu des variables")
+        st.subheader("🔍 Vérification des variables")
         
-        data_calculee = st.session_state["data"]
+        # Utilisation de colonnes ou expanders pour tout voir
+        tab1, tab2, tab3 = st.tabs(["Matrices", "Flux & Sites", "Paramètres"])
         
-        # On crée un dictionnaire de correspondance pour des titres plus propres
-        titres = {
-            "matrice_distance": "📏 Matrice des Distances",
-            "matrice_duree": "⏱️ Matrice des Durées",
-            "m_flux": "📦 Flux (M flux)",
-            "param_contenants": "🗑️ Paramètres Contenants",
-            "param_vehicules": "🚛 Paramètres Véhicules",
-            "accessibilite_sites": "🏢 Accessibilité des Sites"
-        }
-
-        # On affiche chaque table dans un expander dédié
-        for key, label in titres.items():
-            if key in data_calculee:
-                with st.expander(label, expanded=False):
-                    st.write(f"**Variable :** `st.session_state['data']['{key}']`")
-                    st.write(f"**Format :** {data_calculee[key].shape[0]} lignes x {data_calculee[key].shape[1]} colonnes")
-                    st.dataframe(data_calculee[key], use_container_width=True)
-            else:
-                st.error(f"La variable {key} n'a pas pu être extraite.")
-        
-        # Affichage structuré pour vérification rapide
-        with st.expander("1. Matrice Distance", expanded=False):
+        with tab1:
+            st.write("**Matrice Distance**")
             st.dataframe(data["matrice_distance"], use_container_width=True)
-            
-        with st.expander("2. Matrice Durée", expanded=False):
+            st.write("**Matrice Durée**")
             st.dataframe(data["matrice_duree"], use_container_width=True)
             
-        with st.expander("3. Tableau Flux (M flux)", expanded=False):
+        with tab2:
+            st.write("**Flux (m_flux)**")
             st.dataframe(data["m_flux"], use_container_width=True)
-            
-        with st.expander("4. Paramètres Contenants", expanded=False):
-            st.dataframe(data["param_contenants"], use_container_width=True)
-            
-        with st.expander("5. Paramètres Véhicules", expanded=False):
-            st.dataframe(data["param_vehicules"], use_container_width=True)
-            
-        with st.expander("6. Accessibilité Sites", expanded=False):
+            st.write("**Accessibilité Sites**")
             st.dataframe(data["accessibilite_sites"], use_container_width=True)
+            
+        with tab3:
+            st.write("**Contenants**")
+            st.dataframe(data["param_contenants"], use_container_width=True)
+            st.write("**Véhicules**")
+            st.dataframe(data["param_vehicules"], use_container_width=True)
