@@ -1,7 +1,16 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+
+def get_contrast_color(hex_color):
+    """Détermine si le texte doit être noir ou blanc selon la luminosité du fond"""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) == 3:
+        hex_color = ''.join([c*2 for c in hex_color])
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    # Formule de luminosité standard
+    brightness = (r * 299 + g * 587 + b * 114) / 1000
+    return "white" if brightness < 128 else "black"
 
 def show_flux_control_charts():
     if "data" not in st.session_state or "m_flux" not in st.session_state["data"]:
@@ -27,70 +36,86 @@ def show_flux_control_charts():
     ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
 
+    # --- PALETTE DE COULEURS FIXE ---
+    # Bleu CHU, Orange Adopale, et teintes complémentaires
+    palette_hex = ["#005596", "#E67E22", "#27AE60", "#8E44AD", "#C0392B", "#2C3E50", "#F1C40F"]
+    fonctions = sorted(df_long[col_fonc].unique())
+    # Dictionnaire de couleurs pour garder la cohérence partout
+    color_map_base = {f: palette_hex[i % len(palette_hex)] for i, f in enumerate(fonctions)}
+
     st.divider()
     st.subheader("📊 Répartition Globale des Flux")
 
-    # --- GÉNÉRATION DE LA PALETTE DE COULEURS ---
-    # Couleurs de base (teintes logo Chu/Adopale : Bleu, Orange, Vert, Gris-Rouge)
-    base_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
-    fonctions = sorted(df_long[col_fonc].unique())
-    color_map = {}
-    
-    for i, func in enumerate(fonctions):
-        color = base_colors[i % len(base_colors)]
-        # On crée une clé unique "Fonction + Sens"
-        color_map[f"{func} - Aller"] = color 
-        # On assombrit la couleur pour le retour (via opacité ou code hex si fixe)
-        color_map[f"{func} - Retour"] = color # Plotly gérera la luminosité via marker_pattern ou opacité
-
-    # --- CONSTRUCTION DU GRAPHIQUE GLOBAL (STACKED) ---
-    # Pour l'affichage par fonction support comme l'image, on regroupe
+    # Groupement pour le graphique global
     df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().reset_index()
     
     fig = go.Figure()
 
     for func in fonctions:
+        base_color = color_map_base[func]
+        # Couleur retour : plus sombre
+        dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
+        text_color = get_contrast_color(base_color)
+
         for sens in ["Aller", "Retour"]:
             subset = df_gb[(df_gb[col_fonc] == func) & (df_gb[col_sens] == sens)]
-            
-            # Définition de la couleur : Claire pour Aller, Sombre pour Retour
-            base_c = base_colors[fonctions.index(func) % len(base_colors)]
-            final_c = base_c if sens == "Aller" else f"rgba{tuple(list(int(base_c.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + [0.5])}" 
-            # Note : Le retour est ici défini avec 50% d'opacité de la même couleur pour paraître plus sombre/terne
+            color = base_color if sens == "Aller" else dark_color
             
             fig.add_trace(go.Bar(
                 name=f"{func} ({sens})",
                 x=subset["Jour"],
                 y=subset["Valeur"],
-                marker_color=final_c,
-                # On groupe par jour, mais on empile les fonctions
-                offsetgroup=sens, 
+                marker_color=color,
+                offsetgroup=sens,
                 text=subset["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
-                textposition='auto',
+                textposition='inside',
+                insidetextanchor='middle',
+                textfont=dict(color=text_color if sens == "Aller" else "white"),
+                hovertemplate="<b>" + func + "</b><br>Sens: " + sens + "<br>Quantité: %{y}<extra></extra>"
             ))
 
     fig.update_layout(
         barmode='stack',
         template="plotly_dark",
-        title="Volume par Jour (Gauche: Aller | Droite: Retour)",
-        xaxis_title="",
+        height=600,
         yaxis_title="Nombre de Rolls",
         legend_title="Fonctions Support",
-        uniformtext_minsize=8, 
-        uniformtext_mode='hide'
+        xaxis=dict(title="")
     )
-    
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- DÉTAIL PAR FONCTION ---
-    with st.expander("🔍 Voir le détail par service", expanded=False):
-        for f in fonctions:
-            df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
-            if df_sub["Valeur"].sum() > 0:
-                fig_sub = px.bar(
-                    df_sub, x="Jour", y="Valeur", color=col_sens,
-                    barmode="group", template="plotly_dark", title=f"Détail : {f}",
-                    color_discrete_map={"Aller": "#3498db", "Retour": "#21618c"}, # Exemple bleu clair / bleu foncé
-                    text_auto=True
+    # --- DÉTAIL PAR FONCTION SUPPORT ---
+    st.markdown("### 🔍 Détail par FONCTION SUPPORT")
+    
+    # On affiche chaque fonction support avec la MÊME couleur que le graphique global
+    for f in fonctions:
+        df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
+        
+        if df_sub["Valeur"].sum() > 0:
+            base_color = color_map_base[f]
+            dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
+            
+            with st.expander(f"Flux : {f}", expanded=False):
+                fig_sub = go.Figure()
+                for sens in ["Aller", "Retour"]:
+                    sub_sens = df_sub[df_sub[col_sens] == sens]
+                    color = base_color if sens == "Aller" else dark_color
+                    
+                    fig_sub.add_trace(go.Bar(
+                        name=sens,
+                        x=sub_sens["Jour"],
+                        y=sub_sens["Valeur"],
+                        marker_color=color,
+                        text=sub_sens["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
+                        textposition='auto',
+                        textfont=dict(color="white")
+                    ))
+                
+                fig_sub.update_layout(
+                    template="plotly_dark",
+                    title=f"Distribution hebdomadaire - {f}",
+                    barmode="group",
+                    height=350,
+                    showlegend=True
                 )
                 st.plotly_chart(fig_sub, use_container_width=True)
