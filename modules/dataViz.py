@@ -43,7 +43,7 @@ def show_flux_control_charts():
     color_map_base = {f: palette_hex[i % len(palette_hex)] for i, f in enumerate(fonctions)}
 
     st.divider()
-    st.subheader("📊 Répartition Globale")
+    st.subheader("📊 Répartition Globale (Barre GAUCHE = Aller | Barre DROITE = Retour)")
 
     # --- DONNÉES TABLEAU ---
     df_totals = df_long.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
@@ -94,7 +94,7 @@ def show_flux_control_charts():
     ), row=2, col=1)
 
     fig.update_layout(
-        title="Répartition par Fonction (Barre GAUCHE = Aller | Barre DROITE = Retour)",
+        #title="Répartition par Fonction (Barre GAUCHE = Aller | Barre DROITE = Retour)",
         barmode='stack', template="plotly_dark", height=850, # Hauteur augmentée
         margin=dict(t=80, b=10, l=10, r=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10))
@@ -103,7 +103,7 @@ def show_flux_control_charts():
     st.plotly_chart(fig, use_container_width=True)
 
     # --- DÉTAIL PAR FONCTION SUPPORT (AVEC CONTRASTE) ---
-    st.markdown("### 🔍 Détail par FONCTION SUPPORT")
+    st.markdown("### 🔍 Détail par Fonction Support")
     for f in fonctions:
         df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
         if df_sub["Valeur"].sum() > 0:
