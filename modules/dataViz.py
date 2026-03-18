@@ -95,7 +95,7 @@ def show_flux_control_charts():
 
     fig.update_layout(
         #title="Répartition par Fonction (Barre GAUCHE = Aller | Barre DROITE = Retour)",
-        barmode='stack', template="plotly_dark", height=850, # Hauteur augmentée
+        barmode='stack', template="plotly_dark", height=50, # Hauteur augmentée
         margin=dict(t=0, b=0, l=10, r=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10))
     )
