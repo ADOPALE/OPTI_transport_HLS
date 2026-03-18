@@ -4,6 +4,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 def get_contrast_color(hex_color):
+    """Calcule si le texte doit être blanc ou noir selon le fond"""
+    if hex_color.startswith('rgba'):
+        # Pour les couleurs transparentes (Retour), on considère le fond noir du mode dark
+        return "white"
     hex_color = hex_color.lstrip('#')
     r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     brightness = (r * 299 + g * 587 + b * 114) / 1000
@@ -33,7 +37,7 @@ def show_flux_control_charts():
     ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
 
-    # Palette cohérente (Bleu CHU, Orange Adopale, etc.)
+    # Palette
     palette_hex = ["#005596", "#E67E22", "#27AE60", "#8E44AD", "#C0392B", "#2C3E50", "#F1C40F"]
     fonctions = sorted(df_long[col_fonc].unique())
     color_map_base = {f: palette_hex[i % len(palette_hex)] for i, f in enumerate(fonctions)}
@@ -41,16 +45,16 @@ def show_flux_control_charts():
     st.divider()
     st.subheader("📊 Répartition Globale")
 
-    # --- PRÉPARATION TABLEAU ---
+    # --- DONNÉES TABLEAU ---
     df_totals = df_long.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
     df_pivot = df_totals.pivot(index=col_sens, columns="Jour", values="Valeur").fillna(0)
     df_pivot.loc["TOTAL (A+R)"] = df_pivot.sum()
     
-    # --- SUBPLOT (GRAPH + TABLE) ---
+    # --- SUBPLOT ---
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.03,
+        vertical_spacing=0.08, # Augmenté pour éviter la superposition
         specs=[[{"type": "bar"}], [{"type": "table"}]]
     )
 
@@ -58,7 +62,6 @@ def show_flux_control_charts():
     
     for func in fonctions:
         base_color = color_map_base[func]
-        # Couleur retour (plus sombre/transparente)
         dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
         
         for sens in ["Aller", "Retour"]:
@@ -73,43 +76,33 @@ def show_flux_control_charts():
                 text=subset["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
                 textposition='inside',
                 insidetextanchor='middle',
-                textfont=dict(color=get_contrast_color(base_color) if sens == "Aller" else "white"),
-                legendgroup=func,
-                showlegend=True # Forcer l'affichage de toutes les légendes
+                textfont=dict(color=get_contrast_color(color), size=10),
+                legendgroup=func
             ), row=1, col=1)
 
-    # Ajout du Tableau aligné
+    # Tableau
     header_list = ["<b>Volumes / Jours</b>"] + [f"<b>{j}</b>" for j in ordre]
-    rows = []
-    for label in ["Aller", "Retour", "TOTAL (A+R)"]:
-        row_values = [f"<b>{label}</b>"] + [int(v) for v in df_pivot.loc[label].values]
-        rows.append(row_values)
+    rows = [[f"<b>{lbl}</b>"] + [int(v) for v in df_pivot.loc[lbl].values] for lbl in ["Aller", "Retour", "TOTAL (A+R)"]]
 
     fig.add_trace(go.Table(
-        header=dict(values=header_list, fill_color='#1f1f1f', align='center', font=dict(color='white', size=12)),
+        header=dict(values=header_list, fill_color='#1f1f1f', align='center', font=dict(color='white', size=11)),
         cells=dict(
             values=list(zip(*rows)),
-            fill_color=[['#262626', '#1a1a1a', '#005596']*8], # Le Total A+R en bleu CHU
-            align='center', font=dict(color='white', size=11), height=27
+            fill_color=[['#262626', '#1a1a1a', '#005596']*8],
+            align='center', font=dict(color='white', size=10), height=22
         )
     ), row=2, col=1)
 
     fig.update_layout(
-        title=dict(
-            text="Répartition par Fonction (Barre GAUCHE = Aller | Barre DROITE = Retour)",
-            x=0, font=dict(size=16, color="#bdc3c7")
-        ),
-        barmode='stack',
-        template="plotly_dark",
-        height=800,
-        margin=dict(t=80, b=20, l=10, r=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        title="Répartition par Fonction (Barre GAUCHE = Aller | Barre DROITE = Retour)",
+        barmode='stack', template="plotly_dark", height=850, # Hauteur augmentée
+        margin=dict(t=80, b=10, l=10, r=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10))
     )
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- DÉTAIL PAR FONCTION SUPPORT ---
-    st.markdown("---")
+    # --- DÉTAIL PAR FONCTION SUPPORT (AVEC CONTRASTE) ---
     st.markdown("### 🔍 Détail par FONCTION SUPPORT")
     for f in fonctions:
         df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
@@ -117,13 +110,18 @@ def show_flux_control_charts():
             with st.expander(f"Analyse : {f}", expanded=False):
                 base_color = color_map_base[f]
                 dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
+                
                 fig_sub = go.Figure()
                 for sens in ["Aller", "Retour"]:
                     sub_s = df_sub[df_sub[col_sens] == sens]
+                    color = base_color if sens == "Aller" else dark_color
+                    
                     fig_sub.add_trace(go.Bar(
                         name=sens, x=sub_s["Jour"], y=sub_s["Valeur"],
-                        marker_color=base_color if sens == "Aller" else dark_color,
-                        text=sub_s["Valeur"].apply(lambda x: int(x) if x > 0 else ""), textposition='auto'
+                        marker_color=color,
+                        text=sub_s["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
+                        textposition='auto',
+                        textfont=dict(color=get_contrast_color(color)) # Correction contraste ici
                     ))
-                fig_sub.update_layout(template="plotly_dark", barmode="group", height=300, title=f"Flux : {f}")
+                fig_sub.update_layout(template="plotly_dark", barmode="group", height=300)
                 st.plotly_chart(fig_sub, use_container_width=True)
