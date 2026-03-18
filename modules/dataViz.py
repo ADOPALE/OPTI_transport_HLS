@@ -1,89 +1,96 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 def show_flux_control_charts():
-    """Version durcie : nettoyage des espaces et conversion numérique forcée"""
-    
     if "data" not in st.session_state or "m_flux" not in st.session_state["data"]:
-        st.warning("⚠️ Données de flux non détectées dans st.session_state['data']")
         return
 
-    # Travail sur une copie propre
     df = st.session_state["data"]["m_flux"].copy()
-
-    # --- ÉTAPE 1 : NETTOYAGE DES COLONNES ---
-    # On supprime les espaces invisibles dans les noms de colonnes
     df.columns = df.columns.str.strip()
     
     col_fonc = "Fonction Support associée"
     col_sens = "Aller / Retour"
-    
-    jours_cols = [
-        "Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
-        "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"
-    ]
+    jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
 
-    # Vérification présence colonnes
-    missing = [c for c in [col_fonc, col_sens] if c not in df.columns]
-    if missing:
-        st.error(f"Colonnes critiques absentes : {missing}")
-        st.info(f"Colonnes disponibles : {list(df.columns)}")
-        return
-
-    # --- ÉTAPE 2 : NETTOYAGE DES DONNÉES ---
-    # Nettoyage de la colonne Sens (enlever espaces comme "Aller ")
+    # Nettoyage
     df[col_sens] = df[col_sens].astype(str).str.strip()
+    for j in jours_cols:
+        if j in df.columns:
+            df[j] = pd.to_numeric(df[j], errors='coerce').fillna(0)
 
-    # Conversion forcée des colonnes jours en nombres (remplace le texte par 0)
-    for j_col in jours_cols:
-        if j_col in df.columns:
-            df[j_col] = pd.to_numeric(df[j_col], errors='coerce').fillna(0)
-
-    # --- ÉTAPE 3 : TRANSFORMATION ---
-    df_long = df.melt(
-        id_vars=[col_fonc, col_sens],
-        value_vars=[c for c in jours_cols if c in df.columns],
-        var_name="Jour_Full",
-        value_name="Valeur"
-    )
-
-    # Simplification du nom du jour (ex: "Quantité Lundi" -> "Lundi")
+    # Passage en format long
+    df_long = df.melt(id_vars=[col_fonc, col_sens], value_vars=[c for c in jours_cols if c in df.columns],
+                      var_name="Jour_Full", value_name="Valeur")
     df_long["Jour"] = df_long["Jour_Full"].str.replace("Quantité ", "").str.strip()
-
-    # Tri chronologique
     ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
 
-    # --- ÉTAPE 4 : AFFICHAGE ---
     st.divider()
-    st.subheader("📊 Contrôle visuel des flux")
+    st.subheader("📊 Répartition Globale des Flux")
 
-    if df_long["Valeur"].sum() == 0:
-        st.error("❌ La somme des quantités est égale à 0. Vérifiez le format des nombres dans Excel.")
-        return
-
-    # Graphique Global
-    df_gb = df_long.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
+    # --- GÉNÉRATION DE LA PALETTE DE COULEURS ---
+    # Couleurs de base (teintes logo Chu/Adopale : Bleu, Orange, Vert, Gris-Rouge)
+    base_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
+    fonctions = sorted(df_long[col_fonc].unique())
+    color_map = {}
     
-    fig_global = px.bar(
-        df_gb, x="Jour", y="Valeur", color=col_sens,
-        barmode="group",
-        template="plotly_dark",
-        color_discrete_map={"Aller": "#00CC96", "Retour": "#EF553B"},
-        title="Volume Hebdomadaire Global"
-    )
-    st.plotly_chart(fig_global, use_container_width=True)
+    for i, func in enumerate(fonctions):
+        color = base_colors[i % len(base_colors)]
+        # On crée une clé unique "Fonction + Sens"
+        color_map[f"{func} - Aller"] = color 
+        # On assombrit la couleur pour le retour (via opacité ou code hex si fixe)
+        color_map[f"{func} - Retour"] = color # Plotly gérera la luminosité via marker_pattern ou opacité
 
-    # Détail par Fonction
-    with st.expander("🔍 Détail par Fonction Support", expanded=False):
-        for f in df_long[col_fonc].unique():
+    # --- CONSTRUCTION DU GRAPHIQUE GLOBAL (STACKED) ---
+    # Pour l'affichage par fonction support comme l'image, on regroupe
+    df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().reset_index()
+    
+    fig = go.Figure()
+
+    for func in fonctions:
+        for sens in ["Aller", "Retour"]:
+            subset = df_gb[(df_gb[col_fonc] == func) & (df_gb[col_sens] == sens)]
+            
+            # Définition de la couleur : Claire pour Aller, Sombre pour Retour
+            base_c = base_colors[fonctions.index(func) % len(base_colors)]
+            final_c = base_c if sens == "Aller" else f"rgba{tuple(list(int(base_c.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + [0.5])}" 
+            # Note : Le retour est ici défini avec 50% d'opacité de la même couleur pour paraître plus sombre/terne
+            
+            fig.add_trace(go.Bar(
+                name=f"{func} ({sens})",
+                x=subset["Jour"],
+                y=subset["Valeur"],
+                marker_color=final_c,
+                # On groupe par jour, mais on empile les fonctions
+                offsetgroup=sens, 
+                text=subset["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
+                textposition='auto',
+            ))
+
+    fig.update_layout(
+        barmode='stack',
+        template="plotly_dark",
+        title="Volume par Jour (Gauche: Aller | Droite: Retour)",
+        xaxis_title="",
+        yaxis_title="Nombre de Rolls",
+        legend_title="Fonctions Support",
+        uniformtext_minsize=8, 
+        uniformtext_mode='hide'
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- DÉTAIL PAR FONCTION ---
+    with st.expander("🔍 Voir le détail par service", expanded=False):
+        for f in fonctions:
             df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
             if df_sub["Valeur"].sum() > 0:
-                fig_f = px.bar(
+                fig_sub = px.bar(
                     df_sub, x="Jour", y="Valeur", color=col_sens,
-                    barmode="group", template="plotly_dark", 
-                    title=f"Flux : {f}",
-                    color_discrete_map={"Aller": "#00CC96", "Retour": "#EF553B"}
+                    barmode="group", template="plotly_dark", title=f"Détail : {f}",
+                    color_discrete_map={"Aller": "#3498db", "Retour": "#21618c"}, # Exemple bleu clair / bleu foncé
+                    text_auto=True
                 )
-                st.plotly_chart(fig_f, use_container_width=True)
+                st.plotly_chart(fig_sub, use_container_width=True)
