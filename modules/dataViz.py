@@ -8,7 +8,6 @@ def get_contrast_color(hex_color):
     if len(hex_color) == 3:
         hex_color = ''.join([c*2 for c in hex_color])
     r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-    # Formule de luminosité standard
     brightness = (r * 299 + g * 587 + b * 114) / 1000
     return "white" if brightness < 128 else "black"
 
@@ -36,26 +35,23 @@ def show_flux_control_charts():
     ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
 
-    # --- PALETTE DE COULEURS FIXE ---
-    # Bleu CHU, Orange Adopale, et teintes complémentaires
+    # Palette de couleurs cohérente
     palette_hex = ["#005596", "#E67E22", "#27AE60", "#8E44AD", "#C0392B", "#2C3E50", "#F1C40F"]
     fonctions = sorted(df_long[col_fonc].unique())
-    # Dictionnaire de couleurs pour garder la cohérence partout
     color_map_base = {f: palette_hex[i % len(palette_hex)] for i, f in enumerate(fonctions)}
 
     st.divider()
     st.subheader("📊 Répartition Globale des Flux")
 
-    # Groupement pour le graphique global
     df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().reset_index()
     
     fig = go.Figure()
 
+    # 1. Ajout des barres empilées par fonction
     for func in fonctions:
         base_color = color_map_base[func]
-        # Couleur retour : plus sombre
         dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
-        text_color = get_contrast_color(base_color)
+        text_color_aller = get_contrast_color(base_color)
 
         for sens in ["Aller", "Retour"]:
             subset = df_gb[(df_gb[col_fonc] == func) & (df_gb[col_sens] == sens)]
@@ -70,9 +66,27 @@ def show_flux_control_charts():
                 text=subset["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
                 textposition='inside',
                 insidetextanchor='middle',
-                textfont=dict(color=text_color if sens == "Aller" else "white"),
+                textfont=dict(color=text_color_aller if sens == "Aller" else "white"),
                 hovertemplate="<b>" + func + "</b><br>Sens: " + sens + "<br>Quantité: %{y}<extra></extra>"
             ))
+
+    # 2. Ajout des TOTAUX au-dessus des piles
+    # On calcule la somme totale par Jour et par Sens (indépendamment de la fonction)
+    df_totals = df_long.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
+
+    for sens in ["Aller", "Retour"]:
+        totals_subset = df_totals[df_totals[col_sens] == sens]
+        
+        fig.add_trace(go.Bar(
+            x=totals_subset["Jour"],
+            y=totals_subset["Valeur"],
+            offsetgroup=sens,
+            text=totals_subset["Valeur"].apply(lambda x: f"<b>{int(x)}</b>" if x > 0 else ""),
+            textposition='outside',
+            marker_color='rgba(0,0,0,0)', # Invisible
+            showlegend=False,
+            hoverinfo='skip'
+        ))
 
     fig.update_layout(
         barmode='stack',
@@ -80,17 +94,16 @@ def show_flux_control_charts():
         height=600,
         yaxis_title="Nombre de Rolls",
         legend_title="Fonctions Support",
-        xaxis=dict(title="")
+        xaxis=dict(title=""),
+        margin=dict(t=50) # Espace pour les étiquettes du haut
     )
+    
     st.plotly_chart(fig, use_container_width=True)
 
     # --- DÉTAIL PAR FONCTION SUPPORT ---
     st.markdown("### 🔍 Détail par FONCTION SUPPORT")
-    
-    # On affiche chaque fonction support avec la MÊME couleur que le graphique global
     for f in fonctions:
         df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
-        
         if df_sub["Valeur"].sum() > 0:
             base_color = color_map_base[f]
             dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
@@ -100,22 +113,12 @@ def show_flux_control_charts():
                 for sens in ["Aller", "Retour"]:
                     sub_sens = df_sub[df_sub[col_sens] == sens]
                     color = base_color if sens == "Aller" else dark_color
-                    
                     fig_sub.add_trace(go.Bar(
-                        name=sens,
-                        x=sub_sens["Jour"],
-                        y=sub_sens["Valeur"],
+                        name=sens, x=sub_sens["Jour"], y=sub_sens["Valeur"],
                         marker_color=color,
                         text=sub_sens["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
                         textposition='auto',
                         textfont=dict(color="white")
                     ))
-                
-                fig_sub.update_layout(
-                    template="plotly_dark",
-                    title=f"Distribution hebdomadaire - {f}",
-                    barmode="group",
-                    height=350,
-                    showlegend=True
-                )
+                fig_sub.update_layout(template="plotly_dark", barmode="group", height=350)
                 st.plotly_chart(fig_sub, use_container_width=True)
