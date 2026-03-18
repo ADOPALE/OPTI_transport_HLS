@@ -20,7 +20,7 @@ def show_flux_control_charts():
     col_sens = "Aller / Retour"
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
 
-    # Nettoyage et conversion
+    # Nettoyage
     df[col_sens] = df[col_sens].astype(str).str.strip()
     for j in jours_cols:
         if j in df.columns:
@@ -33,86 +33,83 @@ def show_flux_control_charts():
     ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
 
-    # Palette cohérente
+    # Palette cohérente (Bleu CHU, Orange Adopale, etc.)
     palette_hex = ["#005596", "#E67E22", "#27AE60", "#8E44AD", "#C0392B", "#2C3E50", "#F1C40F"]
     fonctions = sorted(df_long[col_fonc].unique())
     color_map_base = {f: palette_hex[i % len(palette_hex)] for i, f in enumerate(fonctions)}
 
     st.divider()
-    st.subheader("📊 Répartition Globale et Totaux par Jour")
+    st.subheader("📊 Répartition Globale")
 
-    # --- PRÉPARATION DES DONNÉES TABLEAU ---
+    # --- PRÉPARATION TABLEAU ---
     df_totals = df_long.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
     df_pivot = df_totals.pivot(index=col_sens, columns="Jour", values="Valeur").fillna(0)
     df_pivot.loc["TOTAL (A+R)"] = df_pivot.sum()
     
-    # --- CRÉATION DU SUBPLOT (GRAPH + TABLE) ---
-    # On définit 2 lignes : le graph (80% de hauteur) et le tableau (20%)
+    # --- SUBPLOT (GRAPH + TABLE) ---
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.05,
+        vertical_spacing=0.03,
         specs=[[{"type": "bar"}], [{"type": "table"}]]
     )
 
-    # 1. Ajout des barres (Histogramme)
     df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().reset_index()
+    
     for func in fonctions:
         base_color = color_map_base[func]
+        # Couleur retour (plus sombre/transparente)
         dark_color = f"rgba({int(base_color[1:3], 16)}, {int(base_color[3:5], 16)}, {int(base_color[5:7], 16)}, 0.4)"
         
         for sens in ["Aller", "Retour"]:
             subset = df_gb[(df_gb[col_fonc] == func) & (df_gb[col_sens] == sens)]
+            color = base_color if sens == "Aller" else dark_color
+            
             fig.add_trace(go.Bar(
                 name=f"{func} ({sens})",
                 x=subset["Jour"], y=subset["Valeur"],
-                marker_color=base_color if sens == "Aller" else dark_color,
+                marker_color=color,
                 offsetgroup=sens,
                 text=subset["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
                 textposition='inside',
                 insidetextanchor='middle',
                 textfont=dict(color=get_contrast_color(base_color) if sens == "Aller" else "white"),
                 legendgroup=func,
-                showlegend=True if sens == "Aller" else False
+                showlegend=True # Forcer l'affichage de toutes les légendes
             ), row=1, col=1)
 
-    # 2. Ajout du Tableau (Table) aligné
-    header_list = ["<b>Flux / Jours</b>"] + [f"<b>{j}</b>" for j in ordre]
-    
-    # Construction des lignes du tableau
+    # Ajout du Tableau aligné
+    header_list = ["<b>Volumes / Jours</b>"] + [f"<b>{j}</b>" for j in ordre]
     rows = []
     for label in ["Aller", "Retour", "TOTAL (A+R)"]:
         row_values = [f"<b>{label}</b>"] + [int(v) for v in df_pivot.loc[label].values]
         rows.append(row_values)
 
     fig.add_trace(go.Table(
-        header=dict(
-            values=header_list,
-            fill_color='#1f1f1f',
-            align='center',
-            font=dict(color='white', size=12),
-            height=30
-        ),
+        header=dict(values=header_list, fill_color='#1f1f1f', align='center', font=dict(color='white', size=12)),
         cells=dict(
             values=list(zip(*rows)),
-            fill_color=[['#262626', '#1a1a1a', '#2d3e50']*8], # Alternance de gris et bleu pour le total
-            align='center',
-            font=dict(color='white', size=11),
-            height=25
+            fill_color=[['#262626', '#1a1a1a', '#005596']*8], # Le Total A+R en bleu CHU
+            align='center', font=dict(color='white', size=11), height=27
         )
     ), row=2, col=1)
 
     fig.update_layout(
+        title=dict(
+            text="Répartition par Fonction (Barre GAUCHE = Aller | Barre DROITE = Retour)",
+            x=0, font=dict(size=16, color="#bdc3c7")
+        ),
         barmode='stack',
         template="plotly_dark",
-        height=750,
-        margin=dict(t=20, b=20, l=10, r=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        height=800,
+        margin=dict(t=80, b=20, l=10, r=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
     )
     
     st.plotly_chart(fig, use_container_width=True)
 
     # --- DÉTAIL PAR FONCTION SUPPORT ---
+    st.markdown("---")
     st.markdown("### 🔍 Détail par FONCTION SUPPORT")
     for f in fonctions:
         df_sub = df_long[df_long[col_fonc] == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
@@ -128,5 +125,5 @@ def show_flux_control_charts():
                         marker_color=base_color if sens == "Aller" else dark_color,
                         text=sub_s["Valeur"].apply(lambda x: int(x) if x > 0 else ""), textposition='auto'
                     ))
-                fig_sub.update_layout(template="plotly_dark", barmode="group", height=300)
+                fig_sub.update_layout(template="plotly_dark", barmode="group", height=300, title=f"Flux : {f}")
                 st.plotly_chart(fig_sub, use_container_width=True)
