@@ -54,7 +54,7 @@ def show_flux_control_charts():
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.08, # Augmenté pour éviter la superposition
+        vertical_spacing=0.02, # Augmenté pour éviter la superposition
         specs=[[{"type": "bar"}], [{"type": "table"}]]
     )
 
