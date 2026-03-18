@@ -88,7 +88,7 @@ def show_flux_control_charts():
         header=dict(values=header_list, fill_color='#1f1f1f', align='center', font=dict(color='white', size=11)),
         cells=dict(
             values=list(zip(*rows)),
-            fill_color=[['#262626', '#1a1a1a', '#005596']*8],
+            fill_color=[['#262626', '#1a1a1a', 'black']*8],
             align='center', font=dict(color='white', size=10), height=22
         )
     ), row=2, col=1)
