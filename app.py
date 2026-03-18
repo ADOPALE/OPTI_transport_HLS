@@ -4,6 +4,10 @@ from pathlib import Path
 
 from modules.Import import show_import
 
+#__ajout 18/03 LM
+from modules.dataViz import show_flux_control_charts
+#__fin ajout
+
 #__ajout LM 16/03
 from modules.GeoMatrix import run_matrix_tool
 #__fin ajout
@@ -128,6 +132,11 @@ elif selected == "Calcul Matrices":
     #fin ajout
 elif selected == "Importer Données":
     show_import()
+
+# --- Ajout LM 18/03: Contrôle visuel des flux sous l'import ---
+    if "data" in st.session_state:
+        show_flux_control_charts()
+        #__fin ajout
 elif selected == "Volumes Distribution":
     show_volumes_page()
 elif selected == "Passages Biologie":
