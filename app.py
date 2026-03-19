@@ -134,11 +134,79 @@ def show_biologie_page():
         st.success(f"Configuration enregistrée : {len(current_sites_config)} sites actifs.")
 # fin ajout
 
+import streamlit as st
+from modules.biologie_engine import run_optimization
+
 def show_simulation_page():
-    st.title("🏎️ Optimisation")
-    if st.button("🚀 Lancer la simulation"):
-        st.session_state.sim_lancee = True
-        st.rerun()
+    st.title("🏎️ Optimisation des tournées Biologie")
+    st.subheader("Lancement de l'algorithme")
+
+    # --- 1. SÉCURITÉS ---
+    # Vérification que les données Excel sont présentes
+    if "data" not in st.session_state or "matrice_duree" not in st.session_state["data"]:
+        st.error("⚠️ Données manquantes. Veuillez d'abord importer le fichier Excel et calculer/vérifier les matrices.")
+        return
+
+    # Vérification que l'utilisateur a validé sa configuration de sites
+    if "biologie_config" not in st.session_state:
+        st.warning("⚠️ Aucune configuration enregistrée. Veuillez valider vos paramètres (fenêtres horaires, fréquences) dans l'onglet 'Passages Biologie'.")
+        return
+
+    # --- 2. RÉSUMÉ AVANT CALCUL ---
+    config = st.session_state["biologie_config"]
+    
+    with st.expander("🔍 Rappel de la configuration active", expanded=False):
+        c1, c2 = st.columns(2)
+        c1.write(f"**Durée max tournée :** {config['max_tournee']} min")
+        c2.write(f"**Temps de collecte :** {config['temps_collecte']} min")
+        st.write(f"**Sites inclus :** {', '.join(config['sites'].keys())}")
+
+    st.write("")
+
+    # --- 3. BOUTON DE LANCEMENT ---
+    # On centre le bouton pour l'esthétique
+    _, col_btn, _ = st.columns([1, 2, 1])
+    
+    if col_btn.button("🚀 LANCER L'OPTIMISATION", use_container_width=True, type="primary"):
+        try:
+            with st.spinner("🧠 L'intelligence logistique est en marche..."):
+                # On récupère la matrice (DataFrame)
+                df_duree = st.session_state["data"]["matrice_duree"]
+                
+                # Exécution du moteur de calcul
+                # On passe config["sites"] qui contient uniquement les sites cochés
+                resultats = run_optimization(
+                    m_duree_df=df_duree,
+                    sites_config=config["sites"],
+                    temps_collecte=config["temps_collecte"],
+                    max_tournee=config["max_tournee"]
+                )
+                
+                # Sauvegarde des résultats
+                st.session_state.resultat_flotte = resultats
+                st.session_state.sim_lancee = True
+                
+            st.success(f"✅ Optimisation terminée ! {len(resultats)} véhicules ont été mobilisés.")
+            st.balloons()
+            
+            # Note : st.rerun() n'est pas forcément nécessaire ici si on veut 
+            # laisser l'utilisateur lire le message de succès avant de changer d'onglet
+            
+        except Exception as e:
+            st.error(f"❌ Erreur lors du calcul : {e}")
+            st.info("Astuce : Vérifiez que les noms des sites configurés correspondent exactement aux noms dans votre matrice de durée.")
+
+    # --- 4. MESSAGE D'AIGUILLAGE ---
+    if st.session_state.sim_lancee:
+        st.divider()
+        st.info("📈 Les résultats sont prêts. Rendez-vous dans les onglets **'Synthèse'** pour les graphiques ou **'Détail tournées'** pour les feuilles de route.")
+
+
+#def show_simulation_page():
+ #   st.title("🏎️ Optimisation")
+  #  if st.button("🚀 Lancer la simulation"):
+   #     st.session_state.sim_lancee = True
+    #    st.rerun()
 
 
 with st.sidebar:
