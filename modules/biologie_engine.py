@@ -133,9 +133,6 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
         
         tournees.append(tournee)
 
-    print(f"Nombre de tournées générées : {len(tournees)}")
-    if len(tournees) > 0:
-    print(f"Exemple de trajet : {tournees[0]}")
     
     # On appelle enfin la fonction définie plus haut
     return assign_to_vehicles(tournees)
