@@ -12,6 +12,10 @@ from modules.dataViz import show_flux_control_charts
 from modules.GeoMatrix import run_matrix_tool
 #__fin ajout
 
+#__ajout BG 19/03
+from modules.biologie_engine import run_optimization
+#__ajout BG 19/03
+
 try:
     from modules.dataViz import show_volumes, show_biologie
 except ImportError:
@@ -134,8 +138,7 @@ def show_biologie_page():
         st.success(f"Configuration enregistrée : {len(current_sites_config)} sites actifs.")
 # fin ajout
 
-import streamlit as st
-from modules.biologie_engine import run_optimization
+
 
 def show_simulation_page():
     st.title("🏎️ Optimisation des tournées Biologie")
