@@ -142,42 +142,31 @@ def show_biologie_page():
 
 def show_simulation_page():
     st.title("🏎️ Optimisation des tournées Biologie")
-    st.subheader("Lancement de l'algorithme")
+    st.markdown("---")
 
-    # --- 1. SÉCURITÉS ---
-    # Vérification que les données Excel sont présentes
+    # 1. VERIFICATIONS (Sécurité)
     if "data" not in st.session_state or "matrice_duree" not in st.session_state["data"]:
-        st.error("⚠️ Données manquantes. Veuillez d'abord importer le fichier Excel et calculer/vérifier les matrices.")
+        st.error("⚠️ Matrice de durée manquante. Importez vos données d'abord.")
         return
 
-    # Vérification que l'utilisateur a validé sa configuration de sites
     if "biologie_config" not in st.session_state:
-        st.warning("⚠️ Aucune configuration enregistrée. Veuillez valider vos paramètres (fenêtres horaires, fréquences) dans l'onglet 'Passages Biologie'.")
+        st.warning("⚠️ Configuration manquante. Validez vos paramètres dans l'onglet 'Passages Biologie'.")
         return
 
-    # --- 2. RÉSUMÉ AVANT CALCUL ---
+    # 2. RESUME DE CE QUI VA ETRE CALCULE
     config = st.session_state["biologie_config"]
-    
-    with st.expander("🔍 Rappel de la configuration active", expanded=False):
-        c1, c2 = st.columns(2)
-        c1.write(f"**Durée max tournée :** {config['max_tournee']} min")
-        c2.write(f"**Temps de collecte :** {config['temps_collecte']} min")
-        st.write(f"**Sites inclus :** {', '.join(config['sites'].keys())}")
+    st.info(f"Prêt à simuler {len(config['sites'])} sites hospitaliers.")
 
-    st.write("")
-
-    # --- 3. BOUTON DE LANCEMENT ---
-    # On centre le bouton pour l'esthétique
-    _, col_btn, _ = st.columns([1, 2, 1])
-    
-    if col_btn.button("🚀 LANCER L'OPTIMISATION", use_container_width=True, type="primary"):
-        try:
-            with st.spinner("🧠 L'intelligence logistique est en marche..."):
-                # On récupère la matrice (DataFrame)
+    # 3. LE BOUTON (Unique déclencheur)
+    # On n'exécute le code QUE si l'utilisateur clique. 
+    if st.button("🚀 Lancer la simulation", use_container_width=True, type="primary"):
+        
+        with st.spinner("🧠 Calcul de l'itinéraire optimal en cours..."):
+            try:
+                # Récupération de la matrice
                 df_duree = st.session_state["data"]["matrice_duree"]
                 
-                # Exécution du moteur de calcul
-                # On passe config["sites"] qui contient uniquement les sites cochés
+                # Appel du moteur (Partie 1 que tu as déjà dans ton module)
                 resultats = run_optimization(
                     m_duree_df=df_duree,
                     sites_config=config["sites"],
@@ -185,26 +174,26 @@ def show_simulation_page():
                     max_tournee=config["max_tournee"]
                 )
                 
-                # Sauvegarde des résultats
+                # ON STOCKAGE DES RESULTATS
                 st.session_state.resultat_flotte = resultats
                 st.session_state.sim_lancee = True
                 
-            st.success(f"✅ Optimisation terminée ! {len(resultats)} véhicules ont été mobilisés.")
-            st.balloons()
-            
-            # Note : st.rerun() n'est pas forcément nécessaire ici si on veut 
-            # laisser l'utilisateur lire le message de succès avant de changer d'onglet
-            
-        except Exception as e:
-            st.error(f"❌ Erreur lors du calcul : {e}")
-            st.info("Astuce : Vérifiez que les noms des sites configurés correspondent exactement aux noms dans votre matrice de durée.")
+                # Succès visuel
+                st.success(f"✅ Simulation réussie ! {len(resultats)} véhicules identifiés.")
+                st.balloons()
+                
+                # /!\ IMPORTANT : On ne met pas de st.rerun() ici /!\
+                # Cela permet de garder l'affichage du succès à l'écran.
+                
+            except Exception as e:
+                st.error(f"Erreur durant le calcul : {e}")
 
-    # --- 4. MESSAGE D'AIGUILLAGE ---
-    if st.session_state.sim_lancee:
+    # 4. ETAT APRES CALCUL
+    if st.session_state.get("sim_lancee"):
         st.divider()
-        st.info("📈 Les résultats sont prêts. Rendez-vous dans les onglets **'Synthèse'** pour les graphiques ou **'Détail tournées'** pour les feuilles de route.")
-
-
+        st.markdown("### 📊 Résultats prêts")
+        st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** pour voir les graphiques et feuilles de route.")
+        
 #def show_simulation_page():
  #   st.title("🏎️ Optimisation")
   #  if st.button("🚀 Lancer la simulation"):
