@@ -171,7 +171,7 @@ def show_simulation_page():
                     m_duree_df=df_duree,
                     sites_config=config["sites"],
                     temps_collecte=config["temps_collecte"],
-                    max_tournee=config["max_tournee"]
+                    max_tournee=config["duree_max"]
                 )
                 
                 # ON STOCKAGE DES RESULTATS
