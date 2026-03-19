@@ -42,6 +42,18 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
     m_duree_df : DataFrame (index/cols = noms sites)
     sites_config : Configuration issue de st.session_state
     """
+    # --- AJOUT DE CETTE LIGNE POUR NETTOYER LA MATRICE ---
+    m_duree_df.index = m_duree_df.index.astype(str).str.strip()
+    m_duree_df.columns = m_duree_df.columns.astype(str).str.strip()
+    
+    # Vérification de sécurité
+    if "HLS" not in m_duree_df.index:
+        # Si 'HLS' n'existe pas, on prend le premier site de la matrice comme dépôt
+        depot = m_duree_df.index[0] 
+        st.warning(f"⚠️ 'HLS' non trouvé dans la matrice. Utilisation de '{depot}' comme point central.")
+    else:
+        depot = "HLS"
+    
     tasks = generate_target_windows(sites_config)
     tournees = []
     tasks_copy = [t.copy() for t in tasks]
