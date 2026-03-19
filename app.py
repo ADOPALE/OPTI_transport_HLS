@@ -65,13 +65,75 @@ def show_volumes_page():
     else:
         st.warning("Le module de visualisation des volumes n'est pas disponible.")
 
-
+# Ajout BG 19/03
 def show_biologie_page():
-    if show_biologie:
-        show_biologie()
-    else:
-        st.warning("Le module biologie n'est pas disponible.")
+    st.title("🧪 Paramétrage des Passages Biologie")
 
+    if "data" not in st.session_state:
+        st.warning("⚠️ Veuillez d'abord importer un fichier Excel dans l'onglet 'Importer Données'.")
+        return
+
+    data = st.session_state["data"]
+    
+    # 1. PARAMÈTRES GÉNÉRAUX
+    st.subheader("⚙️ Paramètres de transport")
+    col1, col2 = st.columns(2)
+    with col1:
+        # On utilise une valeur par défaut de 200 ou celle du fichier si elle existe
+        duree_max = st.number_input("Durée maximale d'une tournée (min)", value=200, step=10)
+    with col2:
+        temps_collecte = st.number_input("Temps moyen de dépose/prise (min)", value=10, step=1)
+
+    st.divider()
+
+    # 2. PARAMÈTRES PAR SITE (Dynamique)
+    st.subheader("🏥 Configuration des Sites")
+    
+    # On récupère les sites depuis 'accessibilite_sites' extrait dans Import.py
+    df_sites = data["accessibilite_sites"]
+    
+    # Initialisation d'un dictionnaire de configuration dans le session_state s'il n'existe pas
+    if "sites_config" not in st.session_state:
+        st.session_state.sites_config = {}
+
+    for index, row in df_sites.iterrows():
+        site_name = row['site']
+        if site_name == "HLS": continue # On ne paramètre pas le labo comme un passage
+        
+        with st.expander(f"📍 {site_name}", expanded=True):
+            c1, c2 = st.columns([3, 1])
+            
+            with c1:
+                # Slider à deux points pour l'horaire mini et maxi (en minutes depuis minuit)
+                # Valeurs par défaut : 08:00 (480) à 18:00 (1080)
+                res = st.select_slider(
+                    f"Plage horaire de collecte pour {site_name}",
+                    options=range(0, 1441, 15), # De 00:00 à 24:00 par pas de 15min
+                    value=(480, 1080),
+                    format_func=lambda x: f"{x//60:02d}:{x%60:02d}"
+                )
+            
+            with c2:
+                # Saisie de la fréquence
+                freq = st.number_input(f"Fréquence", min_value=1, max_value=24, value=5, key=f"freq_{site_name}")
+
+            # Sauvegarde locale dans le dictionnaire de config
+            st.session_state.sites_config[site_name] = {
+                'open': res[0],
+                'close': res[1],
+                'freq': freq
+            }
+
+    # 3. SAUVEGARDE ET LIEN AVEC LA SIMULATION
+    if st.button("💾 Enregistrer les paramètres pour l'optimisation", use_container_width=True):
+        # On met à jour l'objet data global
+        st.session_state["data"]["final_config"] = {
+            "duree_max": duree_max,
+            "temps_collecte": temps_collecte,
+            "sites": st.session_state.sites_config
+        }
+        st.success("Configuration enregistrée ! Vous pouvez maintenant aller dans 'Simuler & Optimiser'.")
+# fin ajout
 
 def show_simulation_page():
     st.title("🏎️ Optimisation")
