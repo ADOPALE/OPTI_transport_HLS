@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # ==========================================
-# PARTIE 1 : LOGIQUE DE CALCUL (ALGORITHME)
+# PARTIE 1 : FONCTIONS UTILITAIRES
 # ==========================================
 
 def minutes_to_hhmm(minutes):
@@ -12,18 +12,34 @@ def minutes_to_hhmm(minutes):
     m = int(minutes % 60)
     return f"{h:02d}:{m:02d}"
 
+def assign_to_vehicles(tournees):
+    """Regroupe les tournées unitaires pour minimiser le nombre de véhicules."""
+    if not tournees:
+        return []
+    # Tri des tournées par heure de départ
+    tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
+    vehicules = []
+    
+    for trne in tournees_triees:
+        assigned = False
+        for v in vehicules:
+            # Un véhicule peut reprendre si sa fin est <= début de la nouvelle tournée
+            # On ajoute une petite marge de sécurité de 5min si besoin ici
+            if v[-1][-1]['heure'] <= trne[0]['heure']:
+                v.append(trne)
+                assigned = True
+                break
+        if not assigned:
+            vehicules.append([trne])
+    return vehicules
+
 def generate_target_windows(sites_config):
-    """
-    Génère les rendez-vous théoriques selon la config utilisateur.
-    sites_config: dict {nom_site: {'open': int, 'close': int, 'freq': int}}
-    """
+    """Génère les rendez-vous théoriques selon la config utilisateur."""
     tasks = []
     for site_name, config in sites_config.items():
         ouverture, fermeture, freq = config['open'], config['close'], config['freq']
-        
-        # Calcul de l'intervalle cible
         intervalle = (fermeture - ouverture) / freq
-        marge = intervalle * 0.15 # Marge de tolérance de 15%
+        marge = intervalle * 0.15 
         
         for i in range(freq):
             cible = ouverture + (i + 0.5) * intervalle
@@ -32,38 +48,32 @@ def generate_target_windows(sites_config):
                 'window': (max(ouverture, cible - marge), min(fermeture, cible + marge)),
                 'done': False
             })
-    # Tri par heure d'ouverture de fenêtre
     return sorted(tasks, key=lambda x: x['window'][0])
 
+# ==========================================
+# PARTIE 2 : MOTEUR PRINCIPAL
+# ==========================================
+
 def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
-    # --- PRÉPARATION ULTRA-ROBUSTE DE LA MATRICE ---
+    # --- PRÉPARATION DE LA MATRICE ---
     df = m_duree_df.copy()
 
-    # 1. Forcer le passage des noms en Index si ce n'est pas fait
-    # On regarde si une colonne contient 'site' ou si c'est la 2ème colonne (index 1)
+    # Nettoyage des colonnes/index pour matcher avec les noms de sites
     if 'site' in df.columns:
         df = df.set_index('site')
     elif df.shape[1] > 1:
-        # On prend la deuxième colonne comme index des noms
         df = df.set_index(df.columns[1])
     
-    # 2. Nettoyage radical : Tout en string, sans espaces, en MAJUSCULES pour comparer
     df.index = df.index.astype(str).str.strip().str.upper()
     df.columns = df.columns.astype(str).str.strip().str.upper()
 
-    # 3. Identification du dépôt (on cherche HLS ou le premier site)
-    if "HLS" in df.index:
-        depot = "HLS"
-    else:
-        depot = df.index[0]
-        print(f"DEBUG ENGINE: Dépôt utilisé -> {depot}")
-
-    # 4. Nettoyage de la configuration des tâches
-    # On transforme les noms de sites_config pour qu'ils matchent la matrice nettoyée
+    # Identification du dépôt
+    depot = "HLS" if "HLS" in df.index else df.index[0]
+    
+    # Nettoyage de la config pour correspondre à la matrice (MAJUSCULES)
     clean_sites_config = {str(k).strip().upper(): v for k, v in sites_config.items()}
 
-    # --- RESTE DE L'ALGORITHME ---
-    # On passe la config nettoyée à generate_target_windows
+    # --- CALCUL ---
     tasks = generate_target_windows(clean_sites_config)
     tournees = []
     tasks_copy = [t.copy() for t in tasks]
@@ -73,18 +83,16 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
         if not remaining: break
         
         first_task = remaining[0]
-        site_cible = first_task['site_name'] # Déjà en majuscule grâce au nettoyage
+        site_cible = first_task['site_name']
 
-        # Vérification si le site existe vraiment dans la matrice pour éviter le crash
         if site_cible not in df.index:
-            print(f"ERREUR : Le site {site_cible} est absent de la matrice.")
-            first_task['done'] = True # On l'ignore pour ne pas bloquer la boucle
+            first_task['done'] = True
             continue
 
-        duree_depot_vers_site = df.loc[depot, site_cible]
-        heure_depart_depot = max(480, first_task['window'][0] - duree_depot_vers_site)
+        duree_hls_vers_site = df.loc[depot, site_cible]
+        heure_depart_hls = max(480, first_task['window'][0] - duree_hls_vers_site)
         
-        current_time = heure_depart_depot
+        current_time = heure_depart_hls
         tournee = [{'site': depot, 'heure': current_time}]
         current_site = depot
         
@@ -95,7 +103,6 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
             for idx, task in enumerate(tasks_copy):
                 if task['done']: continue
                 t_site = task['site_name']
-                
                 if t_site not in df.index: continue
 
                 trajet = df.loc[current_site, t_site]
@@ -126,4 +133,5 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
         
         tournees.append(tournee)
     
+    # On appelle enfin la fonction définie plus haut
     return assign_to_vehicles(tournees)
