@@ -38,35 +38,41 @@ def generate_target_windows(sites_config):
     return sorted(tasks, key=lambda x: x['window'][0])
 
 def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
-    """
-    Moteur principal d'optimisation.
-    m_duree_df : DataFrame (index/cols = noms sites)
-    sites_config : Configuration issue de st.session_state
-    """
-    # --- AJOUT DE CETTE LIGNE POUR NETTOYER LA MATRICE ---
+    # --- PRÉPARATION ROBUSTE DE LA MATRICE ---
+    # 1. On s'assure que la matrice utilise les NOMS de sites comme Index
+    # Si la colonne 'site' existe (nommée ainsi par GeoMatrix ou manuellement)
+    if 'site' in m_duree_df.columns:
+        m_duree_df = m_duree_df.set_index('site')
+    # Sinon, si le nom du site est en colonne 1 (index 1 de iloc)
+    elif m_duree_df.shape[1] > 1:
+        # On suppose que la colonne 0 est l'ID et la colonne 1 est le Nom
+        nom_colonne_sites = m_duree_df.columns[1]
+        m_duree_df = m_duree_df.set_index(nom_colonne_sites)
+    
+    # 2. Nettoyage des index et colonnes (espaces invisibles)
     m_duree_df.index = m_duree_df.index.astype(str).str.strip()
     m_duree_df.columns = m_duree_df.columns.astype(str).str.strip()
-    
-    # Vérification de sécurité
-    if "HLS" not in m_duree_df.index:
-        # Si 'HLS' n'existe pas, on prend le premier site de la matrice comme dépôt
-        depot = m_duree_df.index[0] 
-        st.warning(f"⚠️ 'HLS' non trouvé dans la matrice. Utilisation de '{depot}' comme point central.")
-    else:
+
+    # 3. Identification du dépôt
+    if "HLS" in m_duree_df.index:
         depot = "HLS"
-    
+    else:
+        # Si HLS n'est pas trouvé, on prend le premier index disponible
+        depot = m_duree_df.index[0]
+        print(f"DEBUG: 'HLS' non trouvé. Utilisation de '{depot}' comme dépôt.")
+
+    # --- RESTE DE L'ALGORITHME ---
     tasks = generate_target_windows(sites_config)
     tournees = []
     tasks_copy = [t.copy() for t in tasks]
     
-    # On travaille avec les noms de sites pour mapper la matrice
     while any(not t['done'] for t in tasks_copy):
         remaining = [t for t in tasks_copy if not t['done']]
         if not remaining: break
         
         first_task = remaining[0]
-        # Départ du HLS calé sur la première tâche
-        duree_hls_vers_site = m_duree_df.loc["HLS", first_task['site_name']]
+        # On utilise depot (qui vaut "HLS") pour chercher dans la matrice
+        duree_hls_vers_site = m_duree_df.loc[depot, first_task['site_name']]
         heure_depart_hls = max(480, first_task['window'][0] - duree_hls_vers_site)
         
         current_time = heure_depart_hls
