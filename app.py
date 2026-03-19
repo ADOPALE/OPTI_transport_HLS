@@ -193,12 +193,6 @@ def show_simulation_page():
         st.divider()
         st.markdown("### 📊 Résultats prêts")
         st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** pour voir les graphiques et feuilles de route.")
-        
-#def show_simulation_page():
- #   st.title("🏎️ Optimisation")
-  #  if st.button("🚀 Lancer la simulation"):
-   #     st.session_state.sim_lancee = True
-    #    st.rerun()
 
 
 with st.sidebar:
