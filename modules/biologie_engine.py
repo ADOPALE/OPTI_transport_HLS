@@ -12,50 +12,7 @@ def minutes_to_hhmm(minutes):
     m = int(minutes % 60)
     return f"{h:02d}:{m:02d}"
 
-def assign_to_vehicles(tournees, config_rh):
-    if not tournees:
-        return []
 
-    MAX_POSTE = config_rh.get('amplitude', 450)
-    PAUSE = config_rh.get('pause', 30)
-    RELEVE = config_rh.get('releve', 15)
-    
-    tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
-    
-    # Structure : { 'Vehicule_1': [ [Chauffeur1_T1, Chauffeur1_T2], [Chauffeur2_T1] ], ... }
-    flotte_vehicules = {}
-    
-    for trne in tournees_triees:
-        debut_trne = trne[0]['heure']
-        fin_trne = trne[-1]['heure']
-        assigned = False
-        
-        # 1. On essaie de mettre la tournée sur un véhicule existant
-        for v_id, postes in flotte_vehicules.items():
-            dernier_poste = postes[-1]
-            h_debut_poste = dernier_poste[0][0]['heure']
-            h_fin_poste = dernier_poste[-1][-1]['heure']
-            
-            # Peut-on l'ajouter au chauffeur actuel du véhicule ?
-            if (fin_trne - h_debut_poste) <= MAX_POSTE:
-                marge = PAUSE if (h_fin_poste - h_debut_poste) > 180 else 0
-                if h_fin_poste + marge <= debut_trne:
-                    dernier_poste.append(trne)
-                    assigned = True
-                    break
-            
-            # Sinon, peut-on créer un NOUVEAU poste (relève) sur ce MÊME véhicule ?
-            elif h_fin_poste + RELEVE <= debut_trne:
-                postes.append([trne])
-                assigned = True
-                break
-        
-        # 2. Si aucune place sur les véhicules existants, on sort un nouveau camion
-        if not assigned:
-            new_v_id = f"Véhicule {len(flotte_vehicules) + 1}"
-            flotte_vehicules[new_v_id] = [[trne]] # Premier poste du nouveau véhicule
-
-    return flotte_vehicules
 
 def generate_target_windows(sites_config):
     """Génère les rendez-vous théoriques (fenêtres) selon la config utilisateur."""
@@ -81,7 +38,14 @@ def generate_target_windows(sites_config):
 # ==========================================
 # PARTIE 2 : MOTEUR DE CALCUL PRINCIPAL
 # ==========================================
-def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
+def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee, config_rh=None):
+    """
+    Moteur d'optimisation mis à jour pour inclure la gestion des chauffeurs et véhicules.
+    """
+    # 1. Gestion par défaut de la config RH si non fournie
+    if config_rh is None:
+        config_rh = {'amplitude': 450, 'pause': 30, 'releve': 15}
+
     # --- PRÉPARATION DE LA MATRICE ---
     df = m_duree_df.copy()
     nom_colonne_noms = df.columns[0]
@@ -94,17 +58,16 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
 
     # --- INITIALISATION ---
     tasks = generate_target_windows(clean_sites_config)
-    tournees = []
+    tournees_unitaires = []
     tasks_copy = [t.copy() for t in tasks]
     
+    # Boucle de création des tournées unitaires (votre logique validée précédemment)
     while any(not t['done'] for t in tasks_copy):
         remaining = [t for t in tasks_copy if not t['done']]
         if not remaining: break
         
-        # On démarre une nouvelle tournée
         first_task = remaining[0]
         site_cible = first_task['site_name']
-
         if site_cible not in df.index:
             first_task['done'] = True
             continue
@@ -113,9 +76,6 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
         current_time = heure_depart
         tournee = [{'site': depot, 'heure': current_time}]
         current_site = depot
-        
-        # --- SOLUTION : Liste des sites déjà faits DANS CETTE TOURNEE ---
-        # On utilise un set pour bloquer le site dès qu'il est visité une fois
         sites_visites_cette_tournee = set()
 
         while True:
@@ -124,11 +84,6 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
             
             for idx, task in enumerate(tasks_copy):
                 t_site = task['site_name']
-                
-                # CONDITION CRUCIALE : 
-                # 1. La tâche n'est pas faite
-                # 2. Le site est dans la matrice
-                # 3. LE SITE N'A PAS ENCORE ÉTÉ VISITÉ DURANT CETTE TOURNÉE
                 if task['done'] or t_site not in df.index or t_site in sites_visites_cette_tournee:
                     continue
                 
@@ -138,38 +93,71 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
                 debut_coll = max(arrivee, task['window'][0])
                 fin_coll = debut_coll + temps_collecte
                 
-                # Vérification durée max
                 if (fin_coll + retour - tournee[0]['heure']) <= max_tournee:
                     attente = max(0, task['window'][0] - arrivee)
                     score = attente + (trajet * 2) 
-                    
                     if score < score_min:
                         score_min, best_task_idx = score, idx
             
             if best_task_idx is not None:
                 task = tasks_copy[best_task_idx]
                 t_site = task['site_name']
-                
                 heure_reelle = max(current_time + df.loc[current_site, t_site], task['window'][0])
                 tournee.append({'site': t_site, 'heure': heure_reelle})
-                
                 current_time = heure_reelle + temps_collecte
                 task['done'] = True
                 current_site = t_site
-                
-                # ON VERROUILLE LE SITE POUR CETTE TOURNÉE
                 sites_visites_cette_tournee.add(t_site)
-                
-                # Cas particulier : si plusieurs noms de sites sont au même endroit (durée 0)
-                # on verrouille aussi tous les sites qui sont à 0 minute de celui-ci
+                # Bloquer les sites à distance 0
                 for autre_site in df.columns:
                     if df.loc[t_site, autre_site] == 0:
                         sites_visites_cette_tournee.add(autre_site)
             else:
-                # Retour au dépôt obligatoire
                 tournee.append({'site': depot, 'heure': current_time + df.loc[current_site, depot]})
                 break
         
-        tournees.append(tournee)
+        tournees_unitaires.append(tournee)
     
-    return assign_to_vehicles(tournees)
+    # --- APPEL CORRIGÉ : On passe config_rh à la fonction d'assignation ---
+    return assign_to_vehicles(tournees_unitaires, config_rh)
+
+def assign_to_vehicles(tournees, config_rh):
+    """
+    Répartit les tournées par véhicule et par chauffeur (vacation).
+    """
+    MAX_POSTE = config_rh.get('amplitude', 450)
+    PAUSE = config_rh.get('pause', 30)
+    RELEVE = config_rh.get('releve', 15)
+    
+    tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
+    flotte_vehicules = {}
+    
+    for trne in tournees_triees:
+        debut_trne = trne[0]['heure']
+        fin_trne = trne[-1]['heure']
+        assigned = False
+        
+        for v_id, postes in flotte_vehicules.items():
+            dernier_poste = postes[-1]
+            h_debut_poste = dernier_poste[0][0]['heure']
+            h_fin_poste = dernier_poste[-1][-1]['heure']
+            
+            # 1. Test ajout au chauffeur actuel
+            if (fin_trne - h_debut_poste) <= MAX_POSTE:
+                marge = PAUSE if (h_fin_poste - h_debut_poste) > 180 else 0
+                if h_fin_poste + marge <= debut_trne:
+                    dernier_poste.append(trne)
+                    assigned = True
+                    break
+            
+            # 2. Test relève sur le même véhicule
+            elif h_fin_poste + RELEVE <= debut_trne:
+                postes.append([trne])
+                assigned = True
+                break
+        
+        if not assigned:
+            v_num = len(flotte_vehicules) + 1
+            flotte_vehicules[f"Véhicule {v_num}"] = [[trne]]
+
+    return flotte_vehicules
