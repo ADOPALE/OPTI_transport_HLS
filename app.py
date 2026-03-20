@@ -400,7 +400,7 @@ with st.sidebar:
 
     st.divider()
 #__ajout LM 16/03 "Calcul Matrices" et "geo-alt"
-    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "Passages Biologie", "Simuler & Optimiser"]
+    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser"]
     icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle"]
 
     if st.session_state.sim_lancee:
