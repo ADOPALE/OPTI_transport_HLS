@@ -17,6 +17,7 @@ from modules.biologie_engine import run_optimization
 import folium
 from streamlit_folium import st_folium
 import pandas as pd
+import plotly.express as px
 #__ajout BG 19/03
 
 try:
@@ -253,7 +254,65 @@ def show_detail_tournees():
         else:
             st.info("ℹ️ Pour afficher la carte, assurez-vous d'avoir géocodé les adresses (coords_sites).")
 
+def afficher_frise_par_site():
+    st.subheader("⏱️ Chronologie des passages par site")
+    
+    if "resultat_flotte" not in st.session_state:
+        st.info("Lancez d'abord la simulation.")
+        return
 
+    flotte = st.session_state.resultat_flotte
+    
+    # 1. Extraction de TOUS les passages pour TOUS les sites
+    all_passages = []
+    for i, v_tours in enumerate(flotte):
+        for tour in v_tours:
+            for step in tour:
+                # On ignore le dépôt HLS pour la frise des sites périphériques
+                if step['site'].upper() != "HLS":
+                    all_passages.append({
+                        "Site": step['site'].upper(),
+                        "Heure": step['heure'],
+                        "Horaire": f"{int(step['heure']//60):02d}:{int(step['heure']%60):02d}",
+                        "Véhicule": f"Véhicule {i+1}"
+                    })
+    
+    df_passages = pd.DataFrame(all_passages)
+    
+    if df_passages.empty:
+        st.warning("Aucun passage hors HLS détecté.")
+        return
+
+    # 2. Menu déroulant pour choisir le site
+    liste_sites = sorted(df_passages["Site"].unique())
+    site_sel = st.selectbox("Choisir un site pour voir ses passages", liste_sites)
+    
+    df_site = df_passages[df_passages["Site"] == site_sel].copy()
+
+    # 3. Création du graphique Plotly (Scatter plot sur un seul axe Y)
+    fig = px.scatter(
+        df_site, 
+        x="Heure", 
+        y=[site_sel] * len(df_site), # Tous les points sur la même ligne
+        color="Véhicule",
+        hover_data={"Heure": False, "Horaire": True, "Véhicule": True},
+        title=f"Passages prévus à {site_sel}",
+        labels={"x": "Heure de la journée", "y": ""},
+        color_discrete_sequence=px.colors.qualitative.Safe # Couleurs distinctes
+    )
+
+    # Personnalisation de l'axe X pour afficher des heures (08:00, 10:00...)
+    fig.update_xaxes(
+        tickmode='array',
+        tickvals=list(range(480, 1200, 60)), # De 8h à 20h
+        ticktext=[f"{h//60:02d}:00" for h in range(480, 1200, 60)],
+        range=[450, 1150]
+    )
+    
+    fig.update_traces(marker=dict(size=15, symbol='diamond'))
+    fig.update_layout(height=250, showlegend=True)
+
+    st.plotly_chart(fig, use_container_width=True)
 
 # FIN AJOUT
 
@@ -379,5 +438,6 @@ elif selected == "Synthèse":
     st.title("📊 Synthèse des résultats")
 elif selected == "Détail tournées":
     show_detail_tournees()
+    afficher_frise_par_site()
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
