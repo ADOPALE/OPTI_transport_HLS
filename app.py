@@ -14,6 +14,8 @@ from modules.GeoMatrix import run_matrix_tool
 
 #__ajout BG 19/03
 from modules.biologie_engine import run_optimization
+import folium
+from streamlit_folium import st_folium
 #__ajout BG 19/03
 
 try:
