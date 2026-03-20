@@ -132,12 +132,26 @@ def show_biologie_page():
         else:
             cols[1].info(f"❄️ {site_name} est exclu de la simulation.")
 
-    # Sauvegarde
-    if st.button("💾 Enregistrer la configuration", use_container_width=True):
+    st.subheader("🚐 Contraintes RH & Chauffeurs")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        amplitude_poste = st.number_input("Durée du poste (min)", value=450, help="7h30 = 450 minutes")
+    with c2:
+        pause_dej = st.number_input("Pause déjeuner (min)", value=30)
+    with c3:
+        temps_releve = st.number_input("Temps de relève (min)", value=15, help="Temps entre deux chauffeurs sur le même véhicule")
+
+    # Ajouter ces valeurs dans le dictionnaire de sauvegarde
+    if st.button("💾 Enregistrer la configuration"):
         st.session_state["biologie_config"] = {
             "duree_max": duree_max,
             "temps_collecte": temps_coll,
-            "sites": current_sites_config
+            "sites": current_sites_config,
+            "rh": {
+                "amplitude": amplitude_poste,
+                "pause": pause_dej,
+                "releve": temps_releve
+            }
         }
         st.success(f"Configuration enregistrée : {len(current_sites_config)} sites actifs.")
 # fin ajout
