@@ -25,7 +25,7 @@ except ImportError:
 
 try:
     from modules.param_bio import show_biologie_page
-except ImportError
+except ImportError:
     pass
 #__ajout BG 19/03
 
