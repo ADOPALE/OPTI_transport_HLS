@@ -16,6 +16,7 @@ from modules.GeoMatrix import run_matrix_tool
 from modules.biologie_engine import run_optimization
 import folium
 from streamlit_folium import st_folium
+import pandas as pd
 #__ajout BG 19/03
 
 try:
