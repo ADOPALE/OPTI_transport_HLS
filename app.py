@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.express as px
 
 
+from modules.general_ui import show_home, show_volumes_page
 from modules.Import import show_import
 from modules.dataViz import show_flux_control_charts
 from modules.GeoMatrix import run_matrix_tool
@@ -30,40 +31,6 @@ TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 
 if "sim_lancee" not in st.session_state:
     st.session_state.sim_lancee = False
-
-
-def show_home():
-    st.title("📍 Optimisation des flux logistiques")
-    st.markdown("---")
-    st.markdown("""
-    ### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes
-    Cet outil vous permet de modéliser, visualiser et optimiser vos tournées de distribution et de biologie.
-
-    **Comment procéder ?**
-    1. **Téléchargez** le template ci-dessous.
-    2. **Remplissez** vos données de sites, de volumes et de fréquences.
-    3. **Importez** le fichier dans l'onglet dédié pour lancer vos analyses.
-    """)
-
-    if TEMPLATE_FILE.exists():
-        with open(TEMPLATE_FILE, "rb") as file:
-            st.download_button(
-                label="📥 Télécharger le fichier de paramétrage vierge",
-                data=file,
-                file_name="template_parametrage_ADOPALE.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-    else:
-        st.error("Le fichier template est introuvable.")
-
-    st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
-
-
-def show_volumes_page():
-    if show_volumes:
-        show_volumes()
-    else:
-        st.warning("Le module de visualisation des volumes n'est pas disponible.")
 
 
 # ajout fonction affichage des résultant. 
