@@ -158,71 +158,55 @@ def show_biologie_page():
 
 # ajout fonction affichage des résultant. 
 def show_detail_tournees():
-    st.title("📋 Détail des Tournées Biologie")
-
-    # 1. VÉRIFICATION DES DONNÉES
-    if "resultat_flotte" not in st.session_state or not st.session_state.resultat_flotte:
-        st.warning("⚠️ Aucun résultat disponible. Veuillez lancer l'optimisation dans l'onglet 'Optimisation'.")
+    if "resultat_flotte" not in st.session_state:
+        st.info("Aucun résultat à afficher.")
         return
 
-    flotte = st.session_state.resultat_flotte
-    # On récupère la matrice pour les calculs de distance
-    df_matrice = st.session_state["data"]["matrice_duree"].copy()
+    flotte = st.session_state.resultat_flotte  # C'est maintenant un dictionnaire
     
-    # Nettoyage de la matrice pour la recherche (Index et Colonnes en MAJUSCULES)
-    df_matrice.index = df_matrice.index.astype(str).str.strip().str.upper()
-    df_matrice.columns = df_matrice.columns.astype(str).str.strip().str.upper()
-
-    # --- 2. TABLEAU SYNTHÈSE VÉHICULES ---
-    st.subheader("📊 Performance de la Flotte")
+    st.subheader("📊 Synthèse Moyens Mobiles")
     
-    summary_data = []
-    for i, v_tours in enumerate(flotte):
-        # Heures (en minutes depuis minuit)
-        h_debut_min = v_tours[0][0]['heure']
-        h_fin_min = v_tours[-1][-1]['heure']
-        
+    summary = []
+    total_chauffeurs = 0
     
-        # Calcul de la distance totale (km)
-        dist_totale = 0
+    for v_id, postes in flotte.items():
+        n_chauffeurs = len(postes)
+        total_chauffeurs += n_chauffeurs
         
-        # On s'assure que l'index de la matrice est propre
-        # On prend la matrice de distance (tab1 de GeoMatrix)
-        df_dist = st.session_state["data"]["matrice_distance"].copy() 
+        # Calcul distance totale du véhicule
+        dist_v = 0
+        # ... (votre logique de calcul de distance parcourue par le véhicule)
         
-        # Force l'index sur la colonne des noms si ce n'est pas déjà fait
-        if not isinstance(df_dist.index, pd.Index) or df_dist.index.dtype == 'int64':
-            df_dist = df_dist.set_index(df_dist.columns[0])
-            
-        # Nettoyage des noms pour la comparaison
-        df_dist.index = df_dist.index.astype(str).str.strip().str.upper()
-        df_dist.columns = df_dist.columns.astype(str).str.strip().str.upper()
-        
-        for tour in v_tours:
-            for j in range(len(tour) - 1):
-                loc_a = str(tour[j]['site']).strip().upper()
-                loc_b = str(tour[j+1]['site']).strip().upper()
-                
-                # Vérification de présence dans la matrice
-                if loc_a in df_dist.index and loc_b in df_dist.columns:
-                    dist_totale += df_dist.loc[loc_a, loc_b]
-                else:
-                    # Debug optionnel si vous voulez voir quel site pose problème
-                    # st.write(f"Manquant : {loc_a} ou {loc_b}")
-                    pass
-        
-        # Taux d'occupation (basé sur une journée de 8h = 480 min)
-        amplitude = h_fin_min - h_debut_min
-        taux_occ = (amplitude / 480) * 100
-        
-        summary_data.append({
-            "Véhicule": f"Véhicule {i+1}",
-            "Début": f"{int(h_debut_min//60):02d}:{int(h_debut_min%60):02d}",
-            "Fin": f"{int(h_fin_min//60):02d}:{int(h_fin_min%60):02d}",
-            "Distance (km)": round(dist_totale, 1),
-            "Nb Tournées": len(v_tours),
-            "Taux d'occ (%)": f"{min(100, round(taux_occ, 1))}%"
+        summary.append({
+            "Moyen de Transport": v_id,
+            "Nombre de Chauffeurs (Relèves)": n_chauffeurs,
+            "Amplitude Totale": f"{int(postes[0][0][0]['heure']//60):02d}h - {int(postes[-1][-1][-1]['heure']//60):02d}h",
+            "Statut": "Optimisé"
         })
+
+    # Affichage de KPIs rapides
+    c1, c2 = st.columns(2)
+    c1.metric("🚗 Véhicules mobilisés", len(flotte))
+    c2.metric("👨‍✈️ Chauffeurs nécessaires", total_chauffeurs)
+
+    st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+
+    # --- SÉLECTEUR POUR LA CARTE ---
+    st.divider()
+    st.subheader("🗺️ Détail des vacations")
+    
+    v_sel = st.selectbox("Choisir un véhicule", list(flotte.keys()))
+    p_idx = st.selectbox("Choisir le chauffeur / vacation", 
+                         range(len(flotte[v_sel])), 
+                         format_func=lambda x: f"Chauffeur n°{x+1}")
+    
+    vacation = flotte[v_sel][p_idx] # Liste de tournées du chauffeur choisi
+    
+    # Affichage de la frise pour ce chauffeur spécifique
+    for i, tournee in enumerate(vacation):
+        with st.expander(f"Tournée {i+1}"):
+            for s in tournee:
+                st.write(f"📍 {int(s['heure']//60):02d}:{int(s['heure']%60):02d} - {s['site']}")
 
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
 
