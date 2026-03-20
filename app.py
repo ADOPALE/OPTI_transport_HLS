@@ -446,8 +446,15 @@ elif selected == "Importer Données":
     if "data" in st.session_state:
         show_flux_control_charts()
         #__fin ajout
+
+# --- Ajout LM 20/03: Contrôle visuel des flux dans l'onglet volumes flux ---
 elif selected == "Volumes Distribution":
-    show_volumes_page()
+    if "data" in st.session_state:
+        # On appelle la fonction de dataViz.py ici
+        show_flux_control_charts()
+    else:
+        st.warning("⚠️ Veuillez d'abord importer un fichier Excel dans l'onglet 'Importer Données'.")
+        #__fin ajout
 elif selected == "Passages Biologie":
     show_biologie_page()
 elif selected == "Simuler & Optimiser":
