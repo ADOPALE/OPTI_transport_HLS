@@ -1,3 +1,8 @@
+import streamlit as st 
+import folium
+from streamlit_folium import st_folium
+
+
 def show_biologie_page():
     st.title("🧪 Paramétrage des Passages Biologie")
 
