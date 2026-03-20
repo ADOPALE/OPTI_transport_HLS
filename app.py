@@ -174,7 +174,7 @@ def show_detail_tournees():
         
         # On s'assure que l'index de la matrice est propre
         # On prend la matrice de distance (tab1 de GeoMatrix)
-        df_dist = st.session_state["data"]["matrice_dist"].copy() 
+        df_dist = st.session_state["data"]["matrice_distance"].copy() 
         
         # Force l'index sur la colonne des noms si ce n'est pas déjà fait
         if not isinstance(df_dist.index, pd.Index) or df_dist.index.dtype == 'int64':
