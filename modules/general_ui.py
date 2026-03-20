@@ -1,3 +1,6 @@
+import streamlit as st
+
+
 def show_home():
     st.title("📍 Optimisation des flux logistiques")
     st.markdown("---")
