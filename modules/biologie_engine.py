@@ -12,27 +12,54 @@ def minutes_to_hhmm(minutes):
     m = int(minutes % 60)
     return f"{h:02d}:{m:02d}"
 
-def assign_to_vehicles(tournees):
-    """Regroupe les tournées unitaires pour minimiser le nombre de véhicules."""
+def assign_to_vehicles(tournees, config_rh):
+    """
+    Assigne les tournées à des chauffeurs en respectant les 7h30, 
+    la pause et la relève.
+    """
     if not tournees:
         return []
+
+    # Paramètres RH
+    MAX_POSTE = config_rh.get('amplitude', 450)
+    PAUSE = config_rh.get('pause', 30)
+    RELEVE = config_rh.get('releve', 15)
     
-    # Tri des tournées par heure de départ au dépôt
     tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
-    vehicules = []
     
+    # Liste des chauffeurs (chaque chauffeur a sa propre liste de tournées)
+    chauffeurs = [] 
+
     for trne in tournees_triees:
+        debut_trne = trne[0]['heure']
+        fin_trne = trne[-1]['heure']
         assigned = False
-        for v in vehicules:
-            # Un véhicule peut reprendre une tournée si sa fin est <= début de la suivante
-            # On laisse une marge de sécurité de 0 minute ici
-            if v[-1][-1]['heure'] <= trne[0]['heure']:
-                v.append(trne)
-                assigned = True
-                break
+        
+        for chauffeur in chauffeurs:
+            h_debut_premier = chauffeur[0][0]['heure']
+            h_fin_dernier = chauffeur[-1][-1]['heure']
+            
+            # 1. Vérifier si la tournée rentre dans l'amplitude de 7h30 du chauffeur
+            if (fin_trne - h_debut_premier) <= MAX_POSTE:
+                # 2. Vérifier s'il y a assez de temps pour une pause si on est au milieu du poste
+                # On considère que si le chauffeur a déjà travaillé > 3h, il lui faut sa pause
+                temps_travail_cumule = h_fin_dernier - h_debut_premier
+                marge_necessaire = 0
+                if temps_travail_cumule > 180: # > 3h
+                    marge_necessaire = PAUSE
+                
+                if h_fin_dernier + marge_necessaire <= debut_trne:
+                    chauffeur.append(trne)
+                    assigned = True
+                    break
+        
         if not assigned:
-            vehicules.append([trne])
-    return vehicules
+            # Nouveau chauffeur
+            chauffeurs.append([trne])
+
+    # Logique de relève (Optionnel : Regrouper les chauffeurs par "véhicule physique")
+    # Pour l'instant, 'chauffeurs' représente le nombre de postes de travail nécessaires.
+    return chauffeurs
 
 def generate_target_windows(sites_config):
     """Génère les rendez-vous théoriques (fenêtres) selon la config utilisateur."""
