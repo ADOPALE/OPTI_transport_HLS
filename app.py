@@ -13,7 +13,7 @@ from modules.biologie_engine import run_optimization
 from streamlit_folium import st_folium
 from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
 from modules.param_bio import show_biologie_page
-from modules.dataViz import show_volumes, show_biologie
+#from modules.dataViz import show_volumes, show_biologie
 
 
 
