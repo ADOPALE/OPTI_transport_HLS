@@ -168,16 +168,34 @@ def show_detail_tournees():
         h_debut_min = v_tours[0][0]['heure']
         h_fin_min = v_tours[-1][-1]['heure']
         
+    
         # Calcul de la distance totale (km)
         dist_totale = 0
-        nb_arrets = 0
+        
+        # On s'assure que l'index de la matrice est propre
+        # On prend la matrice de distance (tab1 de GeoMatrix)
+        df_dist = st.session_state["data"]["matrice_dist"].copy() 
+        
+        # Force l'index sur la colonne des noms si ce n'est pas déjà fait
+        if not isinstance(df_dist.index, pd.Index) or df_dist.index.dtype == 'int64':
+            df_dist = df_dist.set_index(df_dist.columns[0])
+            
+        # Nettoyage des noms pour la comparaison
+        df_dist.index = df_dist.index.astype(str).str.strip().str.upper()
+        df_dist.columns = df_dist.columns.astype(str).str.strip().str.upper()
+        
         for tour in v_tours:
-            nb_arrets += len(tour)
             for j in range(len(tour) - 1):
                 loc_a = str(tour[j]['site']).strip().upper()
                 loc_b = str(tour[j+1]['site']).strip().upper()
-                if loc_a in df_matrice.index and loc_b in df_matrice.columns:
-                    dist_totale += df_matrice.loc[loc_a, loc_b]
+                
+                # Vérification de présence dans la matrice
+                if loc_a in df_dist.index and loc_b in df_dist.columns:
+                    dist_totale += df_dist.loc[loc_a, loc_b]
+                else:
+                    # Debug optionnel si vous voulez voir quel site pose problème
+                    # st.write(f"Manquant : {loc_a} ou {loc_b}")
+                    pass
         
         # Taux d'occupation (basé sur une journée de 8h = 480 min)
         amplitude = h_fin_min - h_debut_min
