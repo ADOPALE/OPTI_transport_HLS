@@ -443,8 +443,8 @@ elif selected == "Importer Données":
     show_import()
 
 # --- Ajout LM 18/03: Contrôle visuel des flux sous l'import ---
-    if "data" in st.session_state:
-        show_flux_control_charts()
+    #if "data" in st.session_state:
+     #   show_flux_control_charts()
         #__fin ajout
 
 # --- Ajout LM 20/03: Contrôle visuel des flux dans l'onglet volumes flux ---
