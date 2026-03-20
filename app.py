@@ -1,39 +1,20 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 from pathlib import Path
-
-from modules.Import import show_import
-
-#__ajout 18/03 LM
-from modules.dataViz import show_flux_control_charts
-#__fin ajout
-
-#__ajout LM 16/03
-from modules.GeoMatrix import run_matrix_tool
-#__fin ajout
-
-#__ajout BG 19/03
-from modules.biologie_engine import run_optimization
 import folium
-from streamlit_folium import st_folium
 import pandas as pd
 import plotly.express as px
-try:
-    from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
-except ImportError:
-    pass
 
-try:
-    from modules.param_bio import show_biologie_page
-except ImportError:
-    pass
-#__ajout BG 19/03
 
-try:
-    from modules.dataViz import show_volumes, show_biologie
-except ImportError:
-    show_volumes = None
-    show_biologie = None
+from modules.Import import show_import
+from modules.dataViz import show_flux_control_charts
+from modules.GeoMatrix import run_matrix_tool
+from modules.biologie_engine import run_optimization
+from streamlit_folium import st_folium
+from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
+from modules.param_bio import show_biologie_page
+from modules.dataViz import show_volumes, show_biologie
+
 
 
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
