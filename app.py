@@ -1,17 +1,22 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 from pathlib import Path
+from streamlit_folium import st_folium
 import folium
 import pandas as pd
 import plotly.express as px
 
 
+# importer la fonction d'import du fichier de paramétrage
 from modules.Import import show_import
-from modules.dataViz import show_flux_control_charts
+# importer la fonction pour afficher les flux par fonction support pour contrôle
+from modules.check_flux import show_flux_control_charts
+# importer la fonction d'encodage géographique + calculer les matrices distance et de durée
 from modules.GeoMatrix import run_matrix_tool
+# importer la fonction qui calcule les tournées de biologie
 from modules.biologie_engine import run_optimization
-from streamlit_folium import st_folium
-from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
+
+#from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
 from modules.param_bio import show_biologie_page
 
 
