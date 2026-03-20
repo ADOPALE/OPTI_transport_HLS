@@ -377,6 +377,6 @@ elif selected == "Simuler & Optimiser":
 elif selected == "Synthèse":
     st.title("📊 Synthèse des résultats")
 elif selected == "Détail tournées":
-    st.title("📍 Détail des tournées")
+    show_detail_tournees()
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
