@@ -7,17 +7,21 @@ import pandas as pd
 import plotly.express as px
 
 
+# importer la fonction d'encodage géographique + calculer les matrices distance et de durée
+from modules.GeoMatrix import run_matrix_tool
+
 # importer la fonction d'import du fichier de paramétrage
 from modules.Import import show_import
 # importer la fonction pour afficher les flux par fonction support pour contrôle
 from modules.check_flux import show_flux_control_charts
-# importer la fonction d'encodage géographique + calculer les matrices distance et de durée
-from modules.GeoMatrix import run_matrix_tool
+
+# importer la fonction qui permet de paramétrer les tournées de biologie
+from modules.param_bio import show_biologie_page
 # importer la fonction qui calcule les tournées de biologie
 from modules.biologie_engine import run_optimization
+# importer les fonctions qui permettent de visualiser les tournées calculées de biologie dans les onglets synthèse et détail des tournées. 
+# ____ fonction en cours de travail. 
 
-#from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
-from modules.param_bio import show_biologie_page
 
 
 
@@ -111,7 +115,6 @@ def show_simulation_page():
         st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** pour voir les graphiques et feuilles de route.")
 
 
-# --------- FIN DES DEFINITIONS DE FONCTIONS ---------------
 
 
 
@@ -142,7 +145,6 @@ with st.sidebar:
             st.image(str(LOGO_CHU), use_container_width=True)
 
     st.divider()
-#__ajout LM 16/03 "Calcul Matrices" et "geo-alt"
     options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser"]
     icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle"]
 
