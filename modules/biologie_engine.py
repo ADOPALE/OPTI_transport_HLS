@@ -13,53 +13,49 @@ def minutes_to_hhmm(minutes):
     return f"{h:02d}:{m:02d}"
 
 def assign_to_vehicles(tournees, config_rh):
-    """
-    Assigne les tournées à des chauffeurs en respectant les 7h30, 
-    la pause et la relève.
-    """
     if not tournees:
         return []
 
-    # Paramètres RH
     MAX_POSTE = config_rh.get('amplitude', 450)
     PAUSE = config_rh.get('pause', 30)
     RELEVE = config_rh.get('releve', 15)
     
     tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
     
-    # Liste des chauffeurs (chaque chauffeur a sa propre liste de tournées)
-    chauffeurs = [] 
-
+    # Structure : { 'Vehicule_1': [ [Chauffeur1_T1, Chauffeur1_T2], [Chauffeur2_T1] ], ... }
+    flotte_vehicules = {}
+    
     for trne in tournees_triees:
         debut_trne = trne[0]['heure']
         fin_trne = trne[-1]['heure']
         assigned = False
         
-        for chauffeur in chauffeurs:
-            h_debut_premier = chauffeur[0][0]['heure']
-            h_fin_dernier = chauffeur[-1][-1]['heure']
+        # 1. On essaie de mettre la tournée sur un véhicule existant
+        for v_id, postes in flotte_vehicules.items():
+            dernier_poste = postes[-1]
+            h_debut_poste = dernier_poste[0][0]['heure']
+            h_fin_poste = dernier_poste[-1][-1]['heure']
             
-            # 1. Vérifier si la tournée rentre dans l'amplitude de 7h30 du chauffeur
-            if (fin_trne - h_debut_premier) <= MAX_POSTE:
-                # 2. Vérifier s'il y a assez de temps pour une pause si on est au milieu du poste
-                # On considère que si le chauffeur a déjà travaillé > 3h, il lui faut sa pause
-                temps_travail_cumule = h_fin_dernier - h_debut_premier
-                marge_necessaire = 0
-                if temps_travail_cumule > 180: # > 3h
-                    marge_necessaire = PAUSE
-                
-                if h_fin_dernier + marge_necessaire <= debut_trne:
-                    chauffeur.append(trne)
+            # Peut-on l'ajouter au chauffeur actuel du véhicule ?
+            if (fin_trne - h_debut_poste) <= MAX_POSTE:
+                marge = PAUSE if (h_fin_poste - h_debut_poste) > 180 else 0
+                if h_fin_poste + marge <= debut_trne:
+                    dernier_poste.append(trne)
                     assigned = True
                     break
+            
+            # Sinon, peut-on créer un NOUVEAU poste (relève) sur ce MÊME véhicule ?
+            elif h_fin_poste + RELEVE <= debut_trne:
+                postes.append([trne])
+                assigned = True
+                break
         
+        # 2. Si aucune place sur les véhicules existants, on sort un nouveau camion
         if not assigned:
-            # Nouveau chauffeur
-            chauffeurs.append([trne])
+            new_v_id = f"Véhicule {len(flotte_vehicules) + 1}"
+            flotte_vehicules[new_v_id] = [[trne]] # Premier poste du nouveau véhicule
 
-    # Logique de relève (Optionnel : Regrouper les chauffeurs par "véhicule physique")
-    # Pour l'instant, 'chauffeurs' représente le nombre de postes de travail nécessaires.
-    return chauffeurs
+    return flotte_vehicules
 
 def generate_target_windows(sites_config):
     """Génère les rendez-vous théoriques (fenêtres) selon la config utilisateur."""
