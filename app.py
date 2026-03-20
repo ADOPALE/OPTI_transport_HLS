@@ -141,11 +141,6 @@ def show_biologie_page():
 # fin ajout
 
 # ajout fonction affichage des résultant. 
-import pandas as pd
-import streamlit as st
-import folium
-from streamlit_folium import st_folium
-
 def show_detail_tournees():
     st.title("📋 Détail des Tournées Biologie")
 
