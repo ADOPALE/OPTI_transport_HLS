@@ -456,7 +456,7 @@ elif selected == "Volumes Distribution":
     else:
         st.warning("⚠️ Veuillez d'abord importer un fichier Excel dans l'onglet 'Importer Données'.")
         #__fin ajout
-elif selected == "Passages Biologie":
+elif selected == "🧪 Passages Biologie":
     show_biologie_page()
 elif selected == "Simuler & Optimiser":
     show_simulation_page()
