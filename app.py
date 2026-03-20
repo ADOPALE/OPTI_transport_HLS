@@ -15,6 +15,10 @@ from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passa
 from modules.param_bio import show_biologie_page
 
 
+
+
+# ------------ INITIALISATION DU VISUEL DE L'APPLICATION---------------
+
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 
 BASE_DIR = Path(__file__).resolve().parent
