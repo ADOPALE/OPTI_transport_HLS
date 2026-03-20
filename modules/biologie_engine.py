@@ -109,7 +109,7 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee):
             continue
 
         # Création d'une nouvelle tournée
-        heure_depart = max(480, first_task['window'][0] - t_aller) # Départ à 8h ou selon fenêtre
+        heure_depart = max(300, first_task['window'][0] - t_aller) # Départ à 5h ou selon fenêtre en fonction des ocntraintes
         current_time = heure_depart
         tournee = [{'site': depot, 'heure': current_time}]
         current_site = depot
