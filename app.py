@@ -20,10 +20,6 @@ import pandas as pd
 import plotly.express as px
 #__ajout BG 19/03
 
-# --- INSERTION 1 : Imports des fonctions de visualisation ---
-from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
-# -----------------------------------------------------------
-
 try:
     from modules.dataViz import show_volumes, show_biologie
 except ImportError:
@@ -49,26 +45,381 @@ def show_home():
     st.markdown("---")
     st.markdown("""
     ### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes
-    Cet outil vous permet de modéliser, visualiser et optimiser les flux de transport.
+    Cet outil vous permet de modéliser, visualiser et optimiser vos tournées de distribution et de biologie.
+
+    **Comment procéder ?**
+    1. **Téléchargez** le template ci-dessous.
+    2. **Remplissez** vos données de sites, de volumes et de fréquences.
+    3. **Importez** le fichier dans l'onglet dédié pour lancer vos analyses.
     """)
 
-with st.sidebar:
-    # Gestion du logo
-    if LOGO_ADOPALE.exists():
-        st.image(str(LOGO_ADOPALE), width=200)
+    if TEMPLATE_FILE.exists():
+        with open(TEMPLATE_FILE, "rb") as file:
+            st.download_button(
+                label="📥 Télécharger le fichier de paramétrage vierge",
+                data=file,
+                file_name="template_parametrage_ADOPALE.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
     else:
-        st.title("ADOPALE")
+        st.error("Le fichier template est introuvable.")
+
+    st.info("💡 Une fois le fichier rempli, rendez-vous dans le menu 'Importer Données'.")
+
+
+def show_volumes_page():
+    if show_volumes:
+        show_volumes()
+    else:
+        st.warning("Le module de visualisation des volumes n'est pas disponible.")
+
+# Ajout BG 19/03
+def show_biologie_page():
+    st.title("🧪 Paramétrage des Passages Biologie")
+
+    if "data" not in st.session_state:
+        st.warning("⚠️ Veuillez d'abord importer un fichier Excel.")
+        return
+
+    data = st.session_state["data"]
+    df_sites = data["accessibilite_sites"]
     
-    st.write("---")
+    # Paramètres globaux
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        duree_max = st.number_input("Durée max tournée (min)", value=200)
+    with col_g2:
+        temps_coll = st.number_input("Temps de collecte (min)", value=10)
+
+    st.divider()
+    st.subheader("🏥 Sélection et configuration des sites")
+
+    # Initialisation du dictionnaire de configuration
+    current_sites_config = {}
+
+    for index, row in df_sites.iterrows():
+        site_name = row['site']
+        if site_name == "HLS": continue 
+        
+        # Création d'une ligne avec checkbox et expander
+        cols = st.columns([1, 4])
+        
+        # 1. Possibilité de cocher/décocher le site
+        is_active = cols[0].checkbox("Inclure", value=True, key=f"check_{site_name}")
+        
+        if is_active:
+            with cols[1].expander(f"📍 {site_name}", expanded=True):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    # Slider pour la plage horaire
+                    # On peut pré-remplir avec les valeurs de l'Excel si vous les avez extraites
+                    res = st.select_slider(
+                        f"Plage horaire",
+                        options=range(0, 1441, 15),
+                        value=(480, 1080), # 8h - 18h par défaut
+                        format_func=lambda x: f"{x//60:02d}:{x%60:02d}",
+                        key=f"slide_{site_name}"
+                    )
+                with c2:
+                    freq = st.number_input(f"Fréquence", min_value=1, value=5, key=f"freq_{site_name}")
+
+                # On n'ajoute à la config que si le site est coché
+                current_sites_config[site_name] = {
+                    'open': res[0],
+                    'close': res[1],
+                    'freq': freq
+                }
+        else:
+            cols[1].info(f"❄️ {site_name} est exclu de la simulation.")
+
+    st.subheader("🚐 Contraintes RH & Chauffeurs")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        amplitude_poste = st.number_input("Durée du poste (min)", value=450, help="7h30 = 450 minutes")
+    with c2:
+        pause_dej = st.number_input("Pause déjeuner (min)", value=30)
+    with c3:
+        temps_releve = st.number_input("Temps de relève (min)", value=15, help="Temps entre deux chauffeurs sur le même véhicule")
+
+    # Ajouter ces valeurs dans le dictionnaire de sauvegarde
+    if st.button("💾 Enregistrer la configuration"):
+        st.session_state["biologie_config"] = {
+            "duree_max": duree_max,
+            "temps_collecte": temps_coll,
+            "sites": current_sites_config,
+            "rh": {
+                "amplitude": amplitude_poste,
+                "pause": pause_dej,
+                "releve": temps_releve
+            }
+        }
+        st.success(f"Configuration enregistrée : {len(current_sites_config)} sites actifs.")
+# fin ajout
+
+# ajout fonction affichage des résultant. 
+def show_detail_tournees():
+    if "resultat_flotte" not in st.session_state:
+        st.info("Aucun résultat à afficher.")
+        return
+
+    flotte = st.session_state.resultat_flotte  # C'est maintenant un dictionnaire
     
+    st.subheader("📊 Synthèse Moyens Mobiles")
+    
+    summary = []
+    total_chauffeurs = 0
+    
+    for v_id, postes in flotte.items():
+        n_chauffeurs = len(postes)
+        total_chauffeurs += n_chauffeurs
+        
+        # Calcul distance totale du véhicule
+        dist_v = 0
+        # ... (votre logique de calcul de distance parcourue par le véhicule)
+        
+        summary.append({
+            "Moyen de Transport": v_id,
+            "Nombre de Chauffeurs (Relèves)": n_chauffeurs,
+            "Amplitude Totale": f"{int(postes[0][0][0]['heure']//60):02d}h - {int(postes[-1][-1][-1]['heure']//60):02d}h",
+            "Statut": "Optimisé"
+        })
+
+    # Affichage de KPIs rapides
+    c1, c2 = st.columns(2)
+    c1.metric("🚗 Véhicules mobilisés", len(flotte))
+    c2.metric("👨‍✈️ Chauffeurs nécessaires", total_chauffeurs)
+
+    st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+
+    # --- SÉLECTEUR POUR LA CARTE ---
+    st.divider()
+    st.subheader("🗺️ Détail des vacations")
+    
+    v_sel = st.selectbox("Choisir un véhicule", list(flotte.keys()))
+    p_idx = st.selectbox("Choisir le chauffeur / vacation", 
+                         range(len(flotte[v_sel])), 
+                         format_func=lambda x: f"Chauffeur n°{x+1}")
+    
+    vacation = flotte[v_sel][p_idx] # Liste de tournées du chauffeur choisi
+    
+    # Affichage de la frise pour ce chauffeur spécifique
+    for i, tournee in enumerate(vacation):
+        with st.expander(f"Tournée {i+1}"):
+            for s in tournee:
+                st.write(f"📍 {int(s['heure']//60):02d}:{int(s['heure']%60):02d} - {s['site']}")
+
+    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- 3. SÉLECTION ET CARTE ---
+    st.subheader("🔍 Analyse détaillée par trajet")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        v_idx = st.selectbox("Sélectionner un véhicule", range(len(flotte)), 
+                             format_func=lambda x: f"Véhicule {x+1}")
+    with c2:
+        # On filtre les tournées du véhicule choisi
+        tournees_dispo = flotte[v_idx]
+        t_idx = st.selectbox("Sélectionner la tournée", range(len(tournees_dispo)), 
+                             format_func=lambda x: f"Tournée n°{x+1}")
+
+    tournee_actuelle = tournees_dispo[t_idx]
+
+    # --- 4. AFFICHAGE CARTE ET FEUILLE DE ROUTE ---
+    col_map, col_list = st.columns([2, 1])
+
+    with col_list:
+        st.markdown(f"**Feuille de route - T{t_idx+1}**")
+        for step in tournee_actuelle:
+            h = step['heure']
+            st.write(f"🕒 **{int(h//60):02d}:{int(h%60):02d}** : {step['site']}")
+
+    with col_map:
+        # On vérifie si on a les coordonnées pour la carte
+        if "coords_sites" in st.session_state:
+            coords = st.session_state.coords_sites
+            
+            # Centre la carte sur le premier point
+            first_site = tournee_actuelle[0]['site'].strip().upper()
+            m = folium.Map(location=[coords[first_site]['lat'], coords[first_site]['lon']], zoom_start=12)
+            
+            points_gps = []
+            for step in tournee_actuelle:
+                s_name = step['site'].strip().upper()
+                if s_name in coords:
+                    lat, lon = coords[s_name]['lat'], coords[s_name]['lon']
+                    points_gps.append([lat, lon])
+                    
+                    # Marqueur
+                    h = step['heure']
+                    label = f"{s_name} ({int(h//60):02d}:{int(h%60):02d})"
+                    folium.Marker(
+                        [lat, lon], 
+                        popup=label, 
+                        tooltip=label,
+                        icon=folium.Icon(color="red" if s_name == "HLS" else "blue", icon="info-sign")
+                    ).add_to(m)
+            
+            # Tracer la ligne du trajet
+            if len(points_gps) > 1:
+                folium.PolyLine(points_gps, color="blue", weight=3, opacity=0.8).add_to(m)
+            
+            st_folium(m, width=None, height=400)
+        else:
+            st.info("ℹ️ Pour afficher la carte, assurez-vous d'avoir géocodé les adresses (coords_sites).")
+
+def afficher_frise_par_site():
+    st.subheader("⏱️ Chronologie des passages par site")
+    
+    if "resultat_flotte" not in st.session_state:
+        st.info("Lancez d'abord la simulation.")
+        return
+
+    flotte = st.session_state.resultat_flotte
+    
+    # 1. Extraction de TOUS les passages pour TOUS les sites
+    all_passages = []
+    for i, v_tours in enumerate(flotte):
+        for tour in v_tours:
+            for step in tour:
+                # On ignore le dépôt HLS pour la frise des sites périphériques
+                if step['site'].upper() != "HLS":
+                    all_passages.append({
+                        "Site": step['site'].upper(),
+                        "Heure": step['heure'],
+                        "Horaire": f"{int(step['heure']//60):02d}:{int(step['heure']%60):02d}",
+                        "Véhicule": f"Véhicule {i+1}"
+                    })
+    
+    df_passages = pd.DataFrame(all_passages)
+    
+    if df_passages.empty:
+        st.warning("Aucun passage hors HLS détecté.")
+        return
+
+    # 2. Menu déroulant pour choisir le site
+    liste_sites = sorted(df_passages["Site"].unique())
+    site_sel = st.selectbox("Choisir un site pour voir ses passages", liste_sites)
+    
+    df_site = df_passages[df_passages["Site"] == site_sel].copy()
+
+    # 3. Création du graphique Plotly (Scatter plot sur un seul axe Y)
+    fig = px.scatter(
+        df_site, 
+        x="Heure", 
+        y=[site_sel] * len(df_site), # Tous les points sur la même ligne
+        color="Véhicule",
+        hover_data={"Heure": False, "Horaire": True, "Véhicule": True},
+        title=f"Passages prévus à {site_sel}",
+        labels={"x": "Heure de la journée", "y": ""},
+        color_discrete_sequence=px.colors.qualitative.Safe # Couleurs distinctes
+    )
+
+    # Personnalisation de l'axe X pour afficher des heures (08:00, 10:00...)
+    fig.update_xaxes(
+        tickmode='array',
+        tickvals=list(range(480, 1200, 60)), # De 8h à 20h
+        ticktext=[f"{h//60:02d}:00" for h in range(480, 1200, 60)],
+        range=[450, 1150]
+    )
+    
+    fig.update_traces(marker=dict(size=15, symbol='diamond'))
+    fig.update_layout(height=250, showlegend=True)
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# FIN AJOUT
+
+def show_simulation_page():
+    st.title("🏎️ Optimisation des tournées Biologie")
+    st.markdown("---")
+
+    # 1. VERIFICATIONS (Sécurité)
+    if "data" not in st.session_state or "matrice_duree" not in st.session_state["data"]:
+        st.error("⚠️ Matrice de durée manquante. Importez vos données d'abord.")
+        return
+
+    if "biologie_config" not in st.session_state:
+        st.warning("⚠️ Configuration manquante. Validez vos paramètres dans l'onglet 'Passages Biologie'.")
+        return
+
+    # 2. RESUME DE CE QUI VA ETRE CALCULE
+    config = st.session_state["biologie_config"]
+    st.info(f"Prêt à simuler {len(config['sites'])} sites hospitaliers.")
+
+    # 3. LE BOUTON (Unique déclencheur)
+    # On n'exécute le code QUE si l'utilisateur clique. 
+    if st.button("🚀 Lancer la simulation", use_container_width=True, type="primary"):
+        
+        with st.spinner("🧠 Calcul de l'itinéraire optimal en cours..."):
+            try:
+                # Récupération de la matrice
+                df_duree = st.session_state["data"]["matrice_duree"]
+                
+                # Appel du moteur (Partie 1 que tu as déjà dans ton module)
+                resultats = run_optimization(
+                    m_duree_df=df_duree,
+                    sites_config=config["sites"],
+                    temps_collecte=config["temps_collecte"],
+                    max_tournee=config["duree_max"]
+                )
+                
+                # ON STOCKAGE DES RESULTATS
+                st.session_state.resultat_flotte = resultats
+                st.session_state.sim_lancee = True
+                
+                # Succès visuel
+                st.success(f"✅ Simulation réussie ! {len(resultats)} véhicules identifiés.")
+                st.balloons()
+                
+                # /!\ IMPORTANT : On ne met pas de st.rerun() ici /!\
+                # Cela permet de garder l'affichage du succès à l'écran.
+                
+            except Exception as e:
+                st.error(f"Erreur durant le calcul : {e}")
+
+    # 4. ETAT APRES CALCUL
+    if st.session_state.get("sim_lancee"):
+        st.divider()
+        st.markdown("### 📊 Résultats prêts")
+        st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** pour voir les graphiques et feuilles de route.")
+
+
+with st.sidebar:
+    col1, col2 = st.columns(2)
+    with col1:
+        if LOGO_ADOPALE.exists():
+            st.image(str(LOGO_ADOPALE), use_container_width=True)
+    with col2:
+        if LOGO_CHU.exists():
+            st.image(str(LOGO_CHU), use_container_width=True)
+
+    st.divider()
+#__ajout LM 16/03 "Calcul Matrices" et "geo-alt"
+    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser"]
+    icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle"]
+
+    if st.session_state.sim_lancee:
+        options += ["Synthèse", "Détail tournées", "Exporter"]
+        icons += ["clipboard-data", "map", "file-earmark-pdf"]
+
     selected = option_menu(
-        menu_title="Menu Principal",
-        options=["Accueil", "Importer Données", "Volumes Distribution", "Calcul Matrices", "🧪 Passages Biologie", "Simuler & Optimiser"],
-        icons=["house", "cloud-upload", "bar-chart", "geo-alt", "thermometer-half", "play-circle"],
-        menu_icon="cast",
-        default_index=0,
+        menu_title=None,
+        options=options,
+        icons=icons,
         styles={
-            "container": {"padding": "0!important", "background-color": "#f8f9fa"},
+            "container": {"background-color": "white", "border-radius": "0"},
+            "icon": {"color": "black", "font-size": "18px"},
+            "nav-link": {
+                "color": "black",
+                "font-size": "15px",
+                "font-weight": "bold",
+                "text-align": "left",
+                "margin": "5px",
+                "--hover-color": "#f0f2f6"
+            },
             "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
     )
@@ -104,80 +455,13 @@ elif selected == "Volumes Distribution":
         st.warning("⚠️ Veuillez d'abord importer un fichier Excel dans l'onglet 'Importer Données'.")
         #__fin ajout
 elif selected == "🧪 Passages Biologie":
-    # --- Modif pour utiliser bioViz.py ---
-    from modules.bioViz import show_sites_on_map
-    show_sites_on_map()
+    show_biologie_page()
 elif selected == "Simuler & Optimiser":
-    st.header("🚀 Optimisation des tournées Biologie")
-    
-    if "data" not in st.session_state:
-        st.error("Veuillez importer des données avant de simuler.")
-    else:
-        with st.expander("⚙️ Paramètres de simulation", expanded=not st.session_state.sim_lancee):
-            c1, c2 = st.columns(2)
-            with c1:
-                amplitude = st.number_input("Amplitude poste (min)", value=450)
-                pause = st.number_input("Pause (min)", value=30)
-                releve = st.number_input("Relève véhicule (min)", value=15)
-            with c2:
-                max_t = st.slider("Durée max tournée (min)", 30, 240, 120)
-                t_coll = st.slider("Temps collecte (min)", 2, 20, 10)
-
-        if st.button("Lancer l'optimisation", use_container_width=True):
-            sites_config = {}
-            # On récupère les sites depuis m_flux comme dans votre version précédente
-            unique_sites = st.session_state["data"]["m_flux"]["Site hospitalier"].unique()
-            for s in unique_sites:
-                sites_config[s] = {'open': 480, 'close': 1140, 'freq': 3}
-            
-            config_rh = {'amplitude': amplitude, 'pause': pause, 'releve': releve}
-            res = run_optimization(st.session_state["data"]["matrice_duree"], sites_config, t_coll, max_t, config_rh)
-            st.session_state.resultat_flotte = res
-            st.session_state.sim_lancee = True
-            st.rerun()
-
-        # --- INSERTION 2 : Affichage des Onglets Synthèse et Détail ---
-        if st.session_state.sim_lancee:
-            flotte = st.session_state.resultat_flotte
-            df_dist = st.session_state["data"]["matrice_distance"]
-            df_geo = st.session_state["data"]["accessibilite_sites"] 
-            config_rh = {'amplitude': amplitude, 'pause': pause, 'releve': releve}
-
-            tab_synth, tab_det = st.tabs(["📊 Synthèse", "🚐 Détail des tournées"])
-
-            with tab_synth:
-                kpis = calculate_kpis(flotte, config_rh, df_dist)
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Véhicules", kpis["v_total"])
-                c2.metric("Chauffeurs", kpis["c_total"])
-                c3.metric("Occupation", f"{kpis['tx_occ']:.1f}%")
-                c4.metric("Tournées", kpis["t_total"])
-                c5.metric("Km Total", f"{int(kpis['km_total'])} km")
-
-                st.subheader("Occupation de la flotte")
-                render_fleet_gantt(flotte)
-                st.subheader("Passages par site")
-                render_site_passages(flotte)
-
-            with tab_det:
-                v_sel = st.selectbox("Véhicule", list(flotte.keys()))
-                v_data = flotte[v_sel]
-                st.info(f"Véhicule sélectionné : {v_sel}")
-                render_fleet_gantt(flotte, v_highlight=v_sel)
-
-                t_list = []
-                for p_idx, p in enumerate(v_data):
-                    for t_idx, t in enumerate(p):
-                        t_list.append({"label": f"Chauffeur {p_idx+1} - Tournée {t_idx+1}", "steps": t})
-                
-                sel_t = st.selectbox("Tournée", t_list, format_func=lambda x: x["label"])
-                
-                col_m, col_t = st.columns([2, 1])
-                with col_m:
-                    render_tournee_map(sel_t["steps"], df_geo)
-                with col_t:
-                    st.write("**Horaires**")
-                    df_p = pd.DataFrame(sel_t["steps"])
-                    df_p['heure'] = df_p['heure'].apply(lambda x: f"{int(x//60):02d}h{int(x%60):02d}")
-                    st.table(df_p)
-        # --- FIN INSERTION 2 ---
+    show_simulation_page()
+elif selected == "Synthèse":
+    st.title("📊 Synthèse des résultats")
+elif selected == "Détail tournées":
+    show_detail_tournees()
+    afficher_frise_par_site()
+elif selected == "Exporter":
+    st.title("📥 Exporter les résultats")
