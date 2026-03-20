@@ -140,7 +140,126 @@ def show_biologie_page():
         st.success(f"Configuration enregistrée : {len(current_sites_config)} sites actifs.")
 # fin ajout
 
+# ajout fonction affichage des résultant. 
+import pandas as pd
+import streamlit as st
+import folium
+from streamlit_folium import st_folium
 
+def show_detail_tournees():
+    st.title("📋 Détail des Tournées Biologie")
+
+    # 1. VÉRIFICATION DES DONNÉES
+    if "resultat_flotte" not in st.session_state or not st.session_state.resultat_flotte:
+        st.warning("⚠️ Aucun résultat disponible. Veuillez lancer l'optimisation dans l'onglet 'Optimisation'.")
+        return
+
+    flotte = st.session_state.resultat_flotte
+    # On récupère la matrice pour les calculs de distance
+    df_matrice = st.session_state["data"]["matrice_duree"].copy()
+    
+    # Nettoyage de la matrice pour la recherche (Index et Colonnes en MAJUSCULES)
+    df_matrice.index = df_matrice.index.astype(str).str.strip().str.upper()
+    df_matrice.columns = df_matrice.columns.astype(str).str.strip().str.upper()
+
+    # --- 2. TABLEAU SYNTHÈSE VÉHICULES ---
+    st.subheader("📊 Performance de la Flotte")
+    
+    summary_data = []
+    for i, v_tours in enumerate(flotte):
+        # Heures (en minutes depuis minuit)
+        h_debut_min = v_tours[0][0]['heure']
+        h_fin_min = v_tours[-1][-1]['heure']
+        
+        # Calcul de la distance totale (km)
+        dist_totale = 0
+        nb_arrets = 0
+        for tour in v_tours:
+            nb_arrets += len(tour)
+            for j in range(len(tour) - 1):
+                loc_a = str(tour[j]['site']).strip().upper()
+                loc_b = str(tour[j+1]['site']).strip().upper()
+                if loc_a in df_matrice.index and loc_b in df_matrice.columns:
+                    dist_totale += df_matrice.loc[loc_a, loc_b]
+        
+        # Taux d'occupation (basé sur une journée de 8h = 480 min)
+        amplitude = h_fin_min - h_debut_min
+        taux_occ = (amplitude / 480) * 100
+        
+        summary_data.append({
+            "Véhicule": f"Véhicule {i+1}",
+            "Début": f"{int(h_debut_min//60):02d}:{int(h_debut_min%60):02d}",
+            "Fin": f"{int(h_fin_min//60):02d}:{int(h_fin_min%60):02d}",
+            "Distance (km)": round(dist_totale, 1),
+            "Nb Tournées": len(v_tours),
+            "Taux d'occ (%)": f"{min(100, round(taux_occ, 1))}%"
+        })
+
+    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- 3. SÉLECTION ET CARTE ---
+    st.subheader("🔍 Analyse détaillée par trajet")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        v_idx = st.selectbox("Sélectionner un véhicule", range(len(flotte)), 
+                             format_func=lambda x: f"Véhicule {x+1}")
+    with c2:
+        # On filtre les tournées du véhicule choisi
+        tournees_dispo = flotte[v_idx]
+        t_idx = st.selectbox("Sélectionner la tournée", range(len(tournees_dispo)), 
+                             format_func=lambda x: f"Tournée n°{x+1}")
+
+    tournee_actuelle = tournees_dispo[t_idx]
+
+    # --- 4. AFFICHAGE CARTE ET FEUILLE DE ROUTE ---
+    col_map, col_list = st.columns([2, 1])
+
+    with col_list:
+        st.markdown(f"**Feuille de route - T{t_idx+1}**")
+        for step in tournee_actuelle:
+            h = step['heure']
+            st.write(f"🕒 **{int(h//60):02d}:{int(h%60):02d}** : {step['site']}")
+
+    with col_map:
+        # On vérifie si on a les coordonnées pour la carte
+        if "coords_sites" in st.session_state:
+            coords = st.session_state.coords_sites
+            
+            # Centre la carte sur le premier point
+            first_site = tournee_actuelle[0]['site'].strip().upper()
+            m = folium.Map(location=[coords[first_site]['lat'], coords[first_site]['lon']], zoom_start=12)
+            
+            points_gps = []
+            for step in tournee_actuelle:
+                s_name = step['site'].strip().upper()
+                if s_name in coords:
+                    lat, lon = coords[s_name]['lat'], coords[s_name]['lon']
+                    points_gps.append([lat, lon])
+                    
+                    # Marqueur
+                    h = step['heure']
+                    label = f"{s_name} ({int(h//60):02d}:{int(h%60):02d})"
+                    folium.Marker(
+                        [lat, lon], 
+                        popup=label, 
+                        tooltip=label,
+                        icon=folium.Icon(color="red" if s_name == "HLS" else "blue", icon="info-sign")
+                    ).add_to(m)
+            
+            # Tracer la ligne du trajet
+            if len(points_gps) > 1:
+                folium.PolyLine(points_gps, color="blue", weight=3, opacity=0.8).add_to(m)
+            
+            st_folium(m, width=None, height=400)
+        else:
+            st.info("ℹ️ Pour afficher la carte, assurez-vous d'avoir géocodé les adresses (coords_sites).")
+
+
+
+# FIN AJOUT
 
 def show_simulation_page():
     st.title("🏎️ Optimisation des tournées Biologie")
