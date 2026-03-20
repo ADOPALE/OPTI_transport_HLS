@@ -18,6 +18,7 @@ import folium
 from streamlit_folium import st_folium
 import pandas as pd
 import plotly.express as px
+from modules.bioViz import calculate_kpis, render_fleet_gantt, render_site_passages, render_tournee_map
 #__ajout BG 19/03
 
 try:
