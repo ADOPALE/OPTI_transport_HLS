@@ -148,12 +148,16 @@ with st.sidebar:
             st.image(str(LOGO_CHU), use_container_width=True)
 
     st.divider()
-    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser", "Synthèse", "Détail tournées", "Exporter"]
-    icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle", "clipboard-data", "map", "file-earmark-pdf"]
-
-    #if st.session_state.sim_lancee: 
-    #    options += ["Synthèse", "Détail tournées", "Exporter"]
-    #    icons += ["clipboard-data", "map", "file-earmark-pdf"]
+    options = [
+        "Accueil", "Calcul Matrices", "Importer Données", 
+        "Volumes Distribution", "🧪 Passages Biologie", 
+        "Simuler & Optimiser", "📊 Synthèse", "📋 Détail tournées", "Exporter"
+    ]
+    icons = [
+        "house", "geo-alt", "cloud-upload", 
+        "truck", "microscope", "play-circle", 
+        "clipboard-data", "map", "file-earmark-pdf"
+    ]
 
     selected = option_menu(
         menu_title=None,
@@ -162,22 +166,16 @@ with st.sidebar:
         styles={
             "container": {"background-color": "white", "border-radius": "0"},
             "icon": {"color": "black", "font-size": "18px"},
-            "nav-link": {
-                "color": "black",
-                "font-size": "15px",
-                "font-weight": "bold",
-                "text-align": "left",
-                "margin": "5px",
-                "--hover-color": "#f0f2f6"
-            },
+            "nav-link": {"color": "black", "font-size": "15px", "font-weight": "bold", "text-align": "left", "margin": "5px"},
             "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
     )
 
     if st.session_state.sim_lancee:
-        st.markdown("---")
+        st.divider()
         if st.button("🔄 Réinitialiser la simulation", use_container_width=True):
             st.session_state.sim_lancee = False
+            st.session_state.resultat_flotte = None
             st.rerun()
 
 
