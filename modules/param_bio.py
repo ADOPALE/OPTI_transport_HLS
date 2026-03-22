@@ -35,12 +35,12 @@ def show_biologie_page():
     # Paramètres globaux
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        duree_max = st.number_input("Durée max tournée (min)", value=200)
+        duree_max = st.number_input("Durée max tournée (min)", value=120)
     with col_g2:
         temps_coll = st.number_input("Temps de collecte (min)", value=10)
 
     st.divider()
-    st.subheader("🏥 Configuration des sites (Source: Excel)")
+    st.subheader("🏥 Configuration des sites")
 
     current_sites_config = {}
 
@@ -50,12 +50,29 @@ def show_biologie_page():
 
         # 3. Conversion des heures Excel (S=18, T=19) et Fréquence (W=22)
         try:
-            # Excel stocke l'heure en fraction de jour (ex: 0.33 pour 8h). 
-            # On multiplie par 1440 pour avoir des minutes.
-            h_ouvert = int(float(row.iloc[18]) * 1440) if pd.notnull(row.iloc[18]) else 480
-            h_ferme = int(float(row.iloc[19]) * 1440) if pd.notnull(row.iloc[19]) else 1080
-            nb_passages = int(row.iloc[22]) if pd.notnull(row.iloc[22]) else 3
-        except:
+            def to_minutes(val, default):
+                if pd.isna(val): 
+                    return default
+                # Si c'est déjà un objet time (HH:MM:SS)
+                if hasattr(val, 'hour'):
+                    return val.hour * 60 + val.minute
+                # Si c'est un format string "08:00"
+                if isinstance(val, str) and ":" in val:
+                    h, m = map(int, val.split(':')[:2])
+                    return h * 60 + m
+                # Si c'est le format fractionnaire Excel (0.33)
+                return int(float(val) * 1440)
+
+            h_ouvert = to_minutes(row.iloc[18], 480)   # Col S
+            h_ferme = to_minutes(row.iloc[19], 1080)  # Col T
+            
+            # Pour la fréquence (Col W), on s'assure que c'est un entier
+            val_w = row.iloc[22]
+            nb_passages = int(float(val_w)) if pd.notnull(val_w) and str(val_w).strip() != "" else 3
+            
+        except Exception as e:
+            # En cas d'erreur, on affiche un petit message discret pour débugger
+            # st.write(f"Debug: Erreur sur {site_name}: {e}") 
             h_ouvert, h_ferme, nb_passages = 480, 1080, 3
 
         cols = st.columns([1, 4])
