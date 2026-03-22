@@ -10,7 +10,8 @@ def extraction_donnees(fichier_excel):
         "m_flux": "M flux",
         "param_contenants": "param Contenants",
         "param_vehicules": "param Véhicules",
-        "accessibilite_sites": "param Sites"
+        "accessibilite_sites": "param Sites",
+        "adresses": "param Sites"  # On lit le même onglet une deuxième fois
     }
     
     data_dict = {}
@@ -23,9 +24,19 @@ def extraction_donnees(fichier_excel):
                 
                 df = pd.read_excel(xl, sheet_name=sheet_name)
                 
+                # --- TRAITEMENT SPÉCIFIQUE DE L'ONGLET "param Sites" ---
+                
+                # Cas 1 : On ne garde que Site et Accessibilité (Colonnes A et C)
                 if var_name == "accessibilite_sites":
                     df = df.iloc[:, [0, 2]]
                     df.columns = ["site", "accessibilite"]
+                
+                # Cas 2 : On ne garde que Site et Adresse (Colonnes A et B)
+                elif var_name == "adresses":
+                    df = df.iloc[:, [0, 1]]
+                    df.columns = ["site", "adresse"]
+                
+                # -------------------------------------------------------
                 
                 data_dict[var_name] = df
         return data_dict
