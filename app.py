@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 
 
-# importer la fonction d'encodage géographique + calculer les matrices distance et de durée
+# importer la fonction d'encodage géographique + calculer les matrices distance et de durée 
 from modules.GeoMatrix import run_matrix_tool
 
 # importer la fonction d'import du fichier de paramétrage
