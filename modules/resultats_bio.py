@@ -430,7 +430,7 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
         st.divider()
         if show_map:
             with st.spinner("🌍 Calcul de l'itinéraire..."):
-                coords_gps = geocode_bio_sites(sites_adresses, hls_adresse)
+                coords_gps = geocode_bio_sites(sites_config, hls_adresse)
                 points = []
     
                 for stop in vacations:
