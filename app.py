@@ -87,6 +87,7 @@ def show_simulation_page():
             try:
                 # Récupération de la matrice
                 df_duree = st.session_state["data"]["matrice_duree"]
+                df_dist = st.session_state["data"]["matrice_dist"]
                 
                 # Appel du moteur (Partie 1 que tu as déjà dans ton module)
                 resultats = run_optimization(
@@ -99,6 +100,7 @@ def show_simulation_page():
                 # ON STOCKAGE DES RESULTATS
                 st.session_state.resultat_flotte = resultats
                 st.session_state.sim_lancee = True
+                afficher_stats_vehicules(flotte, df_dist)
                 
                 # Succès visuel
                 st.success(f"✅ Simulation réussie ! {len(resultats)} véhicules identifiés.")
