@@ -226,16 +226,23 @@ elif selected == "Détail tournées":
         res = st.session_state.resultat_flotte
         df_dist = st.session_state["data"]["matrice_distance"]
         
-        # On récupère les coordonnées (issues de l'onglet Importer Données ou Calcul Matrices)
-        # Assurez-vous que df_coords contient bien 'site', 'lat', 'lon'
-        df_coords = st.session_state["data"].get("df_sites") 
+        # --- RÉCUPÉRATION DES DONNÉES DE CONFIGURATION ---
+        # On récupère le dictionnaire des sites (qui contient les adresses)
+        sites_config = st.session_state["biologie_config"]["sites"]
+        
+        # On récupère l'adresse du dépôt (HLS)
+        # Note : vérifiez que vous avez bien une clé 'hls_adresse' ou 'depot_adresse' 
+        # dans votre session_state biologie_config
+        hls_adresse = st.session_state["biologie_config"].get("hls_adresse", "Nantes, France")
 
-        # 1. Synthèse du véhicule (fonction précédente)
+        # 1. Synthèse du véhicule (Menu déroulant + Graphe)
         v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
         
         # 2. Détail de la tournée et Carte
         if v_sel:
-            afficher_detail_itineraire(v_sel, vac_sel, df_coords)
+            # ON PASSE LES ARGUMENTS NÉCESSAIRES AU GÉOCODAGE
+            afficher_detail_itineraire(v_sel, vac_sel, sites_config, hls_adresse)
+
     else:
         st.warning("⚠️ Veuillez d'abord lancer une simulation dans l'onglet 'Simuler & Optimiser'.")
 
