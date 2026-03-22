@@ -376,7 +376,7 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
 
 
 
-def afficher_detail_itineraire(v_id, vacations, df_coords):
+def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
     """
     Affiche le menu de sélection de la tournée et son déroulé précis.
     """
