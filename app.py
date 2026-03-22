@@ -212,23 +212,23 @@ elif selected == "📋 Détail tournées":
     st.title("📋 Détail des tournées")
     if not st.session_state.get("sim_lancee"):
         st.info("💡 Veuillez lancer la simulation pour visualiser le détail des tournées et les cartes.")
+    
     else:
-        # Code d'affichage normal avec vos adresses
         res = st.session_state.resultat_flotte
         df_dist = st.session_state["data"]["matrice_distance"]
-        
-        # Sécurité sur la source des adresses
         df_adresses = st.session_state["data"].get("adresses", st.session_state["data"].get("df_sites"))
         
         if df_adresses is not None:
+            # Préparation du dictionnaire
             sites_adresses = pd.Series(df_adresses.adresse.values, index=df_adresses.site.str.upper()).to_dict()
             hls_adresse = sites_adresses.get("HLS", "55 Boulevard Gustave Roch, 44000 Nantes")
             
             v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
+            
             if v_sel:
+                # L'appel à la fonction
                 afficher_detail_itineraire(v_sel, vac_sel, sites_adresses, hls_adresse)
-        else:
-            st.error("⚠️ Données d'adresses introuvables. Vérifiez votre import.")
+
 
 
 elif selected == "Exporter":
