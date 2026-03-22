@@ -291,7 +291,7 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
                 insidetextanchor='middle',
                 textfont=dict(color="white", size=14),
                 name=item["Chauffeur"],
-                hovertemplate=f"<b>{item['ID']}</b><br>{item['Chauffeur']}<br>Durée: %{x} min<extra></extra>"
+                hovertemplate=f"<b>{item['ID']}</b><br>{item['Chauffeur']}<br>Durée: %{{x}} min<extra></extra>"
             ))
 
         fig.update_layout(
@@ -311,3 +311,5 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
         st.plotly_chart(fig, use_container_width=True)
         
         return vehicule_selectionne, vacations # On retourne ces infos pour l'ensemble suivant
+
+
