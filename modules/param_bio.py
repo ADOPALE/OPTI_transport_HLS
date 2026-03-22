@@ -50,29 +50,39 @@ def show_biologie_page():
 
         # 3. Conversion des heures Excel (S=18, T=19) et Fréquence (W=22)
         try:
-            def to_minutes(val, default):
-                #if pd.isna(val): 
-                 #   return default
-                # Si c'est déjà un objet time (HH:MM:SS)
-               # if hasattr(val, 'hour'):
-               #     return val.hour * 60 + val.minute
-                # Si c'est un format string "08:00"
-                #if isinstance(val, str) and ":" in val:
-                #    h, m = map(int, val.split(':')[:2])
-                #    return h * 60 + m
-                # Si c'est le format fractionnaire Excel (0.33)
-                return int(float(val) * 1440)
+            def extraire_minutes(valeur, defaut_min):
+                if pd.isna(valeur) or str(valeur).strip() == "":
+                    return defaut_min
+                
+                # Cas 1 : C'est déjà un objet de temps (HH:MM:SS)
+                if hasattr(valeur, 'hour'): 
+                    return valeur.hour * 60 + valeur.minute
+                
+                # Cas 2 : C'est une chaîne de caractères "08:30"
+                if isinstance(valeur, str) and ":" in valeur:
+                    h, m = map(int, valeur.split(':')[:2])
+                    return h * 60 + m
+                
+                # Cas 3 : C'est le nombre décimal Excel (ex: 0.333)
+                try:
+                    return int(float(valeur) * 1440)
+                except:
+                    return defaut_min
 
-            h_ouvert = to_minutes(row.iloc[18], 480)   # Col S
-            h_ferme = to_minutes(row.iloc[19], 1080)  # Col T
+            # Application aux colonnes S(18), T(19) et W(22)
+            h_ouvert = extraire_minutes(row.iloc[18], 480)
+            h_ferme = extraire_minutes(row.iloc[19], 1080)
             
-            # Pour la fréquence (Col W), on s'assure que c'est un entier
+            # Pour la fréquence (W), on s'assure d'avoir un entier
             val_w = row.iloc[22]
-            nb_passages = int(float(val_w)) if pd.notnull(val_w) and str(val_w).strip() != "" else 3
-            
+            if pd.isna(val_w) or str(val_w).strip() == "":
+                nb_passages = 3
+            else:
+                nb_passages = int(float(val_w))
+
         except Exception as e:
-            # En cas d'erreur, on affiche un petit message discret pour débugger
-            # st.write(f"Debug: Erreur sur {site_name}: {e}") 
+            # Si vraiment ça plante encore, on affiche l'erreur pour comprendre
+            st.error(f"Erreur sur le site {site_name} : {e}")
             h_ouvert, h_ferme, nb_passages = 480, 1080, 3
 
         cols = st.columns([1, 4])
