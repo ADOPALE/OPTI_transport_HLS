@@ -101,9 +101,6 @@ def show_simulation_page():
                 st.session_state.resultat_flotte = resultats
                 st.session_state.sim_lancee = True
 
-                # on affiche les résultats dans l'onglet synthèse
-                df_dist = st.session_state["data"]["matrice_distance"]
-                afficher_stats_vehicules(resultats, df_dist)
                 
                 # Succès visuel
                 st.success(f"✅ Simulation réussie ! {len(resultats)} véhicules identifiés.")
@@ -202,6 +199,10 @@ elif selected == "Simuler & Optimiser":
     show_simulation_page()
 elif selected == "Synthèse":
     st.title("📊 Synthèse des résultats")
+    # on affiche les résultats dans l'onglet synthèse
+    resultats = st.session_state.resultat_flotte
+    df_dist = st.session_state["data"]["matrice_distance"]
+    afficher_stats_vehicules(resultats, df_dist)
 elif selected == "Détail tournées":
     st.title("📊 Détail des tournées")
 elif selected == "Exporter":
