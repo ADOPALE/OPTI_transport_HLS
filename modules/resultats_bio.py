@@ -381,18 +381,10 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
 
 
 def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
-    """
-    Affiche le menu de sélection de la tournée et son déroulé précis.
-    v_id : ID du véhicule sélectionné (facultatif ici car on utilise le menu)
-    vacations : Liste complète des tournées calculées
-    sites_config : Le dictionnaire {Site: Adresse} pour le géocodage
-    hls_adresse : Adresse du point de départ
-    """
-    # 1. Création de la liste plate des tournées pour le menu de sélection
+    # 1. Création de la liste des tournées pour le menu
     tous_les_passages = []
     index_tournee = 1
     for v_idx, vac in enumerate(vacations):
-        # On suppose que chaque vac est une liste de tournées (triées par le moteur)
         for trne in vac:
             tous_les_passages.append({
                 "label": f"Tournée {index_tournee} (Chauffeur {v_idx+1})",
@@ -404,93 +396,63 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
     st.write("---")
     col_sel, _ = st.columns([2, 1])
     with col_sel:
-        selection = st.selectbox(
-            "📍 Choisir une tournée à inspecter", 
-            tous_les_passages, 
-            format_func=lambda x: x["label"]
-        )
+        selection = st.selectbox("📍 Choisir une tournée à inspecter", tous_les_passages, format_func=lambda x: x["label"])
 
     if selection:
         trne_data = selection["data"]
-        
-        # 2. Affichage du Tableau des passages (Journal de bord)
         st.write(f"#### ⏱️ Journal de bord : {selection['label']}")
         
+        # 2. Tableau des passages
         tableau = []
         for i, p in enumerate(trne_data):
-            # Calcul de l'heure (format HH:MM)
             h_total = p.get('heure', 0)
             h_str = f"{int(h_total//60):02d}:{int(h_total%60):02d}"
-            
-            # Détermination du type d'arrêt
-            if i == 0:
-                type_arret = "🚀 Départ HLS"
-            elif i == len(trne_data) - 1:
-                type_arret = "🏁 Dépôt (Retour)"
-            else:
-                type_arret = "🏥 Collecte"
-            
+            type_arret = "🚀 Départ HLS" if i == 0 else ("🏁 Dépôt (Retour)" if i == len(trne_data)-1 else "🏥 Collecte")
             tableau.append({
                 "Ordre": i + 1,
                 "Site": str(p.get('site', 'Inconnu')).upper(),
                 "Heure de passage": h_str,
                 "Type": type_arret
             })
-        
         st.table(pd.DataFrame(tableau).set_index("Ordre"))
 
-        # 3. PARTIE CARTE (Optionnelle pour la performance)
-        st.write("#### 🗺️ Itinéraire géographique")
-        show_map = st.checkbox("🗺️ Charger la carte interactive pour cette tournée", value=False)
+        # 3. PARTIE CARTE AVEC TRACÉ ROUTIER (OSRM)
+        st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
+        show_map = st.checkbox("🗺️ Charger la carte interactive", value=False)
     
         if show_map:
-            with st.spinner("🌍 Géocodage des sites en cours..."):
-                # On utilise la fonction de géocodage que nous avons optimisée
+            with st.spinner("🌍 Calcul de l'itinéraire routier..."):
                 coords_gps = geocode_bio_sites(sites_config, hls_adresse)
-                points = []
-    
-                # On parcourt UNIQUEMENT les arrêts de la tournée sélectionnée
-                for stop in trne_data:
-                    # Sécurité : récupération du nom du site
-                    if isinstance(stop, dict):
-                        nom_site = str(stop.get('site', '')).upper()
-                    else:
-                        nom_site = str(stop).upper()
-                    
-                    if nom_site in coords_gps:
-                        points.append([
-                            coords_gps[nom_site]["lat"], 
-                            coords_gps[nom_site]["lon"], 
-                            nom_site
-                        ])
                 
-                if len(points) >= 2:
-                    import folium
-                    from streamlit_folium import st_folium
+                # Préparation des points (waypoints) pour OSRM
+                waypoints_osrm = []
+                for stop in trne_data:
+                    nom_site = str(stop.get('site', '')).upper() if isinstance(stop, dict) else str(stop).upper()
+                    if nom_site in coords_gps:
+                        waypoints_osrm.append({
+                            "lat": coords_gps[nom_site]["lat"], 
+                            "lon": coords_gps[nom_site]["lon"], 
+                            "nom": nom_site
+                        })
+                
+                if len(waypoints_osrm) >= 2:
+                    # APPEL À OSRM POUR LE TRACÉ RÉEL
+                    route_line = get_route_osrm(waypoints_osrm)
                     
-                    # Centrage de la carte sur le premier point
-                    m = folium.Map(
-                        location=[points[0][0], points[0][1]], 
-                        zoom_start=12,
-                        tiles="CartoDB positron"
-                    )
+                    m = folium.Map(location=[waypoints_osrm[0]['lat'], waypoints_osrm[0]['lon']], zoom_start=12, tiles="CartoDB positron")
                     
-                    # Tracé de la ligne (Bleu pour la biologie)
-                    path = [[p[0], p[1]] for p in points]
-                    folium.PolyLine(path, color="#2E86C1", weight=4, opacity=0.8).add_to(m)
+                    if route_line:
+                        # On dessine le tracé ROUTIER
+                        folium.PolyLine(route_line, color="#2E86C1", weight=5, opacity=0.8).add_to(m)
+                    else:
+                        # Backup ligne droite si OSRM échoue
+                        folium.PolyLine([[w['lat'], w['lon']] for w in waypoints_osrm], color="#2E86C1", weight=2, dash_array='5').add_to(m)
                     
-                    # Ajout des marqueurs avec numérotation
-                    for i, p in enumerate(points):
-                        folium.Marker(
-                            [p[0], p[1]], 
-                            tooltip=f"{i+1}. {p[2]}",
-                            icon=folium.Icon(color="blue", icon="info-sign")
-                        ).add_to(m)
+                    # Ajout des marqueurs
+                    for i, wp in enumerate(waypoints_osrm):
+                        folium.Marker([wp['lat'], wp['lon']], tooltip=f"{i+1}. {wp['nom']}", 
+                                      icon=folium.Icon(color="blue", icon="info-sign")).add_to(m)
                     
-                    # Rendu de la carte (largeur adaptative)
                     st_folium(m, width='stretch', height=500, returned_objects=[])
-                    st.success(f"✅ Itinéraire affiché ({len(points)} points localisés).")
                 else:
-                    st.warning("📍 Pas assez de coordonnées GPS trouvées pour cette tournée. Vérifiez l'onglet 'param Sites'.")
-        else:
-            st.info("ℹ️ Cochez la case ci-dessus pour visualiser le trajet sur la carte.")
+                    st.warning("📍 Pas assez de points géocodés pour tracer la route.")
