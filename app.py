@@ -226,22 +226,27 @@ elif selected == "Détail tournées":
         res = st.session_state.resultat_flotte
         df_dist = st.session_state["data"]["matrice_distance"]
         
-        # --- RÉCUPÉRATION DES DONNÉES DE CONFIGURATION ---
-        # On récupère le dictionnaire des sites (qui contient les adresses)
-        sites_config = st.session_state["biologie_config"]["sites"]
+        # --- RÉCUPÉRATION DES ADRESSES ---
+        # On récupère le DataFrame qui contient la colonne 'site' et 'adresse'
+        # Généralement c'est le DataFrame 'df_sites' créé lors de l'import ou du calcul de matrice
+        df_adresses = st.session_state["data"].get("df_sites") 
         
-        # On récupère l'adresse du dépôt (HLS)
-        # Note : vérifiez que vous avez bien une clé 'hls_adresse' ou 'depot_adresse' 
-        # dans votre session_state biologie_config
-        hls_adresse = st.session_state["biologie_config"].get("hls_adresse", "Nantes, France")
-
-        # 1. Synthèse du véhicule (Menu déroulant + Graphe)
-        v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
-        
-        # 2. Détail de la tournée et Carte
-        if v_sel:
-            # ON PASSE LES ARGUMENTS NÉCESSAIRES AU GÉOCODAGE
-            afficher_detail_itineraire(v_sel, vac_sel, sites_config, hls_adresse)
+        if df_adresses is not None:
+            # On crée un dictionnaire { 'NOM DU SITE': 'ADRESSE' }
+            sites_adresses = pd.Series(df_adresses.adresse.values, index=df_adresses.site.str.upper()).to_dict()
+            
+            # On récupère l'adresse du dépôt HLS (souvent en haut de la liste ou fixe)
+            hls_adresse = sites_adresses.get("HLS", "9 Quai Moncousu, 44000 Nantes") # Adresse par défaut si non trouvé
+            
+            # 1. Synthèse du véhicule
+            v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
+            
+            # 2. Détail de la tournée et Carte
+            if v_sel:
+                # On passe le dictionnaire des adresses à la fonction
+                afficher_detail_itineraire(v_sel, vac_sel, sites_adresses, hls_adresse)
+        else:
+            st.error("⚠️ Impossible de trouver les adresses dans les données importées.")
 
     else:
         st.warning("⚠️ Veuillez d'abord lancer une simulation dans l'onglet 'Simuler & Optimiser'.")
