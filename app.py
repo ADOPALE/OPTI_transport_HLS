@@ -229,14 +229,14 @@ elif selected == "Détail tournées":
         # --- RÉCUPÉRATION DES ADRESSES ---
         # On récupère le DataFrame qui contient la colonne 'site' et 'adresse'
         # Généralement c'est le DataFrame 'df_sites' créé lors de l'import ou du calcul de matrice
-        df_adresses = st.session_state["data"]["adresses]
+        df_adresses = st.session_state["data"]["adresses"]
         
         if df_adresses is not None:
             # On crée un dictionnaire { 'NOM DU SITE': 'ADRESSE' }
             sites_adresses = pd.Series(df_adresses.adresse.values, index=df_adresses.site.str.upper()).to_dict()
             
             # On récupère l'adresse du dépôt HLS (souvent en haut de la liste ou fixe)
-            hls_adresse = sites_adresses.get("HLS", "9 Quai Moncousu, 44000 Nantes") # Adresse par défaut si non trouvé
+            hls_adresse = sites_adresses.get("HLS", "55 Boulevard Gustave Roch, 44000 Nantes") # Adresse par défaut si non trouvé
             
             # 1. Synthèse du véhicule
             v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
