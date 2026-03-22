@@ -222,3 +222,92 @@ def afficher_stats_sites(flotte):
     )
 
     st.plotly_chart(fig_sites, use_container_width=True)
+
+
+
+def afficher_detail_flotte_vehicules(flotte, df_dist):
+    st.subheader("🚐 Synthèse par véhicule")
+
+    # 1. Sélection du véhicule via menu déroulant
+    liste_vehicules = list(flotte.keys())
+    vehicule_selectionne = st.selectbox("Sélectionnez un véhicule pour voir le détail", liste_vehicules)
+
+    if vehicule_selectionne:
+        vacations = flotte[vehicule_selectionne]
+        
+        # --- CALCULS ---
+        # Nettoyage rapide de la matrice pour le calcul des km
+        df_dist_clean = df_dist.copy()
+        nom_col = df_dist_clean.columns[0]
+        df_dist_clean = df_dist_clean.set_index(nom_col)
+        df_dist_clean.index = df_dist_clean.index.astype(str).str.strip().str.upper()
+        df_dist_clean.columns = df_dist_clean.columns.astype(str).str.strip().str.upper()
+
+        km_jour = 0
+        nb_tournees = 0
+        gantt_data = []
+        tournee_index = 1 # Pour la numérotation chronologique
+
+        for v_idx, vacation in enumerate(vacations):
+            for tournee in vacation:
+                nb_tournees += 1
+                # Calcul distance
+                for i in range(len(tournee) - 1):
+                    s_dep = str(tournee[i]['site']).strip().upper()
+                    s_arr = str(tournee[i+1]['site']).strip().upper()
+                    try:
+                        km_jour += df_dist_clean.loc[s_dep, s_arr]
+                    except KeyError:
+                        pass
+                
+                # Préparation Graphe
+                gantt_data.append({
+                    "ID": f"T{tournee_index}",
+                    "Début": tournee[0]['heure'],
+                    "Fin": tournee[-1]['heure'],
+                    "Chauffeur": f"Chauffeur {v_idx + 1}",
+                    "Couleur": "#2E86C1" if v_idx % 2 == 0 else "#EB984E"
+                })
+                tournee_index += 1
+
+        # --- AFFICHAGE DES METRICS ---
+        km_an = km_jour * 5 * 52
+        c1, c2 = st.columns(2)
+        c1.metric("Distance parcourue", f"{int(km_jour)} km / jour", f"{int(km_an):,} km / an")
+        c2.metric("Nombre de tournées", f"{nb_tournees} tournées / jour")
+
+        # --- GRAPHE MONO-LIGNE NUMÉROTÉ ---
+        fig = go.Figure()
+        
+        for item in gantt_data:
+            fig.add_trace(go.Bar(
+                base=[item["Début"]],
+                x=[item["Fin"] - item["Début"]],
+                y=[vehicule_selectionne],
+                orientation='h',
+                marker_color=item["Couleur"],
+                text=item["ID"], # Numérotation T1, T2...
+                textposition='inside',
+                insidetextanchor='middle',
+                textfont=dict(color="white", size=14),
+                name=item["Chauffeur"],
+                hovertemplate=f"<b>{item['ID']}</b><br>{item['Chauffeur']}<br>Durée: %{x} min<extra></extra>"
+            ))
+
+        fig.update_layout(
+            height=200,
+            xaxis=dict(
+                title="Heure",
+                tickvals=list(range(300, 1321, 60)),
+                ticktext=[f"{h//60}h" for h in range(300, 1321, 60)],
+                range=[300, 1320]
+            ),
+            yaxis=dict(showticklabels=True),
+            showlegend=False,
+            margin=dict(l=10, r=10, t=40, b=40),
+            barmode='stack'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        return vehicule_selectionne, vacations # On retourne ces infos pour l'ensemble suivant
