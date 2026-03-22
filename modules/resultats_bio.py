@@ -383,11 +383,16 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
 def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
     """
     Affiche le menu de sélection de la tournée et son déroulé précis.
+    v_id : ID du véhicule sélectionné (facultatif ici car on utilise le menu)
+    vacations : Liste complète des tournées calculées
+    sites_config : Le dictionnaire {Site: Adresse} pour le géocodage
+    hls_adresse : Adresse du point de départ
     """
-    # 1. Création de la liste plate des tournées pour le menu
+    # 1. Création de la liste plate des tournées pour le menu de sélection
     tous_les_passages = []
     index_tournee = 1
     for v_idx, vac in enumerate(vacations):
+        # On suppose que chaque vac est une liste de tournées (triées par le moteur)
         for trne in vac:
             tous_les_passages.append({
                 "label": f"Tournée {index_tournee} (Chauffeur {v_idx+1})",
@@ -397,48 +402,58 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
             index_tournee += 1
 
     st.write("---")
-    col_sel, col_vide = st.columns([1, 1])
+    col_sel, _ = st.columns([2, 1])
     with col_sel:
-        selection = st.selectbox("Choisir une tournée précise", tous_les_passages, format_func=lambda x: x["label"])
+        selection = st.selectbox(
+            "📍 Choisir une tournée à inspecter", 
+            tous_les_passages, 
+            format_func=lambda x: x["label"]
+        )
 
     if selection:
         trne_data = selection["data"]
         
-        # 2. Tableau des passages
+        # 2. Affichage du Tableau des passages (Journal de bord)
         st.write(f"#### ⏱️ Journal de bord : {selection['label']}")
         
         tableau = []
         for i, p in enumerate(trne_data):
-            h_str = f"{int(p['heure']//60):02d}:{int(p['heure']%60):02d}"
-            type_arret = "🏁 Dépôt (Retour)" if i == len(trne_data)-1 else ("🚀 Départ HLS" if i == 0 else "🏥 Collecte")
+            # Calcul de l'heure (format HH:MM)
+            h_total = p.get('heure', 0)
+            h_str = f"{int(h_total//60):02d}:{int(h_total%60):02d}"
+            
+            # Détermination du type d'arrêt
+            if i == 0:
+                type_arret = "🚀 Départ HLS"
+            elif i == len(trne_data) - 1:
+                type_arret = "🏁 Dépôt (Retour)"
+            else:
+                type_arret = "🏥 Collecte"
+            
             tableau.append({
                 "Ordre": i + 1,
-                "Site": p['site'],
+                "Site": str(p.get('site', 'Inconnu')).upper(),
                 "Heure de passage": h_str,
                 "Type": type_arret
             })
         
         st.table(pd.DataFrame(tableau).set_index("Ordre"))
 
-        # --- PARTIE CARTE ---
-        st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
-        
-        st.write("---")
-        # --- AJOUT DE LA CONDITION POUR LA CARTE ---
-        show_map = st.checkbox("🗺️ Afficher la carte de la tournée", value=False)
+        # 3. PARTIE CARTE (Optionnelle pour la performance)
+        st.write("#### 🗺️ Itinéraire géographique")
+        show_map = st.checkbox("🗺️ Charger la carte interactive pour cette tournée", value=False)
     
-        st.divider()
         if show_map:
-            with st.spinner("🌍 Calcul de l'itinéraire..."):
+            with st.spinner("🌍 Géocodage des sites en cours..."):
+                # On utilise la fonction de géocodage que nous avons optimisée
                 coords_gps = geocode_bio_sites(sites_config, hls_adresse)
                 points = []
     
-                for stop in vacations:
-                    # --- SÉCURITÉ ICI ---
-                    # Si stop est un dictionnaire, on prend la clé 'site'
-                    # Si stop est déjà une chaîne (le nom), on l'utilise directement
+                # On parcourt UNIQUEMENT les arrêts de la tournée sélectionnée
+                for stop in trne_data:
+                    # Sécurité : récupération du nom du site
                     if isinstance(stop, dict):
-                        nom_site = stop.get('site', '').upper()
+                        nom_site = str(stop.get('site', '')).upper()
                     else:
                         nom_site = str(stop).upper()
                     
@@ -450,8 +465,32 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
                         ])
                 
                 if len(points) >= 2:
-                    # Affichage Folium (votre code existant)
-                    # ...
-                    st.success(f"Carte générée pour {len(points)} points.")
+                    import folium
+                    from streamlit_folium import st_folium
+                    
+                    # Centrage de la carte sur le premier point
+                    m = folium.Map(
+                        location=[points[0][0], points[0][1]], 
+                        zoom_start=12,
+                        tiles="CartoDB positron"
+                    )
+                    
+                    # Tracé de la ligne (Bleu pour la biologie)
+                    path = [[p[0], p[1]] for p in points]
+                    folium.PolyLine(path, color="#2E86C1", weight=4, opacity=0.8).add_to(m)
+                    
+                    # Ajout des marqueurs avec numérotation
+                    for i, p in enumerate(points):
+                        folium.Marker(
+                            [p[0], p[1]], 
+                            tooltip=f"{i+1}. {p[2]}",
+                            icon=folium.Icon(color="blue", icon="info-sign")
+                        ).add_to(m)
+                    
+                    # Rendu de la carte (largeur adaptative)
+                    st_folium(m, width='stretch', height=500, returned_objects=[])
+                    st.success(f"✅ Itinéraire affiché ({len(points)} points localisés).")
                 else:
-                    st.warning("📍 Pas assez de points géocodés pour tracer la carte.")
+                    st.warning("📍 Pas assez de coordonnées GPS trouvées pour cette tournée. Vérifiez l'onglet 'param Sites'.")
+        else:
+            st.info("ℹ️ Cochez la case ci-dessus pour visualiser le trajet sur la carte.")
