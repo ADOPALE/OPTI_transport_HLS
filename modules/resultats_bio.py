@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import timedelta
 import plotly.express as px
-
+import folium
+from streamlit_folium import st_folium
 
 def afficher_stats_vehicules(flotte, df_dist):
     """
@@ -311,5 +312,81 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
         st.plotly_chart(fig, use_container_width=True)
         
         return vehicule_selectionne, vacations # On retourne ces infos pour l'ensemble suivant
+
+
+
+
+def afficher_detail_itineraire(v_id, vacations, df_coords):
+    """
+    Affiche le menu de sélection de la tournée et son déroulé précis.
+    """
+    # 1. Création de la liste plate des tournées pour le menu
+    tous_les_passages = []
+    index_tournee = 1
+    for v_idx, vac in enumerate(vacations):
+        for trne in vac:
+            tous_les_passages.append({
+                "label": f"Tournée {index_tournee} (Chauffeur {v_idx+1})",
+                "data": trne,
+                "chauffeur": v_idx + 1
+            })
+            index_tournee += 1
+
+    st.write("---")
+    col_sel, col_vide = st.columns([1, 1])
+    with col_sel:
+        selection = st.selectbox("Choisir une tournée précise", tous_les_passages, format_func=lambda x: x["label"])
+
+    if selection:
+        trne_data = selection["data"]
+        
+        # 2. Tableau des passages
+        st.write(f"#### ⏱️ Journal de bord : {selection['label']}")
+        
+        tableau = []
+        for i, p in enumerate(trne_data):
+            h_str = f"{int(p['heure']//60):02d}:{int(p['heure']%60):02d}"
+            type_arret = "🏁 Dépôt (Retour)" if i == len(trne_data)-1 else ("🚀 Départ HLS" if i == 0 else "🏥 Collecte")
+            tableau.append({
+                "Ordre": i + 1,
+                "Site": p['site'],
+                "Heure de passage": h_str,
+                "Type": type_arret
+            })
+        
+        st.table(pd.DataFrame(tableau).set_index("Ordre"))
+
+        # 3. Carte Géographique (si coordonnées disponibles)
+        if df_coords is not None:
+            st.write("#### 🗺️ Itinéraire géographique")
+            
+            # Nettoyage index coordonnées
+            df_c = df_coords.copy()
+            df_c.index = df_c['site'].astype(str).str.strip().str.upper()
+
+            # Centre de la carte sur le premier point (HLS)
+            m = folium.Map(location=[df_c.iloc[0]['lat'], df_c.iloc[0]['lon']], zoom_start=12)
+            
+            points_gps = []
+            for i, p in enumerate(trne_data):
+                nom_site = p['site'].upper()
+                if nom_site in df_c.index:
+                    lat, lon = df_c.loc[nom_site, 'lat'], df_c.loc[nom_site, 'lon']
+                    points_gps.append([lat, lon])
+                    
+                    # Marqueur
+                    icon_color = 'red' if i == 0 or i == len(trne_data)-1 else 'blue'
+                    folium.Marker(
+                        [lat, lon], 
+                        popup=f"{i+1}. {nom_site}",
+                        tooltip=f"{nom_site}",
+                        icon=folium.Icon(color=icon_color, icon='info-sign')
+                    ).add_to(m)
+
+            # Dessin de la ligne de trajet
+            if len(points_gps) > 1:
+                folium.PolyLine(points_gps, color="blue", weight=2.5, opacity=0.8).add_to(m)
+
+            st_folium(m, width=700, height=400)
 
 
