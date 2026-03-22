@@ -229,7 +229,7 @@ elif selected == "Détail tournées":
         # --- RÉCUPÉRATION DES ADRESSES ---
         # On récupère le DataFrame qui contient la colonne 'site' et 'adresse'
         # Généralement c'est le DataFrame 'df_sites' créé lors de l'import ou du calcul de matrice
-        df_adresses = st.session_state["data"].get("df_sites") 
+        df_adresses = st.session_state["data"]["adresses]
         
         if df_adresses is not None:
             # On crée un dictionnaire { 'NOM DU SITE': 'ADRESSE' }
