@@ -81,3 +81,61 @@ def afficher_stats_vehicules(flotte, df_dist):
         height=400
     )
     st.plotly_chart(fig, use_container_width=True)
+
+
+def afficher_stats_chauffeurs(flotte, config_rh):
+    """
+    Calcule les indicateurs de performance liés aux chauffeurs (vacations).
+    """
+    st.subheader("👥 Données sur les chauffeurs")
+
+    nb_postes = 0
+    duree_totale_tournees = 0
+    total_tournees = 0
+    
+    # Récupération des contraintes RH
+    # Amplitude (ex: 450 min), Pause (ex: 30 min)
+    amplitude_max = config_rh.get('amplitude', 450)
+    pause_reglementaire = config_rh.get('pause', 30)
+
+    for v_id, vacations in flotte.items():
+        nb_postes += len(vacations) # Chaque vacation est un poste chauffeur
+        
+        for vacation in vacations:
+            total_tournees += len(vacation)
+            for tournee in vacation:
+                # Durée de la tournée = Heure de fin - Heure de début
+                duree_trne = tournee[-1]['heure'] - tournee[0]['heure']
+                duree_totale_tournees += duree_trne
+
+    # --- CALCUL DES INDICATEURS ---
+    
+    # 1. Taux d'occupation moyen
+    # Formule : Temps de roulage / (Amplitude totale - Temps de pause)
+    temps_travail_dispo_par_poste = amplitude_max - pause_reglementaire
+    if nb_postes > 0 and temps_travail_dispo_par_poste > 0:
+        occupation_moyenne = (duree_totale_tournees / (nb_postes * temps_travail_dispo_par_poste)) * 100
+    else:
+        occupation_moyenne = 0
+
+    # 2. Moyenne de tournées par poste
+    tournees_par_poste = total_tournees / nb_postes if nb_postes > 0 else 0
+
+    # --- AFFICHAGE ---
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Nombre de postes (7h30)", f"{nb_postes}")
+    c2.metric("Taux d'occupation moyen", f"{occupation_moyenne:.1f} %")
+    c3.metric("Tournées moyennes / poste", f"{tournees_par_poste:.1f}")
+
+    # Petit graphique de répartition du temps pour un chauffeur type
+    if nb_postes > 0:
+        temps_moyen_roulage = duree_totale_tournees / nb_postes
+        temps_inoccupé = temps_travail_dispo_par_poste - temps_moyen_roulage
+        
+        fig_pie = px.pie(
+            names=["Temps en tournée", "Temps inoccupé / Attente", "Pause réglementaire"],
+            values=[temps_moyen_roulage, max(0, temps_inoccupé), pause_reglementaire],
+            color_discrete_sequence=["#2E86C1", "#D5D8DC", "#EB984E"],
+            title="Répartition moyenne d'une vacation"
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
