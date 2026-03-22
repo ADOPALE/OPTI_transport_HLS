@@ -105,7 +105,7 @@ def show_simulation_page():
                 # Succès visuel
                 st.success(f"✅ Simulation réussie ! {len(resultats)} véhicules identifiés.")
                 
-                # /!\ IMPORTANT : On ne met pas de st.rerun() ici /!\
+                st.rerun()
                 # Cela permet de garder l'affichage du succès à l'écran.
                 
             except Exception as e:
