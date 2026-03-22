@@ -417,50 +417,50 @@ def afficher_detail_itineraire(v_id, vacations, df_coords):
         st.table(pd.DataFrame(tableau).set_index("Ordre"))
 
         # --- PARTIE CARTE ---
-    st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
+        st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
+        
+        # 1. Géocodage unique (mis en cache)
+        with st.spinner("Récupération des coordonnées GPS..."):
+            coords_gps = geocode_bio_sites(sites_config, hls_adresse)
     
-    # 1. Géocodage unique (mis en cache)
-    with st.spinner("Récupération des coordonnées GPS..."):
-        coords_gps = geocode_bio_sites(sites_config, hls_adresse)
-
-    # 2. Préparation des points de la tournée sélectionnée
-    trne_data = selection["data"]
-    waypoints = []
-    for p in trne_data:
-        nom = p['site'].upper()
-        if nom in coords_gps:
-            waypoints.append({
-                "lat": coords_gps[nom]["lat"], 
-                "lon": coords_gps[nom]["lon"], 
-                "nom": nom,
-                "heure": p['heure']
-            })
-
-    if len(waypoints) < 2:
-        st.warning("📍 Pas assez de points géocodés pour afficher la carte.")
-        return
-
-    # 3. Calcul du tracé réel
-    trace_routier = get_route_osrm(waypoints)
-
-    # 4. Création de la carte
-    m = folium.Map(location=[waypoints[0]['lat'], waypoints[0]['lon']], zoom_start=12, tiles="CartoDB positron")
-
-    # Dessin du tracé
-    if trace_routier:
-        folium.PolyLine(trace_routier, color="#E63946", weight=4, opacity=0.8).add_to(m)
-    else:
-        # Fallback ligne droite si OSRM échoue
-        folium.PolyLine([[w['lat'], w['lon']] for w in waypoints], color="blue", weight=2, dash_array='5').add_to(m)
-
-    # Ajout des marqueurs numérotés
-    for i, wp in enumerate(waypoints):
-        color = 'red' if (i == 0 or i == len(waypoints)-1) else 'blue'
-        folium.Marker(
-            [wp['lat'], wp['lon']],
-            popup=f"{i+1}. {wp['nom']}",
-            tooltip=f"{wp['nom']}",
-            icon=folium.Icon(color=color, icon='info-sign')
-        ).add_to(m)
-
-    st_folium(m, width=800, height=500, returned_objects=[])
+        # 2. Préparation des points de la tournée sélectionnée
+        trne_data = selection["data"]
+        waypoints = []
+        for p in trne_data:
+            nom = p['site'].upper()
+            if nom in coords_gps:
+                waypoints.append({
+                    "lat": coords_gps[nom]["lat"], 
+                    "lon": coords_gps[nom]["lon"], 
+                    "nom": nom,
+                    "heure": p['heure']
+                })
+    
+        if len(waypoints) < 2:
+            st.warning("📍 Pas assez de points géocodés pour afficher la carte.")
+            return
+    
+        # 3. Calcul du tracé réel
+        trace_routier = get_route_osrm(waypoints)
+    
+        # 4. Création de la carte
+        m = folium.Map(location=[waypoints[0]['lat'], waypoints[0]['lon']], zoom_start=12, tiles="CartoDB positron")
+    
+        # Dessin du tracé
+        if trace_routier:
+            folium.PolyLine(trace_routier, color="#E63946", weight=4, opacity=0.8).add_to(m)
+        else:
+            # Fallback ligne droite si OSRM échoue
+            folium.PolyLine([[w['lat'], w['lon']] for w in waypoints], color="blue", weight=2, dash_array='5').add_to(m)
+    
+        # Ajout des marqueurs numérotés
+        for i, wp in enumerate(waypoints):
+            color = 'red' if (i == 0 or i == len(waypoints)-1) else 'blue'
+            folium.Marker(
+                [wp['lat'], wp['lon']],
+                popup=f"{i+1}. {wp['nom']}",
+                tooltip=f"{wp['nom']}",
+                icon=folium.Icon(color=color, icon='info-sign')
+            ).add_to(m)
+    
+        st_folium(m, width=800, height=500, returned_objects=[])
