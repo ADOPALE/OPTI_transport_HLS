@@ -17,30 +17,27 @@ from geopy.extra.rate_limiter import RateLimiter
 
 # 1. Géocodage avec Cache pour éviter de taper l'API inutilement
 @st.cache_data(show_spinner=False)
-def geocode_bio_sites(sites_config, hls_adresse):
+def geocode_bio_sites(sites_adresses, hls_adresse):
     """
-    Récupère les coordonnées de tous les sites de bio + HLS.
-    sites_config: dict issu de votre paramétrage bio
+    sites_adresses: dict { 'NOM': 'ADRESSE PHYSIQUE' }
     """
     geolocator = Nominatim(user_agent="adopale_biologie_mapper")
     geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
     
     coords_dict = {}
-    
-    # On ajoute HLS en premier
-    try:
-        loc = geocode(hls_adresse)
-        if loc: coords_dict["HLS"] = {"lat": loc.latitude, "lon": loc.longitude}
-    except: pass
 
-    # On parcourt les sites de la config bio
-    for site_name, config in sites_config.items():
-        addr = config.get('adresse')
+    # Boucle sur le dictionnaire des adresses
+    for site_name, addr in sites_adresses.items():
         if addr:
             try:
+                # On tente de géocoder l'adresse
                 loc = geocode(addr)
-                if loc: coords_dict[site_name.upper()] = {"lat": loc.latitude, "lon": loc.longitude}
-                time.sleep(0.5) # Sécurité API
+                if loc:
+                    coords_dict[site_name.upper()] = {
+                        "lat": loc.latitude, 
+                        "lon": loc.longitude
+                    }
+                time.sleep(0.2) # Petit délai pour respecter l'API
             except:
                 continue
     return coords_dict
