@@ -82,7 +82,7 @@ def show_simulation_page():
     # Si la simulation est déjà lancée, on peut afficher un message ou griser le bouton
     btn_label = "🚀 Relancer la simulation" if st.session_state.get("sim_lancee") else "🚀 Lancer la simulation"
     
-    if st.button(btn_label, use_container_width=True, type="primary"):
+    if st.button(btn_label, width=Stretch, type="primary"):
         with st.spinner("🧠 Calcul de l'itinéraire optimal en cours..."):
             try:
                 df_duree = st.session_state["data"]["matrice_duree"]
