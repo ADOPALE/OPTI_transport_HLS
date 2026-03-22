@@ -19,25 +19,32 @@ from geopy.extra.rate_limiter import RateLimiter
 @st.cache_data(show_spinner=False)
 def geocode_bio_sites(sites_adresses, hls_adresse):
     """
-    sites_adresses: dict { 'NOM': 'ADRESSE PHYSIQUE' }
+    sites_adresses : dict { 'NOM': 'ADRESSE' }
     """
-    geolocator = Nominatim(user_agent="adopale_biologie_mapper")
+    from geopy.geocoders import Nominatim
+    from geopy.extra.rate_limiter import RateLimiter
+    import time
+
+    geolocator = Nominatim(user_agent="adopale_biologie_nantes")
     geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
-    
     coords_dict = {}
 
-    # Boucle sur le dictionnaire des adresses
-    for site_name, addr in sites_adresses.items():
-        if addr:
+    # 1. Géocodage du dépôt HLS
+    try:
+        loc_hls = geocode(hls_adresse)
+        if loc_hls:
+            coords_dict["HLS"] = {"lat": loc_hls.latitude, "lon": loc_hls.longitude}
+    except:
+        pass
+
+    # 2. Géocodage des sites
+    for site, addr in sites_adresses.items():
+        if addr and site not in coords_dict:
             try:
-                # On tente de géocoder l'adresse
                 loc = geocode(addr)
                 if loc:
-                    coords_dict[site_name.upper()] = {
-                        "lat": loc.latitude, 
-                        "lon": loc.longitude
-                    }
-                time.sleep(0.2) # Petit délai pour respecter l'API
+                    coords_dict[site.upper()] = {"lat": loc.latitude, "lon": loc.longitude}
+                time.sleep(0.1)
             except:
                 continue
     return coords_dict
