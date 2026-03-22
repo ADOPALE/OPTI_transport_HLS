@@ -196,7 +196,6 @@ elif selected == "📊 Synthèse":
     st.title("📊 Synthèse des résultats")
     if not st.session_state.get("sim_lancee"):
         st.info("💡 Les résultats s'afficheront ici une fois la simulation lancée dans l'onglet **'Simuler & Optimiser'**.")
-        st.image("https://abs.twimg.com/emoji/v2/72x72/1f680.png", width=50) # Optionnel : petite icone fun
     else:
         # Code d'affichage normal
         resultats = st.session_state.resultat_flotte
