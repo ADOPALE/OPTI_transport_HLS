@@ -151,3 +151,74 @@ def afficher_stats_chauffeurs(flotte, config_rh):
             title="Répartition moyenne d'une vacation"
         )
         st.plotly_chart(fig_pie, use_container_width=True)
+
+
+
+def afficher_stats_sites(flotte):
+    """
+    Affiche les statistiques par site et le graphique temporel des passages.
+    """
+    st.subheader("🏥 Données sur les sites collectés")
+
+    passages_data = []
+    total_tournees = 0
+
+    # 1. Extraction des passages depuis la structure de la flotte
+    for v_id, vacations in flotte.items():
+        for vacation in vacations:
+            for tournee in vacation:
+                total_tournees += 1
+                for point in tournee:
+                    site = point['site']
+                    # On ignore le dépôt HLS pour le graphique des sites périphériques
+                    if site != "HLS":
+                        passages_data.append({
+                            "Site": site,
+                            "Heure": point['heure'],
+                            "Véhicule": v_id
+                        })
+
+    if not passages_data:
+        st.warning("Aucun passage sur site détecté (hors HLS).")
+        return
+
+    df_passages = pd.DataFrame(passages_data)
+
+    # 2. Affichage du KPI global
+    st.metric("Nombre total de tournées réalisées", f"{total_tournees}")
+
+    # 3. Graphique de dispersion (Scatter Plot) des passages
+    st.write("**Horaires de passage par site**")
+    
+    fig_sites = px.scatter(
+        df_passages,
+        x="Heure",
+        y="Site",
+        color="Véhicule",
+        symbol="Véhicule",
+        hover_data={"Heure": False, "Site": True},
+        title="Répartition des collectes sur la journée"
+    )
+
+    # Personnalisation de l'affichage
+    fig_sites.update_traces(marker=dict(size=12, opacity=0.8))
+    
+    fig_sites.update_layout(
+        xaxis=dict(
+            title="Heure de passage",
+            tickvals=list(range(300, 1321, 60)),
+            ticktext=[f"{h//60}h" for h in range(300, 1321, 60)],
+            range=[300, 1320]
+        ),
+        yaxis=dict(title=None, categoryorder='category ascending'),
+        height=400 + (len(df_passages["Site"].unique()) * 20),
+        margin=dict(l=10, r=10, t=50, b=50)
+    )
+
+    # Ajout d'une info-bulle personnalisée pour lire l'heure HH:MM
+    fig_sites.update_traces(
+        hovertemplate="<b>%{y}</b><br>Passage à %{customdata}h<extra></extra>",
+        customdata=[f"{int(h//60):02d}:{int(h%60):02d}" for h in df_passages["Heure"]]
+    )
+
+    st.plotly_chart(fig_sites, use_container_width=True)
