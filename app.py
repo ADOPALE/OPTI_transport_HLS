@@ -151,7 +151,7 @@ with st.sidebar:
     options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser", "Synthèse", "Détail tournées", "Exporter"]
     icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle", "clipboard-data", "map", "file-earmark-pdf"]
 
-    #if st.session_state.sim_lancee:
+    #if st.session_state.sim_lancee: 
     #    options += ["Synthèse", "Détail tournées", "Exporter"]
     #    icons += ["clipboard-data", "map", "file-earmark-pdf"]
 
