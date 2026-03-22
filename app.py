@@ -148,12 +148,12 @@ with st.sidebar:
             st.image(str(LOGO_CHU), use_container_width=True)
 
     st.divider()
-    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser"]
-    icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle"]
+    options = ["Accueil", "Calcul Matrices", "Importer Données", "Volumes Distribution", "🧪 Passages Biologie", "Simuler & Optimiser", "Synthèse", "Détail tournées", "Exporter"]
+    icons = ["house", "geo-alt", "cloud-upload", "truck", "microscope", "play-circle", "clipboard-data", "map", "file-earmark-pdf"]
 
-    if st.session_state.sim_lancee:
-        options += ["Synthèse", "Détail tournées", "Exporter"]
-        icons += ["clipboard-data", "map", "file-earmark-pdf"]
+    #if st.session_state.sim_lancee:
+    #    options += ["Synthèse", "Détail tournées", "Exporter"]
+    #    icons += ["clipboard-data", "map", "file-earmark-pdf"]
 
     selected = option_menu(
         menu_title=None,
@@ -197,59 +197,45 @@ elif selected == "🧪 Passages Biologie":
     show_biologie_page()
 elif selected == "Simuler & Optimiser":
     show_simulation_page()
-elif selected == "Synthèse":
+
+elif selected == "📊 Synthèse":
     st.title("📊 Synthèse des résultats")
-    if st.session_state.get("sim_lancee"):
-        # on affiche les résultats dans l'onglet synthèse
-       # Récupération des données
+    if not st.session_state.get("sim_lancee"):
+        st.info("💡 Les résultats s'afficheront ici une fois la simulation lancée dans l'onglet **'Simuler & Optimiser'**.")
+        st.image("https://abs.twimg.com/emoji/v2/72x72/1f680.png", width=50) # Optionnel : petite icone fun
+    else:
+        # Code d'affichage normal
         resultats = st.session_state.resultat_flotte
         df_dist = st.session_state["data"]["matrice_distance"]
         config_rh = st.session_state["biologie_config"]["rh"]
-    
-        # 1. Bloc Véhicules (Bleu/Orange)
+        
         afficher_stats_vehicules(resultats, df_dist)
         st.divider()
-        
-        # 2. Bloc Chauffeurs (Taux d'occupation)
         afficher_stats_chauffeurs(resultats, config_rh)
         st.divider()
-        
-        # 3. Bloc Sites (Points de passage)
         afficher_stats_sites(resultats)
-        st.divider()
-        
+
+elif selected == "📋 Détail tournées":
+    st.title("📋 Détail des tournées")
+    if not st.session_state.get("sim_lancee"):
+        st.info("💡 Veuillez lancer la simulation pour visualiser le détail des tournées et les cartes.")
     else:
-        st.warning("⚠️ Veuillez d'abord lancer une simulation dans l'onglet 'Simuler & Optimiser'.")
-    
-elif selected == "Détail tournées":
-    if st.session_state.get("sim_lancee"):
+        # Code d'affichage normal avec vos adresses
         res = st.session_state.resultat_flotte
         df_dist = st.session_state["data"]["matrice_distance"]
         
-        # --- RÉCUPÉRATION DES ADRESSES ---
-        # On récupère le DataFrame qui contient la colonne 'site' et 'adresse'
-        # Généralement c'est le DataFrame 'df_sites' créé lors de l'import ou du calcul de matrice
-        df_adresses = st.session_state["data"]["adresses"]
+        # Sécurité sur la source des adresses
+        df_adresses = st.session_state["data"].get("adresses", st.session_state["data"].get("df_sites"))
         
         if df_adresses is not None:
-            # On crée un dictionnaire { 'NOM DU SITE': 'ADRESSE' }
             sites_adresses = pd.Series(df_adresses.adresse.values, index=df_adresses.site.str.upper()).to_dict()
+            hls_adresse = sites_adresses.get("HLS", "55 Boulevard Gustave Roch, 44000 Nantes")
             
-            # On récupère l'adresse du dépôt HLS (souvent en haut de la liste ou fixe)
-            hls_adresse = sites_adresses.get("HLS", "55 Boulevard Gustave Roch, 44000 Nantes") # Adresse par défaut si non trouvé
-            
-            # 1. Synthèse du véhicule
             v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
-            
-            # 2. Détail de la tournée et Carte
             if v_sel:
-                # On passe le dictionnaire des adresses à la fonction
                 afficher_detail_itineraire(v_sel, vac_sel, sites_adresses, hls_adresse)
         else:
-            st.error("⚠️ Impossible de trouver les adresses dans les données importées.")
-
-    else:
-        st.warning("⚠️ Veuillez d'abord lancer une simulation dans l'onglet 'Simuler & Optimiser'.")
+            st.error("⚠️ Données d'adresses introuvables. Vérifiez votre import.")
 
 
 elif selected == "Exporter":
