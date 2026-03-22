@@ -15,10 +15,10 @@ def show_biologie_page():
     
     # On filtre les lignes où la colonne K (index 10) contient "fréquence"
     # Note : .iloc[:, 10] correspond à la colonne K
-    df_freq = df_flux[df_flux.iloc[:, 10].astype(str).str.lower().str.contains("fréquence", na=False)]
+    df_freq = df_flux[df_flux.iloc[:, 10].astype(str).str.lower().str.contains("Fréquences", na=False)]
 
     if df_freq.empty:
-        st.error("❌ Aucune ligne avec la mention 'fréquence' n'a été trouvée dans la colonne K de l'onglet M flux.")
+        st.error("❌ Aucune ligne avec la mention 'Fréquences' n'a été trouvée dans la colonne K de l'onglet M flux.")
         return
 
     # 2. Vérification de l'unicité des sites (Colonne A, index 0)
@@ -26,14 +26,14 @@ def show_biologie_page():
     doublons = sites_counts[sites_counts > 1].index.tolist()
 
     if doublons:
-        st.error(f"❌ Erreur de structure : Les sites suivants apparaissent plusieurs fois avec la mention 'fréquence' : {', '.join(doublons)}")
-        st.info("💡 Veuillez corriger votre fichier Excel pour qu'un site n'ait qu'une seule ligne 'fréquence' et réimportez-le.")
+        st.error(f"❌ Erreur de structure : Les sites suivants apparaissent plusieurs fois avec la mention 'Fréquences' : {', '.join(doublons)}")
+        st.info("💡 Veuillez corriger votre fichier Excel pour qu'un site n'ait qu'une seule ligne 'Fréquences' et réimportez-le.")
         return
 
     # 3. Paramètres globaux
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        duree_max = st.number_input("Durée max tournée (min)", value=200)
+        duree_max = st.number_input("Durée max tournée (min)", value=120)
     with col_g2:
         temps_coll = st.number_input("Temps de collecte (min)", value=10)
 
