@@ -150,7 +150,7 @@ def afficher_stats_vehicules(flotte, df_dist):
         margin=dict(l=10, r=10, t=50, b=50)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def afficher_stats_chauffeurs(flotte, config_rh):
