@@ -51,8 +51,8 @@ def show_biologie_page():
         # 3. Conversion des heures Excel (S=18, T=19) et Fréquence (W=22)
         try:
             def to_minutes(val, default):
-                if pd.isna(val): 
-                    return default
+                #if pd.isna(val): 
+                 #   return default
                 # Si c'est déjà un objet time (HH:MM:SS)
                # if hasattr(val, 'hour'):
                #     return val.hour * 60 + val.minute
