@@ -200,15 +200,21 @@ elif selected == "Simuler & Optimiser":
 elif selected == "Synthèse":
     st.title("📊 Synthèse des résultats")
     # on affiche les résultats dans l'onglet synthèse
+   # Récupération des données
     resultats = st.session_state.resultat_flotte
     df_dist = st.session_state["data"]["matrice_distance"]
-    # On récupère la config RH saisie par l'utilisateur
     config_rh = st.session_state["biologie_config"]["rh"]
 
-    # Affichage des deux blocs
+    # 1. Bloc Véhicules (Bleu/Orange)
     afficher_stats_vehicules(resultats, df_dist)
     st.divider()
+    
+    # 2. Bloc Chauffeurs (Taux d'occupation)
     afficher_stats_chauffeurs(resultats, config_rh)
+    st.divider()
+    
+    # 3. Bloc Sites (Points de passage)
+    afficher_stats_sites(resultats)
     
 elif selected == "Détail tournées":
     st.title("📊 Détail des tournées")
