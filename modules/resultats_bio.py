@@ -4,15 +4,6 @@ import plotly.graph_objects as go
 from datetime import timedelta
 import plotly.express as px
 
-Voici la fonction afficher_stats_vehicules complète et corrigée.
-
-Elle intègre désormais l'alternance de couleurs Bleu et Orange pour distinguer les chauffeurs successifs sur un même véhicule, ainsi que le nettoyage automatique de la matrice de distance pour éviter les erreurs de type KeyError ou 'HLS'.
-
-Python
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-from datetime import timedelta
 
 def afficher_stats_vehicules(flotte, df_dist):
     """
