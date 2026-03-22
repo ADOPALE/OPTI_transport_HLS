@@ -66,7 +66,7 @@ def show_simulation_page():
     st.title("🏎️ Optimisation des tournées Biologie")
     st.markdown("---")
 
-    # 1. VERIFICATIONS (Sécurité)
+    # 1. VERIFICATIONS
     if "data" not in st.session_state or "matrice_duree" not in st.session_state["data"]:
         st.error("⚠️ Matrice de durée manquante. Importez vos données d'abord.")
         return
@@ -75,21 +75,18 @@ def show_simulation_page():
         st.warning("⚠️ Configuration manquante. Validez vos paramètres dans l'onglet 'Passages Biologie'.")
         return
 
-    # 2. RESUME DE CE QUI VA ETRE CALCULE
     config = st.session_state["biologie_config"]
     st.info(f"Prêt à simuler {len(config['sites'])} sites hospitaliers.")
 
-    # 3. LE BOUTON (Unique déclencheur)
-    # On n'exécute le code QUE si l'utilisateur clique. 
-    if st.button("🚀 Lancer la simulation", use_container_width=True, type="primary"):
-        
+    # 2. LE BOUTON
+    # Si la simulation est déjà lancée, on peut afficher un message ou griser le bouton
+    btn_label = "🚀 Relancer la simulation" if st.session_state.get("sim_lancee") else "🚀 Lancer la simulation"
+    
+    if st.button(btn_label, use_container_width=True, type="primary"):
         with st.spinner("🧠 Calcul de l'itinéraire optimal en cours..."):
             try:
-                # Récupération de la matrice
                 df_duree = st.session_state["data"]["matrice_duree"]
                 
-                
-                # Appel du moteur (Partie 1 que tu as déjà dans ton module)
                 resultats = run_optimization(
                     m_duree_df=df_duree,
                     sites_config=config["sites"],
@@ -97,27 +94,26 @@ def show_simulation_page():
                     max_tournee=config["duree_max"]
                 )
                 
-                # ON STOCKAGE DES RESULTATS
+                # STOCKAGE DES RESULTATS
                 st.session_state.resultat_flotte = resultats
                 st.session_state.sim_lancee = True
 
-                
-                # Succès visuel
-                st.success(f"✅ Simulation réussie ! {len(resultats)} véhicules identifiés.")
-                
+                # --- LE RERUN DOIT ETRE ICI ---
+                # Il force Streamlit à relire tout le script. 
+                # Au prochain passage, il verra 'sim_lancee = True' dès le début.
                 st.rerun()
-                # Cela permet de garder l'affichage du succès à l'écran.
                 
             except Exception as e:
                 st.error(f"Erreur durant le calcul : {e}")
 
-    # 4. ETAT APRES CALCUL
+    # 3. AFFICHAGE DU SUCCÈS (Hors du bloc bouton)
+    # Ce bloc s'exécutera immédiatement après le st.rerun()
     if st.session_state.get("sim_lancee"):
+        st.success(f"✅ Simulation réussie ! {len(st.session_state.resultat_flotte)} véhicules identifiés.")
+        st.balloons() # Optionnel pour marquer le coup
         st.divider()
         st.markdown("### 📊 Résultats prêts")
-        st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** pour voir les graphiques et feuilles de route.")
-
-
+        st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** dans le menu de gauche.")
 
 
 
