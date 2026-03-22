@@ -21,7 +21,7 @@ from modules.param_bio import show_biologie_page
 from modules.biologie_engine import run_optimization
 # importer les fonctions qui permettent de visualiser les tournées calculées de biologie dans les onglets synthèse et détail des tournées. 
 # ____ fonction en cours de travail.
-from resultats_bio import afficher_stats_vehicules
+from modules.resultats_bio import afficher_stats_vehicules
 
 
 
