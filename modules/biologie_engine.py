@@ -117,9 +117,14 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee, conf
                 break
         
         tournees_unitaires.append(tournee)
+
+    resultat_initial = assign_to_vehicles(tournees_unitaires, config_rh)
     
-    # --- APPEL CORRIGÉ : On passe config_rh à la fonction d'assignation ---
-    return assign_to_vehicles(tournees_unitaires, config_rh)
+    # On tente de compacter les postes
+    resultat_optimise = optimiser_postes_chauffeurs(resultat_initial, config_rh)
+    
+    return resultat_optimise
+    
 
 def assign_to_vehicles(tournees, config_rh):
     """
@@ -161,3 +166,57 @@ def assign_to_vehicles(tournees, config_rh):
             flotte_vehicules[f"Véhicule {v_num}"] = [[trne]]
 
     return flotte_vehicules
+
+
+def optimiser_postes_chauffeurs(flotte, config_rh):
+    """
+    Tente de fusionner les vacations (postes) sous-utilisées 
+    pour réduire le nombre total de chauffeurs.
+    """
+    MAX_POSTE = config_rh.get('amplitude', 450)
+    PAUSE = config_rh.get('pause', 30)
+    
+    # 1. On extrait toutes les tournées de tous les véhicules
+    toutes_les_tournees = []
+    for vacations in flotte.values():
+        for vacation in vacations:
+            toutes_les_tournees.append(vacation)
+    
+    # 2. On trie les vacations par nombre de tournées (les plus petites d'abord)
+    # On essaie de vider les "petits" postes dans les "gros"
+    toutes_les_tournees.sort(key=len)
+    
+    nouvelle_flotte = {}
+    
+    # On ré-applique une logique de remplissage agressive
+    for vacation_a_placer in toutes_les_tournees:
+        placed = False
+        
+        for v_id, postes in nouvelle_flotte.items():
+            for poste in postes:
+                # Calcul des bornes du poste actuel
+                h_debut_poste = poste[0][0]['heure']
+                h_fin_poste = poste[-1][-1]['heure']
+                
+                # Bornes de la vacation qu'on veut fusionner
+                debut_v = vacation_a_placer[0][0]['heure']
+                fin_v = vacation_a_placer[-1][-1]['heure']
+                
+                # Test de compatibilité (Amplitude max et respect des pauses)
+                nouvelle_amplitude = max(h_fin_poste, fin_v) - min(h_debut_poste, debut_v)
+                
+                if nouvelle_amplitude <= MAX_POSTE:
+                    # Vérification du gap pour la pause ou l'enchaînement
+                    if fin_v <= h_debut_poste - 15 or debut_v >= h_fin_poste + 15:
+                        poste.extend(vacation_a_placer)
+                        poste.sort(key=lambda x: x[0]['heure'])
+                        placed = True
+                        break
+            if placed: break
+            
+        if not placed:
+            # Si on ne peut pas fusionner, on crée un nouveau poste sur un véhicule existant ou nouveau
+            v_num = len(nouvelle_flotte) + 1
+            nouvelle_flotte[f"Véhicule {v_num}"] = [vacation_a_placer]
+            
+    return nouvelle_flotte
