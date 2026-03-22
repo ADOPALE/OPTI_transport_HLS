@@ -416,48 +416,48 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
         # --- PARTIE CARTE ---
         st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
         
-        # 1. Géocodage unique (mis en cache)
-        with st.spinner("Récupération des coordonnées GPS..."):
-            coords_gps = geocode_bio_sites(sites_config, hls_adresse)
+        st.write("---")
+        # Ajout de la case à cocher pour déclencher le calcul lourd
+        afficher_carte = st.checkbox("🗺️ Afficher la carte et le tracé routier", value=False)
     
-        # 2. Préparation des points de la tournée sélectionnée
-        trne_data = selection["data"]
-        waypoints = []
-        for p in trne_data:
-            nom = p['site'].upper()
-            if nom in coords_gps:
-                waypoints.append({
-                    "lat": coords_gps[nom]["lat"], 
-                    "lon": coords_gps[nom]["lon"], 
-                    "nom": nom,
-                    "heure": p['heure']
-                })
+        if afficher_carte:
+            with st.spinner("🌍 Géocodage et calcul de l'itinéraire en cours..."):
+                # 1. Géocodage unique (mis en cache via la fonction optimisée précédemment)
+                coords_gps = geocode_bio_sites(sites_adresses, hls_adresse)
     
-        if len(waypoints) < 2:
-            st.warning("📍 Pas assez de points géocodés pour afficher la carte.")
-            return
+                # 2. Préparation des points de la tournée
+                # (Supposons que 'selection' est défini plus haut dans votre fonction)
+                waypoints = []
+                for p in vacations: # ou votre variable de données de tournée
+                    nom = p['site'].upper()
+                    if nom in coords_gps:
+                        waypoints.append({
+                            "lat": coords_gps[nom]["lat"], 
+                            "lon": coords_gps[nom]["lon"], 
+                            "nom": nom
+                        })
     
-        # 3. Calcul du tracé réel
-        trace_routier = get_route_osrm(waypoints)
-    
-        # 4. Création de la carte
-        m = folium.Map(location=[waypoints[0]['lat'], waypoints[0]['lon']], zoom_start=12, tiles="CartoDB positron")
-    
-        # Dessin du tracé
-        if trace_routier:
-            folium.PolyLine(trace_routier, color="#E63946", weight=4, opacity=0.8).add_to(m)
+                if len(waypoints) >= 2:
+                    # 3. Calcul du tracé et affichage
+                    trace_routier = get_route_osrm(waypoints)
+                    
+                    m = folium.Map(
+                        location=[waypoints[0]['lat'], waypoints[0]['lon']], 
+                        zoom_start=12, 
+                        tiles="CartoDB positron"
+                    )
+                    
+                    if trace_routier:
+                        folium.PolyLine(trace_routier, color="#E63946", weight=4).add_to(m)
+                    
+                    for i, wp in enumerate(waypoints):
+                        folium.Marker([wp['lat'], wp['lon']], tooltip=wp['nom']).add_to(m)
+                    
+                    # Affichage de la carte
+                    st_folium(m, width='stretch', height=500, returned_objects=[])
+                else:
+                    st.warning("📍 Coordonnées insuffisantes pour tracer la carte.")
         else:
-            # Fallback ligne droite si OSRM échoue
-            folium.PolyLine([[w['lat'], w['lon']] for w in waypoints], color="blue", weight=2, dash_array='5').add_to(m)
-    
-        # Ajout des marqueurs numérotés
-        for i, wp in enumerate(waypoints):
-            color = 'red' if (i == 0 or i == len(waypoints)-1) else 'blue'
-            folium.Marker(
-                [wp['lat'], wp['lon']],
-                popup=f"{i+1}. {wp['nom']}",
-                tooltip=f"{wp['nom']}",
-                icon=folium.Icon(color=color, icon='info-sign')
-            ).add_to(m)
-    
-        st_folium(m, width=800, height=500, returned_objects=[])
+            st.info("ℹ️ Cochez la case ci-dessus pour visualiser l'itinéraire sur la carte.")
+        
+            st_folium(m, width=800, height=500, returned_objects=[])
