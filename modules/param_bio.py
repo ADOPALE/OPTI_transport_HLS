@@ -15,7 +15,7 @@ def show_biologie_page():
     
     # On filtre les lignes où la colonne K (index 10) contient "fréquence"
     # Note : .iloc[:, 10] correspond à la colonne K
-    df_freq = df_flux[df_flux.iloc[:, 10].astype(str).str.lower().str.contains("Fréquences", na=False)]
+    df_freq = df_flux[df_flux.iloc[:, 11].astype(str).str.lower().str.contains("Fréquences", na=False)]
 
     if df_freq.empty:
         st.error("❌ Aucune ligne avec la mention 'Fréquences' n'a été trouvée dans la colonne K de l'onglet M flux.")
