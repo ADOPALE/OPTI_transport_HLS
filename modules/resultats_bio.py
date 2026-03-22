@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import timedelta
+import plotly.express as px
 
 def afficher_stats_vehicules(flotte, df_dist):
     st.subheader("🚐 Données sur les véhicules")
