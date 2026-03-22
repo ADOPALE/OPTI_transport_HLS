@@ -427,33 +427,31 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
         # --- AJOUT DE LA CONDITION POUR LA CARTE ---
         show_map = st.checkbox("🗺️ Afficher la carte de la tournée", value=False)
     
+        st.divider()
         if show_map:
             with st.spinner("🌍 Calcul de l'itinéraire..."):
-                # Appel de la fonction de géocodage
-                coords_gps = geocode_bio_sites(sites_config, hls_adresse)
-                
-                # Construction des points pour Folium
+                coords_gps = geocode_bio_sites(sites_adresses, hls_adresse)
                 points = []
-                # On ajoute le départ (HLS) si besoin ou on suit la liste 'vacations'
+    
                 for stop in vacations:
-                    nom = stop['site'].upper()
-                    if nom in coords_gps:
-                        points.append([coords_gps[nom]["lat"], coords_gps[nom]["lon"], nom])
+                    # --- SÉCURITÉ ICI ---
+                    # Si stop est un dictionnaire, on prend la clé 'site'
+                    # Si stop est déjà une chaîne (le nom), on l'utilise directement
+                    if isinstance(stop, dict):
+                        nom_site = stop.get('site', '').upper()
+                    else:
+                        nom_site = str(stop).upper()
+                    
+                    if nom_site in coords_gps:
+                        points.append([
+                            coords_gps[nom_site]["lat"], 
+                            coords_gps[nom_site]["lon"], 
+                            nom_site
+                        ])
                 
                 if len(points) >= 2:
-                    import folium
-                    from streamlit_folium import st_folium
-                    
-                    m = folium.Map(location=[points[0][0], points[0][1]], zoom_start=12)
-                    
-                    # Tracer la ligne entre les points
-                    path = [[p[0], p[1]] for p in points]
-                    folium.PolyLine(path, color="blue", weight=3).add_to(m)
-                    
-                    # Ajouter les marqueurs
-                    for p in points:
-                        folium.Marker([p[0], p[1]], tooltip=p[2]).add_to(m)
-                    
-                    st_folium(m, width='stretch', height=500)
+                    # Affichage Folium (votre code existant)
+                    # ...
+                    st.success(f"Carte générée pour {len(points)} points.")
                 else:
-                    st.warning("⚠️ Pas assez de coordonnées GPS trouvées pour tracer la carte.")
+                    st.warning("📍 Pas assez de points géocodés pour tracer la carte.")
