@@ -430,7 +430,7 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
         if show_map:
             with st.spinner("🌍 Calcul de l'itinéraire..."):
                 # Appel de la fonction de géocodage
-                coords_gps = geocode_bio_sites(sites_adresses, hls_adresse)
+                coords_gps = geocode_bio_sites(sites_config, hls_adresse)
                 
                 # Construction des points pour Folium
                 points = []
