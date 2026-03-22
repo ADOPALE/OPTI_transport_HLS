@@ -54,12 +54,12 @@ def show_biologie_page():
                 if pd.isna(val): 
                     return default
                 # Si c'est déjà un objet time (HH:MM:SS)
-                if hasattr(val, 'hour'):
-                    return val.hour * 60 + val.minute
+               # if hasattr(val, 'hour'):
+               #     return val.hour * 60 + val.minute
                 # Si c'est un format string "08:00"
-                if isinstance(val, str) and ":" in val:
-                    h, m = map(int, val.split(':')[:2])
-                    return h * 60 + m
+                #if isinstance(val, str) and ":" in val:
+                #    h, m = map(int, val.split(':')[:2])
+                #    return h * 60 + m
                 # Si c'est le format fractionnaire Excel (0.33)
                 return int(float(val) * 1440)
 
@@ -79,7 +79,7 @@ def show_biologie_page():
         is_active = cols[0].checkbox("Inclure", value=True, key=f"check_{site_name}")
         
         if is_active:
-            with cols[1].expander(f"📍 {site_name}", expanded=False):
+            with cols[1].expander(f"📍 {site_name}", expanded=True):
                 c1, c2 = st.columns([3, 1])
                 with c1:
                     # Slider calé sur les valeurs Excel (arrondi à 15min)
