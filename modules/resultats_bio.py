@@ -417,47 +417,36 @@ def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
         st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
         
         st.write("---")
-        # Ajout de la case à cocher pour déclencher le calcul lourd
-        afficher_carte = st.checkbox("🗺️ Afficher la carte et le tracé routier", value=False)
+        # --- AJOUT DE LA CONDITION POUR LA CARTE ---
+        show_map = st.checkbox("🗺️ Afficher la carte de la tournée", value=False)
     
-        if afficher_carte:
-            with st.spinner("🌍 Géocodage et calcul de l'itinéraire en cours..."):
-                # 1. Géocodage unique (mis en cache via la fonction optimisée précédemment)
+        if show_map:
+            with st.spinner("🌍 Calcul de l'itinéraire..."):
+                # Appel de la fonction de géocodage
                 coords_gps = geocode_bio_sites(sites_adresses, hls_adresse)
-    
-                # 2. Préparation des points de la tournée
-                # (Supposons que 'selection' est défini plus haut dans votre fonction)
-                waypoints = []
-                for p in vacations: # ou votre variable de données de tournée
-                    nom = p['site'].upper()
+                
+                # Construction des points pour Folium
+                points = []
+                # On ajoute le départ (HLS) si besoin ou on suit la liste 'vacations'
+                for stop in vacations:
+                    nom = stop['site'].upper()
                     if nom in coords_gps:
-                        waypoints.append({
-                            "lat": coords_gps[nom]["lat"], 
-                            "lon": coords_gps[nom]["lon"], 
-                            "nom": nom
-                        })
-    
-                if len(waypoints) >= 2:
-                    # 3. Calcul du tracé et affichage
-                    trace_routier = get_route_osrm(waypoints)
+                        points.append([coords_gps[nom]["lat"], coords_gps[nom]["lon"], nom])
+                
+                if len(points) >= 2:
+                    import folium
+                    from streamlit_folium import st_folium
                     
-                    m = folium.Map(
-                        location=[waypoints[0]['lat'], waypoints[0]['lon']], 
-                        zoom_start=12, 
-                        tiles="CartoDB positron"
-                    )
+                    m = folium.Map(location=[points[0][0], points[0][1]], zoom_start=12)
                     
-                    if trace_routier:
-                        folium.PolyLine(trace_routier, color="#E63946", weight=4).add_to(m)
+                    # Tracer la ligne entre les points
+                    path = [[p[0], p[1]] for p in points]
+                    folium.PolyLine(path, color="blue", weight=3).add_to(m)
                     
-                    for i, wp in enumerate(waypoints):
-                        folium.Marker([wp['lat'], wp['lon']], tooltip=wp['nom']).add_to(m)
+                    # Ajouter les marqueurs
+                    for p in points:
+                        folium.Marker([p[0], p[1]], tooltip=p[2]).add_to(m)
                     
-                    # Affichage de la carte
-                    st_folium(m, width='stretch', height=500, returned_objects=[])
+                    st_folium(m, width='stretch', height=500)
                 else:
-                    st.warning("📍 Coordonnées insuffisantes pour tracer la carte.")
-        else:
-            st.info("ℹ️ Cochez la case ci-dessus pour visualiser l'itinéraire sur la carte.")
-        
-            st_folium(m, width=800, height=500, returned_objects=[])
+                    st.warning("⚠️ Pas assez de coordonnées GPS trouvées pour tracer la carte.")
