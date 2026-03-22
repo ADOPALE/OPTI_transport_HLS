@@ -21,7 +21,7 @@ from modules.param_bio import show_biologie_page
 from modules.biologie_engine import run_optimization
 # importer les fonctions qui permettent de visualiser les tournées calculées de biologie dans les onglets synthèse et détail des tournées. 
 # ____ fonction en cours de travail.
-from modules.resultats_bio import afficher_stats_vehicules
+from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauffeurs
 
 
 
@@ -202,7 +202,14 @@ elif selected == "Synthèse":
     # on affiche les résultats dans l'onglet synthèse
     resultats = st.session_state.resultat_flotte
     df_dist = st.session_state["data"]["matrice_distance"]
+    # On récupère la config RH saisie par l'utilisateur
+    config_rh = st.session_state["biologie_config"]["rh"]
+
+    # Affichage des deux blocs
     afficher_stats_vehicules(resultats, df_dist)
+    st.divider()
+    afficher_stats_chauffeurs(resultats, config_rh)
+    
 elif selected == "Détail tournées":
     st.title("📊 Détail des tournées")
 elif selected == "Exporter":
