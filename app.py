@@ -21,7 +21,7 @@ from modules.param_bio import show_biologie_page
 from modules.biologie_engine import run_optimization
 # importer les fonctions qui permettent de visualiser les tournées calculées de biologie dans les onglets synthèse et détail des tournées. 
 # ____ fonction en cours de travail.
-from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauffeurs, afficher_stats_sites, afficher_detail_flotte_vehicules
+from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauffeurs, afficher_stats_sites, afficher_detail_flotte_vehicules, afficher_detail_itineraire
 
 
 
@@ -222,16 +222,20 @@ elif selected == "Synthèse":
         st.warning("⚠️ Veuillez d'abord lancer une simulation dans l'onglet 'Simuler & Optimiser'.")
     
 elif selected == "Détail tournées":
-    st.title("📊 Détail des tournées")
     if st.session_state.get("sim_lancee"):
-        resultats = st.session_state.resultat_flotte
+        res = st.session_state.resultat_flotte
         df_dist = st.session_state["data"]["matrice_distance"]
         
-        # Appel du premier ensemble : Statistiques Véhicule
-        v_sel, vac_sel = afficher_detail_flotte_vehicules(resultats, df_dist)
+        # On récupère les coordonnées (issues de l'onglet Importer Données ou Calcul Matrices)
+        # Assurez-vous que df_coords contient bien 'site', 'lat', 'lon'
+        df_coords = st.session_state["data"].get("df_sites") 
+
+        # 1. Synthèse du véhicule (fonction précédente)
+        v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
         
-        st.divider()
-        # Ici viendra le menu déroulant pour sélectionner une tournée spécifique (Ensemble 2)
+        # 2. Détail de la tournée et Carte
+        if v_sel:
+            afficher_detail_itineraire(v_sel, vac_sel, df_coords)
     else:
         st.warning("⚠️ Veuillez d'abord lancer une simulation dans l'onglet 'Simuler & Optimiser'.")
 
