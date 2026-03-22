@@ -6,6 +6,66 @@ import plotly.express as px
 import folium
 from streamlit_folium import st_folium
 
+
+
+#------ Fonction utilitaire de géocodage------
+
+import requests
+import time
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+
+# 1. Géocodage avec Cache pour éviter de taper l'API inutilement
+@st.cache_data(show_spinner=False)
+def geocode_bio_sites(sites_config, hls_adresse):
+    """
+    Récupère les coordonnées de tous les sites de bio + HLS.
+    sites_config: dict issu de votre paramétrage bio
+    """
+    geolocator = Nominatim(user_agent="adopale_biologie_mapper")
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.1)
+    
+    coords_dict = {}
+    
+    # On ajoute HLS en premier
+    try:
+        loc = geocode(hls_adresse)
+        if loc: coords_dict["HLS"] = {"lat": loc.latitude, "lon": loc.longitude}
+    except: pass
+
+    # On parcourt les sites de la config bio
+    for site_name, config in sites_config.items():
+        addr = config.get('adresse')
+        if addr:
+            try:
+                loc = geocode(addr)
+                if loc: coords_dict[site_name.upper()] = {"lat": loc.latitude, "lon": loc.longitude}
+                time.sleep(0.5) # Sécurité API
+            except:
+                continue
+    return coords_dict
+
+# 2. Récupération du tracé routier réel via OSRM
+def get_route_osrm(waypoints):
+    """ waypoints: liste de dict [{'lat': x, 'lon': y}] """
+    if len(waypoints) < 2: return None
+    
+    coords_str = ";".join(f"{wp['lon']},{wp['lat']}" for wp in waypoints)
+    url = f"http://router.project-osrm.org/route/v1/driving/{coords_str}?overview=full&geometries=geojson"
+    
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if data.get("code") == "Ok":
+            return [[c[1], c[0]] for c in data["routes"][0]["geometry"]["coordinates"]]
+    except:
+        return None
+    return None
+#--------------------
+
+
+
+
 def afficher_stats_vehicules(flotte, df_dist):
     """
     Calcule les KPIs et affiche le graphique d'occupation des véhicules
@@ -356,37 +416,51 @@ def afficher_detail_itineraire(v_id, vacations, df_coords):
         
         st.table(pd.DataFrame(tableau).set_index("Ordre"))
 
-        # 3. Carte Géographique (si coordonnées disponibles)
-        if df_coords is not None:
-            st.write("#### 🗺️ Itinéraire géographique")
-            
-            # Nettoyage index coordonnées
-            df_c = df_coords.copy()
-            df_c.index = df_c['site'].astype(str).str.strip().str.upper()
+        # --- PARTIE CARTE ---
+    st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
+    
+    # 1. Géocodage unique (mis en cache)
+    with st.spinner("Récupération des coordonnées GPS..."):
+        coords_gps = geocode_bio_sites(sites_config, hls_adresse)
 
-            # Centre de la carte sur le premier point (HLS)
-            m = folium.Map(location=[df_c.iloc[0]['lat'], df_c.iloc[0]['lon']], zoom_start=12)
-            
-            points_gps = []
-            for i, p in enumerate(trne_data):
-                nom_site = p['site'].upper()
-                if nom_site in df_c.index:
-                    lat, lon = df_c.loc[nom_site, 'lat'], df_c.loc[nom_site, 'lon']
-                    points_gps.append([lat, lon])
-                    
-                    # Marqueur
-                    icon_color = 'red' if i == 0 or i == len(trne_data)-1 else 'blue'
-                    folium.Marker(
-                        [lat, lon], 
-                        popup=f"{i+1}. {nom_site}",
-                        tooltip=f"{nom_site}",
-                        icon=folium.Icon(color=icon_color, icon='info-sign')
-                    ).add_to(m)
+    # 2. Préparation des points de la tournée sélectionnée
+    trne_data = selection["data"]
+    waypoints = []
+    for p in trne_data:
+        nom = p['site'].upper()
+        if nom in coords_gps:
+            waypoints.append({
+                "lat": coords_gps[nom]["lat"], 
+                "lon": coords_gps[nom]["lon"], 
+                "nom": nom,
+                "heure": p['heure']
+            })
 
-            # Dessin de la ligne de trajet
-            if len(points_gps) > 1:
-                folium.PolyLine(points_gps, color="blue", weight=2.5, opacity=0.8).add_to(m)
+    if len(waypoints) < 2:
+        st.warning("📍 Pas assez de points géocodés pour afficher la carte.")
+        return
 
-            st_folium(m, width=700, height=400)
+    # 3. Calcul du tracé réel
+    trace_routier = get_route_osrm(waypoints)
 
+    # 4. Création de la carte
+    m = folium.Map(location=[waypoints[0]['lat'], waypoints[0]['lon']], zoom_start=12, tiles="CartoDB positron")
 
+    # Dessin du tracé
+    if trace_routier:
+        folium.PolyLine(trace_routier, color="#E63946", weight=4, opacity=0.8).add_to(m)
+    else:
+        # Fallback ligne droite si OSRM échoue
+        folium.PolyLine([[w['lat'], w['lon']] for w in waypoints], color="blue", weight=2, dash_array='5').add_to(m)
+
+    # Ajout des marqueurs numérotés
+    for i, wp in enumerate(waypoints):
+        color = 'red' if (i == 0 or i == len(waypoints)-1) else 'blue'
+        folium.Marker(
+            [wp['lat'], wp['lon']],
+            popup=f"{i+1}. {wp['nom']}",
+            tooltip=f"{wp['nom']}",
+            icon=folium.Icon(color=color, icon='info-sign')
+        ).add_to(m)
+
+    st_folium(m, width=800, height=500, returned_objects=[])
