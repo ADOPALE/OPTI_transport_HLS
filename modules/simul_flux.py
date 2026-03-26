@@ -21,90 +21,72 @@ def convertir_temps_manutention(valeur):
     return float(valeur) if pd.notnull(valeur) else 0.0
 
 def preparer_missions_unifiees(df_flux):
-    """
-    Version Robuste : Détecte les colonnes par mots-clés et nettoie les données.
-    Prépare le dictionnaire de missions pour la simulation.
-    """
-    # 1. Nettoyage initial : on enlève les espaces invisibles dans les noms de colonnes
+    # 1. Nettoyage des colonnes
     df_flux.columns = [str(c).strip() for c in df_flux.columns]
     
-    # 2. Fonction interne de détection intelligente des colonnes
-    def trouver_col(mots_cles_possibles):
+    # 2. Identification ultra-souple des colonnes (par mots-clés)
+    def trouver_col(mots):
         for c in df_flux.columns:
-            if any(mot.lower() in c.lower() for mot in mots_cles_possibles):
+            if any(m.lower() in c.lower() for m in mots):
                 return c
         return None
 
-    # Mappage des colonnes critiques
-    col_nature = trouver_col(["Nature du flux", "obligation", "type de flux"])
-    col_depart = trouver_col(["Point de départ", "origine", "provenance"])
-    col_dest = trouver_col(["Point de destination", "destination", "arrivée"])
-    col_contenant = trouver_col(["Nature de contenant", "contenant", "support"])
-    col_etat = trouver_col(["Plein / vide", "etat"])
-    col_hygiene = trouver_col(["Sale / propre", "hygiene", "statut"])
-    col_mixte = trouver_col(["Transport mixte", "mixte"])
-    col_excl = trouver_col(["Règles d'exclusions", "exclusion"])
-    col_cadence = trouver_col(["Cadence", "flux j+1"])
-    col_urgence = trouver_col(["Urgence", "prioritaire"])
-    col_h_dispo = trouver_col(["mise à disposition", "h_dispo", "dispo"])
-    col_h_limite = trouver_col(["heure max", "h_limite", "limite"])
-
-    # Mapping des jours (on cherche "Lundi", "Mardi", etc.)
-    jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-    jours_map = {}
-    for j in jours_nom:
-        # On cherche une colonne qui contient le nom du jour (ex: "Quantité Lundi" ou juste "Lundi")
-        col_trouvee = trouver_col([f"Quantité {j}", f"Qté {j}", j])
-        if col_trouvee:
-            jours_map[j] = col_trouvee
-
-    # 3. Filtrage : On ne garde que les lignes qui ont un départ et une destination
-    # Et on ignore les lignes totalement vides en bas de l'Excel
-    df_propre = df_flux.dropna(subset=[col_depart, col_dest])
+    col_depart = trouver_col(["Point de départ"])
+    col_dest = trouver_col(["Point de destination"])
+    col_contenant = trouver_col(["Nature de contenant"])
+    # On cherche juste "obligation" ou "nature du flux" pour cette colonne très longue
+    col_nature_flux = trouver_col(["obligation", "nature du flux"]) 
     
-    # On initialise le dictionnaire final
-    # IMPORTANT : Les clés doivent correspondre à ce que ta boucle de simulation attend
+    jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+    # On cherche "Quantité Lundi" ou juste "Lundi"
+    jours_map = {j: trouver_col([f"Quantité {j}", j]) for j in jours_nom}
+
     missions_par_jour = {f"Quantité {j}": [] for j in jours_nom}
 
-    # 4. Boucle de lecture des lignes
-    for idx, row in df_propre.iterrows():
-        # Sécurité : vérifier que la ligne n'est pas un titre ou un sous-total
-        val_nature = str(row.get(col_nature, "")).lower()
-        # On ne prend que les lignes qui contiennent "Volume" ou si la nature n'est pas précisée
-        if "volume" not in val_nature and val_nature != "nan" and val_nature != "":
-             continue
+    # 3. Parcours des lignes
+    for idx, row in df_flux.iterrows():
+        # A. On ignore les lignes où le départ ou la destination sont vides
+        if pd.isna(row.get(col_depart)) or str(row.get(col_depart)).strip() == "":
+            continue
+            
+        # B. On vérifie la nature du flux (Doit contenir "Volume")
+        nature_val = str(row.get(col_nature_flux, "")).strip().capitalize()
+        if "Volume" not in nature_val:
+            # Optionnel : décommenter pour débugger dans la console
+            # print(f"Ligne {idx} rejetée : Nature = {nature_val}")
+            continue
 
-        # Extraction des horaires (avec valeurs par défaut si erreur)
+        # C. Extraction des horaires (avec sécurité)
+        # Sur ton image, les colonnes Heure de mise à dispo sont vers la fin
+        col_h_dispo = trouver_col(["Heure de mise à disposition"])
+        col_h_limite = trouver_col(["Heure max de livraison"])
+        
         try:
             h_start = row[col_h_dispo].hour * 60 + row[col_h_dispo].minute
             h_end = row[col_h_limite].hour * 60 + row[col_h_limite].minute
         except:
-            h_start, h_end = 360, 1200 # 06h00 à 20h00 par défaut
+            h_start, h_end = 360, 1200 # 6h-20h par défaut
 
-        # Mixité et Exclusions
-        mixte_possible = str(row.get(col_mixte, "NON")).strip().upper() == "OUI"
-        tag_compat = "MIXTE_OK" if mixte_possible else f"DEDIE_{idx}"
-        exclusions = [x.strip().upper() for x in str(row.get(col_excl, "")).split(',') if x.strip()]
-
-        # 5. Ventilation par jour
+        # D. Ventilation par jour
         for jour_nom, col_excel in jours_map.items():
-            qte = pd.to_numeric(row[col_excel], errors='coerce')
-            
-            if qte > 0:
-                missions_par_jour[f"Quantité {jour_nom}"].append({
-                    "id_flux": idx,
-                    "origine": str(row[col_depart]).strip().upper(),
-                    "destination": str(row[col_dest]).strip().upper(),
-                    "contenant": str(row[col_contenant]).strip().upper(),
-                    "est_plein": "PLEIN" in str(row.get(col_etat, "PLEIN")).upper(),
-                    "est_propre": "PROPRE" in str(row.get(col_hygiene, "PROPRE")).upper(),
-                    "tag_compatibilite": tag_compat,
-                    "exclusions": exclusions,
-                    "quantite_totale": qte,
-                    "fenetre_start": h_start,
-                    "fenetre_end": h_end,
-                    "cadence": str(row.get(col_cadence, "J0"))
-                })
+            if col_excel:
+                val_qte = row[col_excel]
+                qte = pd.to_numeric(val_qte, errors='coerce')
+                
+                if pd.notnull(qte) and qte > 0:
+                    missions_par_jour[f"Quantité {jour_nom}"].append({
+                        "id_flux": idx,
+                        "origine": str(row[col_depart]).strip().upper(),
+                        "destination": str(row[col_dest]).strip().upper(),
+                        "contenant": str(row[col_contenant]).strip().upper(),
+                        "quantite_totale": int(qte),
+                        "est_plein": "PLEIN" in str(row.get("Plein / vide", "Plein")).upper(),
+                        "est_propre": "PROPRE" in str(row.get("Sale / propre", "Propre")).upper(),
+                        "fenetre_start": h_start,
+                        "fenetre_end": h_end,
+                        "tag_compatibilite": "MIXTE_OK" if "OUI" in str(row.get("Transport mixte possible", "")).upper() else f"DEDIE_{idx}",
+                        "exclusions": []
+                    })
 
     return missions_par_jour
 
