@@ -26,7 +26,7 @@ from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauf
 # importer la fonction qui permet de paramétrer les tournées de  camions
 from modules.param_flux import afficher_parametres_logistique
 # importer les fonctions qui permettent de simuler et optimiser les tourneées hebdomadaires
-from modules.simul_flux import preparer_missions_unifiees
+from simul_flux import preparer_missions_unifiees, simuler_tournees_quotidiennes
 
 
 
@@ -285,6 +285,51 @@ elif selected == "Détail tournées BIO":
 
 elif selected == "Véhicules et paramètres":
     afficher_parametres_logistique()
+
+
+elif selected == "Synthèse transport":
+    st.title("Test du dimensionnement RH")
+
+    # 1. Préparation des missions (Lundi au Dimanche)
+    # df_flux est le DataFrame issu de votre onglet 'Saisie des Flux'
+    missions_hebdo = preparer_missions_unifiees(df_flux)
+    
+    # 2. Lancement de la simulation pour chaque jour
+    stats_semaine = []
+    
+    # Liste des jours pour l'affichage
+    jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+    jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
+                  "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
+    
+    for i, jour_col in enumerate(jours_cols):
+        # On récupère les missions du jour spécifique
+        missions_du_jour = missions_hebdo[jour_col]
+        
+        # On lance la simulation (Tetris + Manutention + Lissage 7h30)
+        # df_vehicules, df_contenants et matrice_duree doivent être chargés
+        resultats_jour = simuler_tournees_quotidiennes(
+            missions_du_jour, 
+            df_vehicules, 
+            df_contenants, 
+            matrice_duree
+        )
+        
+        # Le nombre de postes est égal à la longueur de la liste renvoyée (1 poste = 1 chauffeur de 7h30)
+        nb_postes = len(resultats_jour)
+        
+        stats_semaine.append({
+            "Jour": jours_nom[i],
+            "Nombre de postes (7h30)": nb_postes
+        })
+    
+    # 3. Affichage du tableau de test
+    df_stats = pd.DataFrame(stats_semaine)
+    st.subheader("Besoin en personnel par jour")
+    st.table(df_stats)
+    
+    # Optionnel : Afficher le maximum pour le dimensionnement fixe
+    st.info(f"**Dimensionnement cible :** Il faut prévoir **{df_stats['Nombre de postes (7h30)'].max()} chauffeurs** pour couvrir le jour le plus chargé.")
 
 
 elif selected == "Exporter":
