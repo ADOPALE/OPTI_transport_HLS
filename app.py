@@ -145,8 +145,8 @@ with st.sidebar:
     st.divider()
     options = [
         "Accueil", "Outil calcul matrices", "Importer Données", 
-        "Vérif volumes à distribuer", "🧪 Paramétrage tournées BIO", 
-        "Simul tournées BIO", "📊 Synthèse BIO", "📋 Détail tournées BIO", "Exporter"
+        "Vérif volumes à distribuer", "Paramétrage BIO", 
+        "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO", "Exporter"
     ]
     icons = [
         "house", "geo-alt", "cloud-upload", 
@@ -187,13 +187,13 @@ elif selected == "Vérif volumes à distribuer":
     else:
         st.warning("⚠️ Veuillez d'abord importer un fichier Excel dans l'onglet 'Importer Données'.")
         #__fin ajout
-elif selected == "🧪 Paramétrage tournées BIO":
+elif selected == "Paramétrage BIO":
     show_biologie_page()
     
 elif selected == "Simul tournées BIO":
     show_simulation_page()
 
-elif selected == "📊 Synthèse BIO":
+elif selected == "Synthèse BIO":
     st.title("📊 Synthèse des résultats")
     if not st.session_state.get("sim_lancee"):
         st.info("💡 Les résultats s'afficheront ici une fois la simulation lancée dans l'onglet **'Simuler & Optimiser'**.")
@@ -209,7 +209,7 @@ elif selected == "📊 Synthèse BIO":
         st.divider()
         afficher_stats_sites(resultats)
 
-elif selected == "📋 Détail tournées BIO":
+elif selected == "Détail tournées BIO":
     st.title("📋 Détail des tournées")
     if not st.session_state.get("sim_lancee"):
         st.info("💡 Veuillez lancer la simulation pour visualiser le détail des tournées et les cartes.")
