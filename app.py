@@ -135,6 +135,80 @@ if "sim_lancee" not in st.session_state:
     st.session_state.sim_lancee = False
 
 with st.sidebar:
+    # 1. Logos
+    col1, col2 = st.columns(2)
+    with col1:
+        if LOGO_ADOPALE.exists():
+            st.image(str(LOGO_ADOPALE), use_container_width=True)
+    with col2:
+        if LOGO_CHU.exists():
+            st.image(str(LOGO_CHU), use_container_width=True)
+
+    st.divider()
+    st.title("Logistique CHU")
+
+    # --- Styles communs pour uniformiser les 3 menus ---
+    menu_styles = {
+        "container": {"background-color": "white", "padding": "0", "border-radius": "0"},
+        "icon": {"color": "#00558E", "font-size": "18px"},
+        "nav-link": {"color": "black", "font-size": "14px", "font-weight": "bold", "text-align": "left", "margin": "0px"},
+        "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
+    }
+
+    # --- GROUPE 1 : DONNÉES DE BASE ---
+    st.markdown("### 💾 DONNÉES DE BASE")
+    sel_data = option_menu(
+        menu_title=None,
+        options=["Accueil", "Outil calcul matrices", "Importer Données"],
+        icons=["house-door", "grid-3x3-gap", "file-earmark-arrow-up"],
+        styles=menu_styles,
+        key="menu_data"
+    )
+
+    # --- GROUPE 2 : BIOLOGIE ---
+    st.markdown("### 🧪 BIOLOGIE")
+    sel_bio = option_menu(
+        menu_title=None,
+        options=["Vérif volumes à distribuer", "Paramétrage BIO", "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO"],
+        icons=["bar-chart-steps", "gear-wide-connected", "play-btn", "clipboard2-pulse", "signpost-split"],
+        styles=menu_styles,
+        key="menu_bio"
+    )
+    
+    # --- GROUPE 3 : EXPORT ---
+    st.markdown("### 📤 SORTIES")
+    sel_export = option_menu(
+        menu_title=None,
+        options=["Exporter"],
+        icons=["download"],
+        styles=menu_styles,
+        key="menu_export"
+    )
+
+    # --- LOGIQUE DE SYNCHRONISATION ---
+    # Ce bloc est crucial : il détecte quel menu a été cliqué en dernier 
+    # et met à jour la variable 'selected' unique pour le reste de app.py
+    
+    if "active_menu" not in st.session_state:
+        st.session_state.active_menu = "Accueil"
+
+    # Détection du changement dans chaque menu
+    if st.session_state.menu_data != st.session_state.get('prev_data'):
+        st.session_state.active_menu = st.session_state.menu_data
+        st.session_state.prev_data = st.session_state.menu_data
+        
+    if st.session_state.menu_bio != st.session_state.get('prev_bio'):
+        st.session_state.active_menu = st.session_state.menu_bio
+        st.session_state.prev_bio = st.session_state.menu_bio
+        
+    if st.session_state.menu_export != st.session_state.get('prev_export'):
+        st.session_state.active_menu = st.session_state.menu_export
+        st.session_state.prev_export = st.session_state.menu_export
+
+    # C'est cette variable que votre app.py utilisera
+    selected = st.session_state.active_menu
+"""
+with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         if LOGO_ADOPALE.exists():
@@ -165,7 +239,7 @@ with st.sidebar:
             "nav-link": {"color": "black", "font-size": "15px", "font-weight": "bold", "text-align": "left", "margin": "5px"},
             "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
-    )
+    )"""
 
     if st.session_state.sim_lancee:
         st.divider()
