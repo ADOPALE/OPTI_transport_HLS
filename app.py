@@ -120,7 +120,7 @@ def show_simulation_page():
 
 
 # ------------ INITIALISATION DU VISUEL DE L'APPLICATION---------------
-
+"""
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -219,6 +219,97 @@ with st.sidebar:
         st.session_state.prev_export = st.session_state.menu_export
 
     # C'est cette variable que votre app.py utilisera
+    selected = st.session_state.active_menu
+"""
+
+st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
+
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
+
+LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.jpg"
+LOGO_CHU = ASSETS_DIR / "CHU Nantes.png"
+
+if "active_menu" not in st.session_state:
+    st.session_state.active_menu = "Accueil"
+
+# --- Listes de contrôle pour le forçage d'index ---
+opts_data = ["Accueil", "Outil calcul matrices", "Importer Données"]
+opts_bio = ["Paramétrage BIO", "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO"]
+opts_dist = ["Vérif volumes à distribuer", "Véhicules et paramètres", "Simul tournées", "Synthèse transport", "Détail tournées"]
+opts_exp = ["Exporter"]
+
+with st.sidebar:
+    # 1. Logos
+    col1, col2 = st.columns(2)
+    with col1:
+        if LOGO_ADOPALE.exists(): st.image(str(LOGO_ADOPALE), use_container_width=True)
+    with col2:
+        if LOGO_CHU.exists(): st.image(str(LOGO_CHU), use_container_width=True)
+
+    st.divider()
+
+    menu_styles = {
+        "container": {"background-color": "white", "padding": "0", "border-radius": "0"},
+        "icon": {"color": "#00558E", "font-size": "18px"},
+        "nav-link": {"color": "black", "font-size": "14px", "font-weight": "bold", "text-align": "left", "margin": "0px"},
+        "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
+    }
+
+    # --- Fonction de calcul d'index ---
+    # Si l'option n'est pas dans la liste, on retourne un index élevé (ex: 99) 
+    # pour forcer le menu à ne rien mettre en surbrillance.
+    def get_index(options, active):
+        return options.index(active) if active in options else 99
+
+    # --- GROUPE 1 ---
+    st.markdown("### 💾 DONNÉES DE BASE")
+    sel_data = option_menu(
+        None, opts_data, icons=["house-door", "grid-3x3-gap", "file-earmark-arrow-up"],
+        styles=menu_styles, key="menu_data",
+        default_index=get_index(opts_data, st.session_state.active_menu)
+    )
+
+    # --- GROUPE 2 ---
+    st.markdown("### 🧪 BIOLOGIE")
+    sel_bio = option_menu(
+        None, opts_bio, icons=["gear-wide-connected", "play-btn", "clipboard2-pulse", "signpost-split"],
+        styles=menu_styles, key="menu_bio",
+        default_index=get_index(opts_bio, st.session_state.active_menu)
+    )
+
+    # --- GROUPE 3 ---
+    st.markdown("### 🚚 DISTRIBUTION")
+    sel_dist = option_menu(
+        None, opts_dist, icons=["bar-chart-steps", "truck-front", "play-btn", "clipboard2-pulse", "signpost-split"],
+        styles=menu_styles, key="menu_distrib",
+        default_index=get_index(opts_dist, st.session_state.active_menu)
+    )
+    
+    # --- GROUPE 4 ---
+    st.markdown("### 📤 SORTIES")
+    sel_export = option_menu(
+        None, opts_exp, icons=["download"],
+        styles=menu_styles, key="menu_export",
+        default_index=get_index(opts_exp, st.session_state.active_menu)
+    )
+
+    # --- LOGIQUE DE SYNCHRONISATION ---
+    # On vérifie quel menu vient d'être cliqué
+    new_selection = None
+    if st.session_state.menu_data in opts_data and st.session_state.menu_data != st.session_state.active_menu:
+        new_selection = st.session_state.menu_data
+    elif st.session_state.menu_bio in opts_bio and st.session_state.menu_bio != st.session_state.active_menu:
+        new_selection = st.session_state.menu_bio
+    elif st.session_state.menu_distrib in opts_dist and st.session_state.menu_distrib != st.session_state.active_menu:
+        new_selection = st.session_state.menu_distrib
+    elif st.session_state.menu_export in opts_exp and st.session_state.menu_export != st.session_state.active_menu:
+        new_selection = st.session_state.menu_export
+
+    if new_selection:
+        st.session_state.active_menu = new_selection
+        st.rerun() # Obligatoire pour forcer les menus à recalculer leur index de sélection
+
     selected = st.session_state.active_menu
 
 
