@@ -237,6 +237,88 @@ def afficher_stats_sites(flotte):
                     site = point['site']
                     # On ignore le dépôt HLS pour le graphique des sites périphériques
                     if site != "HLS":
+                        h_total = point['heure']
+                        # On prépare déjà le texte de l'heure pour l'infobulle
+                        h_str = f"{int(h_total//60):02d}:{int(h_total%60):02d}"
+                        
+                        passages_data.append({
+                            "Site": site,
+                            "Heure_Num": h_total, # Pour la position X
+                            "Heure_Texte": h_str,  # Pour l'affichage bulle
+                            "Véhicule": v_id
+                        })
+
+    if not passages_data:
+        st.warning("Aucun passage sur site détecté (hors HLS).")
+        return
+
+    df_passages = pd.DataFrame(passages_data)
+
+    # 2. Affichage du KPI global
+    st.metric("Nombre total de tournées réalisées", f"{total_tournees}")
+
+    # 3. Graphique de dispersion (Scatter Plot) des passages
+    st.write("**Horaires de passage par site**")
+
+    fig_sites = px.scatter(
+        df_passages,
+        x="Heure_Num",
+        y="Site",
+        color="Véhicule",
+        symbol="Véhicule",
+        # On attache les données propres au point
+        custom_data=["Heure_Texte", "Véhicule"],
+        title="Répartition des collectes sur la journée"
+    )
+
+    # 4. Personnalisation UNIQUE de l'affichage et de l'infobulle
+    fig_sites.update_traces(
+        marker=dict(size=12, opacity=0.8),
+        hovertemplate=(
+            "<b>%{y}</b><br>" +
+            "Passage à <b>%{customdata[0]}</b><br>" +
+            "Véhicule : %{customdata[1]}" +
+            "<extra></extra>"
+        )
+    )
+
+    # 5. Configuration des axes et du layout
+    fig_sites.update_layout(
+        xaxis=dict(
+            title="Heure de passage",
+            tickvals=list(range(300, 1321, 60)),
+            ticktext=[f"{h//60}h" for h in range(300, 1321, 60)],
+            range=[300, 1320]
+        ),
+        yaxis=dict(
+            title=None, 
+            categoryorder='category ascending'
+        ),
+        height=400 + (len(df_passages["Site"].unique()) * 20),
+        margin=dict(l=10, r=10, t=50, b=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    st.plotly_chart(fig_sites, use_container_width=True)
+"""
+def afficher_stats_sites(flotte):
+    """
+    Affiche les statistiques par site et le graphique temporel des passages.
+    """
+    st.subheader("🏥 Données sur les sites collectés")
+
+    passages_data = []
+    total_tournees = 0
+
+    # 1. Extraction des passages depuis la structure de la flotte
+    for v_id, vacations in flotte.items():
+        for vacation in vacations:
+            for tournee in vacation:
+                total_tournees += 1
+                for point in tournee:
+                    site = point['site']
+                    # On ignore le dépôt HLS pour le graphique des sites périphériques
+                    if site != "HLS":
                         passages_data.append({
                             "Site": site,
                             "Heure": point['heure'],
@@ -308,7 +390,7 @@ def afficher_stats_sites(flotte):
     )
 
     st.plotly_chart(fig_sites, use_container_width=True)
-
+"""
 
 
 def afficher_detail_flotte_vehicules(flotte, df_dist):
