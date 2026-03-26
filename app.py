@@ -300,7 +300,7 @@ elif selected == "Synthèse transport":
     # On extrait tout ce dont l'algorithme a besoin
     data = st.session_state['data']
     df_flux = data['m_flux']
-    df_vehicules = data['param_véhicules']
+    df_vehicules = data['param_vehicules']
     df_contenants = data['param_contenants']
     matrice_duree = data['matrice_duree']
 
