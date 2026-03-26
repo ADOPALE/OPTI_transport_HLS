@@ -293,7 +293,7 @@ elif selected == "Synthèse transport":
     # 1. Préparation des missions (Lundi au Dimanche)
    
     # Exemple de chargement (à adapter selon votre code)
-    if 'data_chargee' in st.session_state:
+    if 'data' in st.session_state:
         df_flux = st.session_state['m_flux'] # Assurez-vous que le nom correspond
     else:
         st.warning("Veuillez charger les données de flux dans l'onglet précédent.")
