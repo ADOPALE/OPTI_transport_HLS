@@ -1,7 +1,29 @@
+import pandas as pd
+import streamlit as st
+
+def convertir_temps_manutention(valeur):
+    """
+    Convertit une valeur Excel (datetime.time, Timestamp ou str) en secondes.
+    Indispensable pour traiter les colonnes de manutention (ex: 00:00:25).
+    """
+    if isinstance(valeur, pd.Timestamp) or hasattr(valeur, 'hour'):
+        return valeur.hour * 3600 + valeur.minute * 60 + valeur.second
+    elif isinstance(valeur, str):
+        try:
+            # Gère le format HH:MM:SS ou MM:SS
+            parts = list(map(int, valeur.split(':')))
+            if len(parts) == 3:
+                return parts[0] * 3600 + parts[1] * 60 + parts[2]
+            elif len(parts) == 2:
+                return parts[0] * 60 + parts[1]
+        except:
+            return 0.0
+    return float(valeur) if pd.notnull(valeur) else 0.0
+
 def preparer_missions_unifiees(df_flux):
     """
-    Transforme le flux Excel en missions avec gestion fine des exclusions 
-    et du transport mixte.
+    Transforme le flux brut en dictionnaire de missions par jour.
+   
     """
     cols = {
         "nature": "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage ?)",
@@ -25,25 +47,20 @@ def preparer_missions_unifiees(df_flux):
     missions_par_jour = {j: [] for j in jours_cols}
 
     for idx, row in df_vol.iterrows():
-        # Gestion des horaires
         try:
             h_start = row[cols["h_dispo"]].hour * 60 + row[cols["h_dispo"]].minute
             h_end = row[cols["h_limite"]].hour * 60 + row[cols["h_limite"]].minute
         except:
             h_start, h_end = 360, 1200 
 
-        # Logique de mixité
         mixte_possible = str(row[cols["mixte"]]).strip().upper() == "OUI"
-        # Si mixte impossible, on crée un tag unique pour forcer le camion dédié
         tag_compatibilite = "MIXTE_OK" if mixte_possible else f"DEDIE_{idx}"
-        
-        # Liste des exclusions (ex: "Sale, Déchets") nettoyée
         exclusions = [x.strip().upper() for x in str(row[cols["regle_excl"]]).split(',') if x.strip()]
 
         for jour in jours_cols:
             qte = pd.to_numeric(row[jour], errors='coerce')
             if qte > 0:
-                mission = {
+                missions_par_jour[jour].append({
                     "id_flux": idx,
                     "origine": str(row[cols["depart"]]).strip().upper(),
                     "destination": str(row[cols["dest"]]).strip().upper(),
@@ -58,104 +75,131 @@ def preparer_missions_unifiees(df_flux):
                     "quantite_totale": qte,
                     "fenetre_start": h_start,
                     "fenetre_end": h_end
-                }
-                missions_par_jour[jour].append(mission)
-
+                })
     return missions_par_jour
-
-
-
 
 def calculer_capacite_emport_finale(mission, vehicule_name, df_vehicules, df_contenants):
     """
-    FONCTION DE RÉFÉRENCE : Calcule la capacité maximale réelle.
-    Remplace les approches simplistes par un calcul de rangées/colonnes avec pivotement.
+    Calcule la capacité réelle via Tetris (rangées/colonnes) avec pivotement à 90°.
+    Vérifie la compatibilité technique (OUI/NON) et la charge utile.
+   
     """
-    config = st.session_state["params_logistique"]
-    taux_remplissage = config["securite_remplissage"]
+    config = st.session_state.get("params_logistique", {"securite_remplissage": 0.85})
+    taux = config["securite_remplissage"]
 
-    # 1. Récupération des dimensions et contraintes
     spec_v = df_vehicules[df_vehicules['Types'] == vehicule_name].iloc[0]
-    spec_c = df_contenants[df_contenants['libellé'] == mission['contenant']].iloc[0]
-
-    # --- VERIFICATION TECHNIQUE PREALABLE ---
-    # Si le véhicule n'est pas équipé pour ce contenant (ton tableau OUI/NON)
+    # Vérification compatibilité (OUI/NON dans le tableau véhicules)
     if spec_v.get(mission['contenant'], "NON") == "NON":
         return 0
 
-    # 2. Dimensions internes et unitaires
+    spec_c = df_contenants[df_contenants['libellé'] == mission['contenant']].iloc[0]
+    
+    # Dimensions
     L_cam, l_cam = spec_v['dim longueur interne (m)'], spec_v['dim largeur interne (m)']
     dim1, dim2 = spec_c['dim longueur (m)'], spec_c['dim largeur (m)']
 
-    # 3. LE TETRIS : Test des deux orientations
-    # Orientation A : Longueur contenant sur Longueur camion
+    # Tetris avec Pivot
     capa_A = (L_cam // dim1) * (l_cam // dim2)
-    # Orientation B : Largeur contenant sur Longueur camion (Pivot 90°)
     capa_B = (L_cam // dim2) * (l_cam // dim1)
-    
     meilleur_sol = max(capa_A, capa_B)
 
-    # 4. LA MASSE : Vérification du poids max
+    # Masse
     poids_u = spec_c['Poids plein (kg)'] if mission['est_plein'] else spec_c['Poids vide (kg)']
     cu_kg = float(str(spec_v['Poids max chargement']).upper().replace('T', '').replace(',', '.').strip()) * 1000
     
     capa_poids = int(cu_kg // poids_u) if poids_u > 0 else meilleur_sol
 
-    # 5. SYNTHÈSE : On prend le plus restrictif des deux (Sol vs Poids)
-    # On applique le taux de sécurité (ex: 85%) sur la capacité physique
-    resultat_final = int(min(meilleur_sol, capa_poids) * taux_remplissage)
+    return int(min(meilleur_sol, capa_poids) * taux)
 
-    return max(0, resultat_final)
-
-
-
-
-def calculer_duree_rotation(mission, vehicule_name, qte_a_transporter, df_vehicules, matrice_duree):
+def calculer_duree_rotation(mission, vehicule_name, qte, df_vehicules, matrice_duree):
     """
-    Calcule le temps total d'un aller-retour (Chargement + Trajet + Déchargement + Retour).
+    Calcule le cycle complet : Mise à quai + Manutention + Trajet A/R.
+   
     """
     spec_v = df_vehicules[df_vehicules['Types'] == vehicule_name].iloc[0]
     
-    # A. Temps de manutention (en secondes, converti en minutes)
-    t_mise_a_quai = 10 # Valeur par défaut si format Excel complexe, sinon extraire
-    t_unit_sec = spec_v['Manutention on sans quai (minutes / contenants)'] # On suppose secondes vu les chiffres
+    t_quai_min = convertir_temps_manutention(spec_v['Temps de mise à quai - manœuvre, contact/admin min (minutes)']) / 60
+    t_unit_sec = convertir_temps_manutention(spec_v['Manutention on sans quai (minutes / contenants)'])
     
-    # On calcule le temps de chargement + déchargement
-    manutention_totale = (t_mise_a_quai * 2) + ((t_unit_sec * qte_a_transporter * 2) / 60)
+    manut_min = (t_quai_min * 2) + ((t_unit_sec * qte * 2) / 60)
     
-    # B. Temps de trajet (Aller + Retour)
-    # On récupère la durée entre l'origine et la destination dans ta matrice_duree
-    duree_trajet_aller = matrice_duree.loc[mission['origine'], mission['destination']]
-    duree_trajet_retour = matrice_duree.loc[mission['destination'], mission['origine']]
+    try:
+        trajet = matrice_duree.loc[mission['origine'], mission['destination']] * 2
+    except:
+        trajet = 60 # Défaut
+        
+    return manut_min + trajet
+
+def generer_rotations_physiques(missions, df_vehicules, df_contenants):
+    """
+    Éclate les volumes en trajets selon le meilleur véhicule compatible.
+    """
+    rotations = []
+    vehicules_autorises = st.session_state["params_logistique"]["vehicules_selectionnes"]
+
+    for m in missions:
+        # Trouver le véhicule le plus performant pour ce flux
+        meilleure_capa, meilleur_v = 0, None
+        for v_name in vehicules_autorises:
+            c = calculer_capacite_emport_finale(m, v_name, df_vehicules, df_contenants)
+            if c > meilleure_capa:
+                meilleure_capa, meilleur_v = c, v_name
+        
+        if meilleure_capa == 0:
+            continue
+
+        qte_reste = m['quantite_totale']
+        while qte_reste > 0:
+            emport = min(qte_reste, meilleure_capa)
+            rotations.append({
+                "mission_origine": m, "vehicule": meilleur_v, "qte_chargee": emport,
+                "fenetre_start": m['fenetre_start'], "fenetre_end": m['fenetre_end']
+            })
+            qte_reste -= emport
+    return rotations
+
+def lisser_et_assigner(rotations, df_vehicules, matrice_duree, config):
+    """
+    Ordonne les trajets et les regroupe en journées de 7h30 (450 min).
+    """
+    rotations.sort(key=lambda x: x['fenetre_end'])
+    postes = []
+    h_prise = config['rh']['h_prise_min'].hour * 60 + config['rh']['h_prise_min'].minute
+    duree_max = config['rh']['amplitude_totale']
+
+    current_poste = {"duree": 0, "tours": []}
     
-    return manutention_totale + duree_trajet_aller + duree_trajet_retour
-
-
-
-
+    for rot in rotations:
+        d = calculer_duree_rotation(rot['mission_origine'], rot['vehicule'], rot['qte_chargee'], df_vehicules, matrice_duree)
+        
+        if current_poste["duree"] + d <= duree_max:
+            current_poste["tours"].append(rot)
+            current_poste["duree"] += d
+        else:
+            postes.append(current_poste)
+            current_poste = {"duree": d, "tours": [rot]}
+            
+    if current_poste["tours"]:
+        postes.append(current_poste)
+    return postes
 
 def simuler_tournees_quotidiennes(missions_du_jour, df_vehicules, df_contenants, matrice_duree):
     """
-    Fonction principale qui transforme les besoins en planning de tournées.
+    Moteur principal : Groupage -> Rotations -> Lissage -> Postes RH.
     """
     config = st.session_state["params_logistique"]
-    postes_chauffeurs = [] # Liste des plannings de 7h30 créés
+    resultat_final = []
     
-    # --- ÉTAPE 1 : GROUPER PAR COMPATIBILITÉ ---
-    # On crée des lots de missions qui peuvent théoriquement partager un camion
-    groupes = filtrer_par_compatibilite(missions_du_jour)
+    # 1. Groupage par compatibilité
+    groupes = {}
+    for m in missions_du_jour:
+        cle = (m['est_propre'], m['tag_compatibilite'])
+        groupes.setdefault(cle, []).append(m)
 
-    for groupe_id, missions in groupes.items():
-        # --- ÉTAPE 2 : CALCULER LE NOMBRE DE TRAJETS ---
-        # Pour chaque mission, on définit le véhicule optimal et le nb de rotations
+    # 2. Simulation par groupe
+    for missions in groupes.values():
         rotations = generer_rotations_physiques(missions, df_vehicules, df_contenants)
-        
-        # --- ÉTAPE 3 : LISSAGE TEMPOREL ---
-        # On place les rotations sur une frise chronologique dès 6h00
-        planning_temporel = lisser_rotations(rotations, matrice_duree, config)
-        
-        # --- ÉTAPE 4 : ASSIGNATION AUX POSTES RH ---
-        # On remplit des "sacs" de 7h30 avec ces rotations
-        postes_chauffeurs.extend(assigner_aux_chauffeurs(planning_temporel, config))
+        postes = lisser_et_assigner(rotations, df_vehicules, matrice_duree, config)
+        resultat_final.extend(postes)
 
-    return postes_chauffeurs
+    return resultat_final
