@@ -132,14 +132,6 @@ TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 
 if "sim_lancee" not in st.session_state:
     st.session_state.sim_lancee = False
-
-if st.session_state.sim_lancee:
-        st.divider()
-        if st.button("🔄 Réinitialiser la simulation", use_container_width=True):
-            st.session_state.sim_lancee = False
-            st.session_state.resultat_flotte = None
-            st.rerun()
-
     
 with st.sidebar:
     # 1. Logos
@@ -214,40 +206,6 @@ with st.sidebar:
 
     # C'est cette variable que votre app.py utilisera
     selected = st.session_state.active_menu
-"""
-with st.sidebar:
-    col1, col2 = st.columns(2)
-    with col1:
-        if LOGO_ADOPALE.exists():
-            st.image(str(LOGO_ADOPALE), use_container_width=True)
-    with col2:
-        if LOGO_CHU.exists():
-            st.image(str(LOGO_CHU), use_container_width=True)
-
-    st.divider()
-    options = [
-        "Accueil", "Outil calcul matrices", "Importer Données", 
-        "Vérif volumes à distribuer", "Paramétrage BIO", 
-        "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO", "Exporter"
-    ]
-    icons = [
-        "house-door", "calculator", "cloud-arrow-up", 
-        "bar-chart-steps", "gear-wide-connected", "play-btn", 
-        "clipboard2-pulse", "signpost-split", "file-earmark-arrow-down"
-    ]
-
-    selected = option_menu(
-        menu_title=None,
-        options=options,
-        icons=icons,
-        styles={
-            "container": {"background-color": "white", "border-radius": "0"},
-            "icon": {"color": "black", "font-size": "18px"},
-            "nav-link": {"color": "black", "font-size": "15px", "font-weight": "bold", "text-align": "left", "margin": "5px"},
-            "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
-        }
-    )
-"""
 
 
 if selected == "Accueil":
