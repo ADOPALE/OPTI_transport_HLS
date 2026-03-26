@@ -291,6 +291,13 @@ elif selected == "Synthèse transport":
     st.title("Test du dimensionnement RH")
 
     # 1. Préparation des missions (Lundi au Dimanche)
+   
+    # Exemple de chargement (à adapter selon votre code)
+    if 'data_chargee' in st.session_state:
+        df_flux = st.session_state['df_flux'] # Assurez-vous que le nom correspond
+    else:
+        st.warning("Veuillez charger les données de flux dans l'onglet précédent.")
+        st.stop() # Arrête l'exécution si la variable n'existe pas
     # df_flux est le DataFrame issu de votre onglet 'Saisie des Flux'
     missions_hebdo = preparer_missions_unifiees(df_flux)
     
