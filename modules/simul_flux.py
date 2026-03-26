@@ -79,36 +79,42 @@ def preparer_missions_unifiees(df_flux):
 
 
 def calculer_capacite_emport_finale(mission, vehicule_name, df_vehicules, df_contenants):
-    """Calcule la capacité réelle (Tetris + Poids)."""
+    # 1. Récupération des paramètres
     config = st.session_state.get("params_logistique", {})
-    taux = config.get("securite_remplissage", 0.85)
+    taux = config.get("securite_remplissage", 1.0) # Par défaut 100% si non défini
+    if taux == 0: taux = 1.0 # Sécurité anti-zero
 
+    # 2. Récupération des specs véhicule
     spec_v = df_vehicules[df_vehicules['Types'] == vehicule_name].iloc[0]
     
-    # Vérification de compatibilité technique (OUI/NON dans l'Excel)
-    if spec_v.get(mission['contenant'], "NON") == "NON":
+    # --- DEBUG INTERNE ---
+    # On nettoie le nom du contenant pour la comparaison
+    nom_contenant = mission['contenant'].strip().upper()
+    
+    # On cherche la colonne qui correspond au contenant dans le tableau véhicule
+    col_compat = next((c for c in df_vehicules.columns if nom_contenant in c.upper()), None)
+    
+    # Si le véhicule ne peut pas porter ce contenant (marqué NON)
+    if col_compat and str(spec_v[col_compat]).upper() == "NON":
         return 0
 
-    spec_c = df_contenants[df_contenants['libellé'] == mission['contenant']].iloc[0]
-    
-    L_cam, l_cam = spec_v['dim longueur interne (m)'], spec_v['dim largeur interne (m)']
-    dim1, dim2 = spec_c['dim longueur (m)'], spec_c['dim largeur (m)']
-
-    # Calcul Tetris avec rotation
-    capa_A = (L_cam // dim1) * (l_cam // dim2)
-    capa_B = (L_cam // dim2) * (l_cam // dim1)
-    meilleur_sol = max(capa_A, capa_B)
-
-    # Vérification du poids max
-    poids_u = spec_c['Poids plein (kg)'] if mission['est_plein'] else spec_c['Poids vide (kg)']
+    # 3. Calcul de la capacité (Dimensions)
     try:
-        cu_kg = float(str(spec_v['Poids max chargement']).upper().replace('T', '').replace(',', '.').strip()) * 1000
-    except:
-        cu_kg = 5000.0
-    
-    capa_poids = int(cu_kg // poids_u) if poids_u > 0 else meilleur_sol
+        spec_c = df_contenants[df_contenants['libellé'].str.upper() == nom_contenant].iloc[0]
+        L_cam, l_cam = float(spec_v['dim longueur interne (m)']), float(spec_v['dim largeur interne (m)'])
+        dim1, dim2 = float(spec_c['dim longueur (m)']), float(spec_c['dim largeur (m)'])
+        
+        capa_A = (L_cam // dim1) * (l_cam // dim2)
+        capa_B = (L_cam // dim2) * (l_cam // dim1)
+        capa_finale = max(capa_A, capa_B)
+    except Exception as e:
+        # Si le calcul géométrique échoue, on prend une valeur par défaut selon le type
+        capa_finale = 1 
 
-    return int(min(meilleur_sol, capa_poids) * taux)
+    return max(1, int(capa_finale * taux))
+
+
+
 
 def calculer_duree_rotation(mission, vehicule_name, qte, df_vehicules, matrice_duree):
     """Calcule le cycle complet en minutes."""
@@ -127,40 +133,45 @@ def calculer_duree_rotation(mission, vehicule_name, qte, df_vehicules, matrice_d
         
     return manut_min + trajet
 
+
 def simuler_tournees_quotidiennes(missions_du_jour, df_vehicules, df_contenants, matrice_duree):
-    """Moteur de groupage et assignation RH."""
     if not missions_du_jour:
         return []
 
-    config = st.session_state.get("params_logistique", {"rh": {"amplitude_totale": 450}})
-    v_selectionnes = config.get("vehicules_selectionnes", df_vehicules['Types'].tolist())
+    # On récupère les types de véhicules disponibles
+    v_selectionnes = df_vehicules['Types'].tolist()
     
     rotations_liste = []
 
     for m in missions_du_jour:
+        # On cherche le véhicule qui a la plus grosse capacité pour cette mission
         meilleure_capa, meilleur_v = 0, None
         for v_name in v_selectionnes:
             capa = calculer_capacite_emport_finale(m, v_name, df_vehicules, df_contenants)
             if capa > meilleure_capa:
                 meilleure_capa, meilleur_v = capa, v_name
         
-        if meilleure_capa <= 0: continue
+        # Si on a trouvé un véhicule capable
+        if meilleur_v and meilleure_capa > 0:
+            qte_restante = m['quantite_totale']
+            while qte_restante > 0:
+                emport = min(qte_restante, meilleure_capa)
+                duree = calculer_duree_rotation(m, meilleur_v, emport, df_vehicules, matrice_duree)
+                rotations_liste.append({"duree": duree, "fin": m['fenetre_end']})
+                qte_restante -= emport
+        else:
+            # DEBUG : Afficher si une mission ne trouve aucun camion
+            # st.warning(f"Aucun véhicule compatible pour {m['contenant']}")
+            pass
 
-        qte_restante = m['quantite_totale']
-        while qte_restante > 0:
-            emport = min(qte_restante, meilleure_capa)
-            duree = calculer_duree_rotation(m, meilleur_v, emport, df_vehicules, matrice_duree)
-            rotations_liste.append({"duree": duree, "fin": m['fenetre_end']})
-            qte_restante -= emport
-
-    # Lissage RH (7h30 par chauffeur)
+    # Lissage RH : On regroupe les rotations en journées de 7h30 (450 min)
+    if not rotations_liste: return []
+    
     rotations_liste.sort(key=lambda x: x['fin'])
     postes = []
     current_poste_duree = 0
-    amp_max = config.get("rh", {}).get("amplitude_totale", 450)
-
     for rot in rotations_liste:
-        if current_poste_duree + rot["duree"] <= amp_max:
+        if current_poste_duree + rot["duree"] <= 450:
             current_poste_duree += rot["duree"]
         else:
             postes.append(current_poste_duree)
