@@ -150,7 +150,7 @@ with st.sidebar:
         "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO", "Exporter"
     ]
     icons = [
-        "house-door", "r-square", "database-add", 
+        "house-door", "calculator", "database-add", 
         "bar-chart-steps", "gear-wide-connected", "play-btn", 
         "clipboard2-pulse", "signpost-split", "file-earmark-arrow-down"
     ]
