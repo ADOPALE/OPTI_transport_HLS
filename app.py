@@ -119,7 +119,6 @@ def show_simulation_page():
 
 
 
-
 # ------------ INITIALISATION DU VISUEL DE L'APPLICATION---------------
 
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
