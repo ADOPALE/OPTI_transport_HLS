@@ -13,55 +13,55 @@ def minutes_to_hhmm(minutes):
     return f"{h:02d}:{m:02d}"
 
 
-
-
 def generate_target_windows(sites_config):
     """
     Génère les rendez-vous théoriques.
-    Le 1er passage est calé sur 'open'.
-    Le dernier passage est calé sur 'close' avec interdiction de passer avant.
+    - 1er passage : au plus tôt à l'heure 'open'.
+    - Dernier passage : au plus tôt à l'heure 'close'.
+    - Intermédiaires : répartis équitablement.
     """
     tasks = []
     for site_name, config in sites_config.items():
         ouv, fer, freq = config['open'], config['close'], config['freq']
         
-        # Sécurité : si 1 seul passage, on le met à la fermeture
+        # 1. Calcul des points de passage cibles
         if freq <= 1:
-            points_passage = [fer]
+            points_passage = [fer] # Si 1 seul passage, on privilégie la fin de journée
         else:
-            # On calcule l'intervalle entre chaque passage pour remplir l'amplitude
-            # Exemple : ouv=8h, fer=18h, freq=3 => Passages à 8h, 13h, 18h
+            # Répartition linéaire : le premier à 'ouv', le dernier à 'fer'
             intervalle = (fer - ouv) / (freq - 1)
             points_passage = [ouv + (i * intervalle) for i in range(freq)]
         
-        # Marge de souplesse pour les calculs (ex: 15-20 min)
-        # On peut la rendre proportionnelle ou fixe
-        marge_standard = 20 
+        # Marge de retard autorisée (pour donner de la souplesse à l'algorithme)
+        # On autorise par exemple 20 minutes de "mou" après l'heure cible
+        marge_retard = 20 
 
         for i, cible in enumerate(points_passage):
-            is_dernier = (i == len(points_passage) - 1)
             is_premier = (i == 0)
+            is_dernier = (i == len(points_passage) - 1)
 
-            if is_dernier:
-                # CONTRAINTE FORTE : Pas plus tôt que l'heure cible (fermeture)
-                # On met une marge basse de 0 et une marge haute de 15 min
-                window = (cible, cible + 15)
-            elif is_premier:
-                # Premier passage : on autorise un peu d'avance ou de retard (± 10 min)
-                window = (max(ouv - 5, cible - 10), cible + 10)
+            if is_premier or is_dernier:
+                # --- CONTRAINTE "AU PLUS TÔT" ---
+                # La fenêtre commence exactement à l'heure cible (cible, cible + marge)
+                # L'algorithme ne peut pas planifier avant 'cible'
+                window = (cible, cible + marge_retard)
             else:
-                # Passages intermédiaires : souplesse standard
-                window = (cible - marge_standard, cible + marge_standard)
+                # Passages intermédiaires : on garde une petite marge avant/après 
+                # pour l'optimisation, ou on peut aussi les durcir si besoin.
+                window = (cible - 10, cible + 10)
 
             tasks.append({
                 'site_name': str(site_name).strip().upper(),
                 'window': window,
                 'target_time': cible,
+                'is_fixed': is_premier or is_dernier, # Flag utile pour le débug
                 'done': False
             })
 
-    # Tri chronologique pour faciliter le travail du moteur
+    # Tri pour le moteur de calcul
     return sorted(tasks, key=lambda x: x['window'][0])
+
+
 
 
 '''
