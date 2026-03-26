@@ -253,7 +253,7 @@ def afficher_stats_sites(flotte):
         return
 
     # À ajouter temporairement pour débugger
-    print(f"DEBUG: Sites trouvés dans la simulation : {set([p['site'] for v in flotte.values() for vac in v for trne in vac for p in trne])}")
+    st.write(f"DEBUG: Sites trouvés dans la simulation : {set([p['site'] for v in flotte.values() for vac in v for trne in vac for p in trne])}")
     
     df_passages = pd.DataFrame(passages_data)
 
