@@ -63,7 +63,81 @@ def show_flux_control_charts():
         specs=[[{"type": "bar"}], [{"type": "table"}]]
     )
 
-    df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().
+    df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().reset_index()
+    
+    for func in fonctions:
+        base_color = color_map_base.get(func, "#808080")
+        # Calcul sécurisé de la couleur sombre (transparence)
+        try:
+            r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+            dark_color = f"rgba({r}, {g}, {b}, 0.4)"
+        except:
+            dark_color = "rgba(128, 128, 128, 0.4)"
+        
+        for sens in ["Aller", "Retour"]:
+            subset = df_gb[(df_gb[col_fonc].astype(str) == func) & (df_gb[col_sens] == sens)]
+            color = base_color if sens == "Aller" else dark_color
+            
+            fig.add_trace(go.Bar(
+                name=f"{func} ({sens})",
+                x=subset["Jour"], y=subset["Valeur"],
+                marker_color=color,
+                offsetgroup=sens,
+                text=subset["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
+                textposition='inside',
+                insidetextanchor='middle',
+                textfont=dict(color=get_contrast_color(color), size=10),
+                legendgroup=func
+            ), row=1, col=1)
+
+    # Tableau
+    header_list = ["<b>Volumes / Jours</b>"] + [f"<b>{j}</b>" for j in ordre]
+    rows = [[f"<b>{lbl}</b>"] + [int(v) for v in df_pivot.loc[lbl].values] for lbl in ["Aller", "Retour", "TOTAL (A+R)"]]
+
+    fig.add_trace(go.Table(
+        header=dict(values=header_list, fill_color='#1f1f1f', align='center', font=dict(color='white', size=11)),
+        cells=dict(
+            values=list(zip(*rows)),
+            fill_color=[['#262626', '#1a1a1a', 'black']*8],
+            align='center', font=dict(color='white', size=10), height=22
+        )
+    ), row=2, col=1)
+
+    fig.update_layout(
+        barmode='stack', template="plotly_dark", height=500,
+        margin=dict(t=0, b=0, l=10, r=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=10))
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- DÉTAIL PAR FONCTION SUPPORT ---
+    st.markdown("### 🔍 Détail par Fonction Support")
+    for f in fonctions:
+        df_sub = df_long[df_long[col_fonc].astype(str) == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
+        if df_sub["Valeur"].sum() > 0:
+            with st.expander(f"Analyse : {f}", expanded=False):
+                base_color = color_map_base.get(f, "#808080")
+                try:
+                    r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+                    dark_color = f"rgba({r}, {g}, {b}, 0.4)"
+                except:
+                    dark_color = "rgba(128, 128, 128, 0.4)"
+                
+                fig_sub = go.Figure()
+                for sens in ["Aller", "Retour"]:
+                    sub_s = df_sub[df_sub[col_sens] == sens]
+                    color = base_color if sens == "Aller" else dark_color
+                    
+                    fig_sub.add_trace(go.Bar(
+                        name=sens, x=sub_s["Jour"], y=sub_s["Valeur"],
+                        marker_color=color,
+                        text=sub_s["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
+                        textposition='auto',
+                        textfont=dict(color=get_contrast_color(color))
+                    ))
+                fig_sub.update_layout(template="plotly_dark", barmode="group", height=300)
+                st.plotly_chart(fig_sub, use_container_width=True)
 
 """
 def show_flux_control_charts():
