@@ -21,10 +21,10 @@ from modules.param_bio import show_biologie_page
 # importer la fonction qui calcule les tournées de biologie
 from modules.biologie_engine import run_optimization
 # importer les fonctions qui permettent de visualiser les tournées calculées de biologie dans les onglets synthèse et détail des tournées. 
-# ____ fonction en cours de travail.
 from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauffeurs, afficher_stats_sites, afficher_detail_flotte_vehicules, afficher_detail_itineraire
 
-
+# importer la fonction qui permet de paramétrer les tournées de  camions
+from modules.param_flux import afficher_parametres_logistique
 
 
 
@@ -281,6 +281,8 @@ elif selected == "Détail tournées BIO":
                 # L'appel à la fonction
                 afficher_detail_itineraire(v_sel, vac_sel, sites_adresses, hls_adresse)
 
+elif selected == "Véhicules et paramètres":
+    afficher_parametres_logistique()
 
 
 elif selected == "Exporter":
