@@ -110,7 +110,6 @@ def show_simulation_page():
     # Ce bloc s'exécutera immédiatement après le st.rerun()
     if st.session_state.get("sim_lancee"):
         st.success(f"✅ Simulation réussie ! {len(st.session_state.resultat_flotte)} véhicules identifiés.")
-        st.balloons() # Optionnel pour marquer le coup
         st.divider()
         st.markdown("### 📊 Résultats prêts")
         st.info("Vous pouvez maintenant consulter les onglets **Synthèse** et **Détail tournées** dans le menu de gauche.")
