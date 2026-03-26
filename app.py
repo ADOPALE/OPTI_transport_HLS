@@ -150,9 +150,9 @@ with st.sidebar:
         "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO", "Exporter"
     ]
     icons = [
-        "house", "geo-alt", "cloud-upload", 
-        "truck", "microscope", "play-circle", 
-        "clipboard-data", "map", "file-earmark-pdf"
+        "house-door", "r-square", "database-add", 
+        "bar-chart-steps", "gear-wide-connected", "play-btn", 
+        "clipboard2-pulse", "signpost-split", "file-earmark-arrow-down"
     ]
 
     selected = option_menu(
