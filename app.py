@@ -309,6 +309,12 @@ elif selected == "Synthèse transport":
         try:
             # Préparation des missions (Lundi au Dimanche)
             missions_hebdo = preparer_missions_unifiees(df_flux)
+
+            # --- DEBUG 1 ---
+            st.write(f"DEBUG : Nombre de missions détectées le Lundi : {len(missions_hebdo.get('Quantité Lundi', []))}")
+            if len(missions_hebdo.get('Quantité Lundi', [])) > 0:
+                st.write("Exemple de mission :", missions_hebdo['Quantité Lundi'][0])
+            # ---------------
             
             stats_semaine = []
             jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
