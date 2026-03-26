@@ -37,6 +37,59 @@ def show_flux_control_charts():
     ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
 
+    # --- MODIFICATION ICI POUR ÉVITER LE TYPEERROR ---
+    # On filtre les valeurs nulles et on force en string avant le tri
+    unique_foncs = df_long[col_fonc].dropna().unique()
+    fonctions = sorted([str(f) for f in unique_foncs])
+    # ------------------------------------------------
+
+    # Palette
+    palette_hex = ["#005596", "#E67E22", "#27AE60", "#8E44AD", "#C0392B", "#2C3E50", "#F1C40F"]
+    color_map_base = {f: palette_hex[i % len(palette_hex)] for i, f in enumerate(fonctions)}
+
+    st.divider()
+    st.subheader("📊 Répartition Globale (Barre GAUCHE = Aller | Barre DROITE = Retour)")
+
+    # --- DONNÉES TABLEAU ---
+    df_totals = df_long.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
+    df_pivot = df_totals.pivot(index=col_sens, columns="Jour", values="Valeur").fillna(0)
+    df_pivot.loc["TOTAL (A+R)"] = df_pivot.sum()
+    
+    # --- SUBPLOT ---
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08, 
+        specs=[[{"type": "bar"}], [{"type": "table"}]]
+    )
+
+    df_gb = df_long.groupby(["Jour", col_fonc, col_sens], observed=False)["Valeur"].sum().
+
+"""
+def show_flux_control_charts():
+    if "data" not in st.session_state or "m_flux" not in st.session_state["data"]:
+        return
+
+    df = st.session_state["data"]["m_flux"].copy()
+    df.columns = df.columns.str.strip()
+    
+    col_fonc = "Fonction Support associée"
+    col_sens = "Aller / Retour"
+    jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
+
+    # Nettoyage
+    df[col_sens] = df[col_sens].astype(str).str.strip()
+    for j in jours_cols:
+        if j in df.columns:
+            df[j] = pd.to_numeric(df[j], errors='coerce').fillna(0)
+
+    # Format long
+    df_long = df.melt(id_vars=[col_fonc, col_sens], value_vars=[c for c in jours_cols if c in df.columns],
+                      var_name="Jour_Full", value_name="Valeur")
+    df_long["Jour"] = df_long["Jour_Full"].str.replace("Quantité ", "").str.strip()
+    ordre = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+    df_long["Jour"] = pd.Categorical(df_long["Jour"], categories=ordre, ordered=True)
+
     # Palette
     palette_hex = ["#005596", "#E67E22", "#27AE60", "#8E44AD", "#C0392B", "#2C3E50", "#F1C40F"]
     fonctions = sorted(df_long[col_fonc].unique())
@@ -125,3 +178,4 @@ def show_flux_control_charts():
                     ))
                 fig_sub.update_layout(template="plotly_dark", barmode="group", height=300)
                 st.plotly_chart(fig_sub, use_container_width=True)
+"""
