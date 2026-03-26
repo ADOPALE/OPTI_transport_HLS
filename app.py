@@ -133,6 +133,14 @@ TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 if "sim_lancee" not in st.session_state:
     st.session_state.sim_lancee = False
 
+if st.session_state.sim_lancee:
+        st.divider()
+        if st.button("🔄 Réinitialiser la simulation", use_container_width=True):
+            st.session_state.sim_lancee = False
+            st.session_state.resultat_flotte = None
+            st.rerun()
+
+    
 with st.sidebar:
     # 1. Logos
     col1, col2 = st.columns(2)
@@ -239,14 +247,8 @@ with st.sidebar:
             "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
     )
-
-    if st.session_state.sim_lancee:
-        st.divider()
-        if st.button("🔄 Réinitialiser la simulation", use_container_width=True):
-            st.session_state.sim_lancee = False
-            st.session_state.resultat_flotte = None
-            st.rerun()
 """
+
 
 if selected == "Accueil":
     show_home()
