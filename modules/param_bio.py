@@ -34,11 +34,21 @@ def show_biologie_page():
         return
 
     # Paramètres globaux
+    st.subheader("🚐 Contraintes RH")
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         duree_max = st.number_input("Durée max tournée (min)", value=120)
     with col_g2:
         temps_coll = st.number_input("Temps de collecte (min)", value=10)
+
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        amplitude_poste = st.number_input("Durée poste (min)", value=450)
+    with c2:
+        pause_dej = st.number_input("Pause (min)", value=30)
+    with c3:
+        temps_releve = st.number_input("Relève (min)", value=15)
 
     st.divider()
     st.subheader("🏥 Configuration des sites")
@@ -106,14 +116,6 @@ def show_biologie_page():
 
                 current_sites_config[site_name] = {'open': res[0], 'close': res[1], 'freq': freq}
 
-    st.subheader("🚐 Contraintes RH")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        amplitude_poste = st.number_input("Durée poste (min)", value=450)
-    with c2:
-        pause_dej = st.number_input("Pause (min)", value=30)
-    with c3:
-        temps_releve = st.number_input("Relève (min)", value=15)
 
     if st.button("💾 Enregistrer la configuration", use_container_width=True):
         st.session_state["biologie_config"] = {
