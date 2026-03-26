@@ -66,48 +66,43 @@ def preparer_missions_unifiees(df_flux):
 
 
 
-
-def calculer_capacite_emport(mission, df_vehicules, df_contenants):
+def calculer_capacite_emport_finale(mission, vehicule_name, df_vehicules, df_contenants):
     """
-    Calcule pour chaque véhicule sélectionné s'il peut transporter le contenant
-    et en quelle quantité maximum (poids vs surface).
+    FONCTION DE RÉFÉRENCE : Calcule la capacité maximale réelle.
+    Remplace les approches simplistes par un calcul de rangées/colonnes avec pivotement.
     """
     config = st.session_state["params_logistique"]
-    vehicules_autorises = config["vehicules_selectionnes"]
     taux_remplissage = config["securite_remplissage"]
+
+    # 1. Récupération des dimensions et contraintes
+    spec_v = df_vehicules[df_vehicules['Types'] == vehicule_name].iloc[0]
+    spec_c = df_contenants[df_contenants['libellé'] == mission['contenant']].iloc[0]
+
+    # --- VERIFICATION TECHNIQUE PREALABLE ---
+    # Si le véhicule n'est pas équipé pour ce contenant (ton tableau OUI/NON)
+    if spec_v.get(mission['contenant'], "NON") == "NON":
+        return 0
+
+    # 2. Dimensions internes et unitaires
+    L_cam, l_cam = spec_v['dim longueur interne (m)'], spec_v['dim largeur interne (m)']
+    dim1, dim2 = spec_c['dim longueur (m)'], spec_c['dim largeur (m)']
+
+    # 3. LE TETRIS : Test des deux orientations
+    # Orientation A : Longueur contenant sur Longueur camion
+    capa_A = (L_cam // dim1) * (l_cam // dim2)
+    # Orientation B : Largeur contenant sur Longueur camion (Pivot 90°)
+    capa_B = (L_cam // dim2) * (l_cam // dim1)
     
-    contenant_nom = mission['contenant'] # ex: "Armoires de linge"
-    resultats = {}
+    meilleur_sol = max(capa_A, capa_B)
 
-    # 1. Specs du contenant
-    spec_c = df_contenants[df_contenants['libellé'] == contenant_nom].iloc[0]
-    surf_c = spec_c['dim longueur (m)'] * spec_c['dim largeur (m)']
+    # 4. LA MASSE : Vérification du poids max
     poids_u = spec_c['Poids plein (kg)'] if mission['est_plein'] else spec_c['Poids vide (kg)']
+    cu_kg = float(str(spec_v['Poids max chargement']).upper().replace('T', '').replace(',', '.').strip()) * 1000
+    
+    capa_poids = int(cu_kg // poids_u) if poids_u > 0 else meilleur_sol
 
-    for v_name in vehicules_autorises:
-        spec_v = df_vehicules[df_vehicules['Types'] == v_name].iloc[0]
+    # 5. SYNTHÈSE : On prend le plus restrictif des deux (Sol vs Poids)
+    # On applique le taux de sécurité (ex: 85%) sur la capacité physique
+    resultat_final = int(min(meilleur_sol, capa_poids) * taux_remplissage)
 
-        # --- A. VERIFICATION DE COMPATIBILITÉ TECHNIQUE ---
-        # On vérifie si la colonne du contenant dans le tableau véhicule est "OUI"
-        if spec_v.get(contenant_nom, "NON") == "NON":
-            continue # Le véhicule ne peut pas transporter ce type de contenant
-
-        # --- B. CALCUL DES LIMITES PHYSIQUES ---
-        # Surface plateau (L x l)
-        surf_plateau = spec_v['dim longueur interne (m)'] * spec_v['dim largeur interne (m)']
-        
-        # Charge utile (Conversion du format "5 T" ou "1,2 T" en float)
-        cu_str = str(spec_v['Poids max chargement']).upper().replace('T', '').replace(',', '.').strip()
-        cu_kg = float(cu_str) * 1000
-
-        # Calcul des capacités max
-        max_par_surf = int(surf_plateau / surf_c) if surf_c > 0 else 0
-        max_par_poids = int(cu_kg / poids_u) if poids_u > 0 else 0
-
-        # Capacité finale avec taux de sécurité
-        capa_finale = int(min(max_par_surf, max_par_poids) * taux_remplissage)
-        
-        if capa_finale > 0:
-            resultats[v_name] = capa_finale
-
-    return resultats
+    return max(0, resultat_final)
