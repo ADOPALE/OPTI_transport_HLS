@@ -144,7 +144,7 @@ with st.sidebar:
             st.image(str(LOGO_CHU), use_container_width=True)
 
     st.divider()
-    st.title("Logistique CHU")
+    #st.title("Logistique CHU")
 
     # --- Styles communs pour uniformiser les 3 menus ---
     menu_styles = {
