@@ -307,6 +307,9 @@ elif selected == "Synthèse transport":
     # 3. PRÉPARATION & SIMULATION
     with st.spinner("⏳ Calcul du dimensionnement en cours..."):
         try:
+            st.write("--- DEBUG SÉCURITÉ ---")
+            st.write("Colonnes réelles :", list(df_flux.columns[:10])) # Affiche les 10 premiers titres
+            st.write("Contenu ligne 1 :", df_flux.iloc[0].tolist()[:10]) # Affiche les 10 premières valeurs
             # Préparation des missions (Lundi au Dimanche)
             missions_hebdo = preparer_missions_unifiees(df_flux)
 
