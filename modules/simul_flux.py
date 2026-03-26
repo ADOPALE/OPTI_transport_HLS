@@ -161,9 +161,10 @@ def calculer_duree_rotation(mission, vehicule_name, qte, df_vehicules, matrice_d
     """
     spec_v = df_vehicules[df_vehicules['Types'] == vehicule_name].iloc[0]
     
-    t_quai_min = convertir_temps_manutention(spec_v['Temps de mise à quai - manœuvre, contact/admin min (minutes)']) / 60
-    t_unit_sec = convertir_temps_manutention(spec_v['Manutention on sans quai (minutes / contenants)'])
-    
+    # Remplace tes lignes A par :
+    t_mise_a_quai = convertir_en_secondes(spec_v['Temps de mise à quai - manœuvre, contact/admin min (minutes)']) / 60
+    t_unit_sec = convertir_en_secondes(spec_v['Manutention on sans quai (minutes / contenants)'])
+        
     manut_min = (t_quai_min * 2) + ((t_unit_sec * qte * 2) / 60)
     
     try:
@@ -246,3 +247,13 @@ def simuler_tournees_quotidiennes(missions_du_jour, df_vehicules, df_contenants,
         resultat_final.extend(postes)
 
     return resultat_final
+
+
+def convertir_en_secondes(valeur):
+    """Transforme 00:00:25 en 25 secondes (float)"""
+    if hasattr(valeur, 'hour'): # Si c'est un objet temps
+        return valeur.hour * 3600 + valeur.minute * 60 + valeur.second
+    try:
+        return float(valeur) # Si c'est déjà un nombre
+    except:
+        return 0.0
