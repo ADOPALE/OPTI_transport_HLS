@@ -84,8 +84,7 @@ def run_matrix_tool():
     st.markdown("---")
 
     st.markdown("""
-    ### Cet onglet est un outils préalable qui permet de calculer la matrice des distances site-à-site et la matrice des durées moyennes de trajet. 
-    du fait de la durée de calcul il est recommandée de lancer le calcul une seule fois et de coller le résultat dans l'onglet dédié du fichier de paramétrage.  
+    Cet onglet est un outils préalable qui permet de calculer la matrice des distances site-à-site et la matrice des durées moyennes de trajet. du fait de la durée de calcul il est recommandée de lancer le calcul une seule fois et de coller le résultat dans l'onglet dédié du fichier de paramétrage.  
     """)
 
 
