@@ -22,10 +22,17 @@ def convertir_temps_manutention(valeur):
 
 def preparer_missions_unifiees(df_flux):
     """
-    Transforme le flux brut en dictionnaire de missions par jour.
-   
+    Transforme le flux Excel en missions avec gestion des exclusions,
+    du transport mixte et nettoyage automatique des noms de colonnes.
     """
-    cols = {
+    import pandas as pd
+    
+    # --- NETTOYAGE DES COLONNES ---
+    # Supprime les espaces en début/fin de nom de colonne (souvent invisible dans Excel)
+    df_flux.columns = [str(c).strip() for c in df_flux.columns]
+    
+    # Définition des noms de colonnes attendus
+    cols_theoriques = {
         "nature": "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage ?)",
         "depart": "Point de départ",
         "dest": "Point de destination",
@@ -39,23 +46,56 @@ def preparer_missions_unifiees(df_flux):
         "h_dispo": "Heure de mise à disposition min départ",
         "h_limite": "Heure max de livraison à la destination"
     }
-    
+
+    # --- LOGIQUE DE FALLBACK (SÉCURITÉ) ---
+    # Si le nom exact n'est pas trouvé, on cherche une colonne qui contient le mot-clé principal
+    cols = {}
+    for cle, nom_long in cols_theoriques.items():
+        if nom_long in df_flux.columns:
+            cols[cle] = nom_long
+        else:
+            # Recherche par mot-clé si le nom long a été modifié
+            mots_cles = {
+                "nature": "Nature du flux",
+                "depart": "départ",
+                "dest": "destination",
+                "conteneur": "contenant",
+                "h_dispo": "disposition",
+                "h_limite": "limite"
+            }
+            mot = mots_cles.get(cle, cle)
+            trouve = [c for c in df_flux.columns if mot.lower() in c.lower()]
+            if trouve:
+                cols[cle] = trouve[0]
+            else:
+                # Si vraiment introuvable, on garde le nom théorique pour l'erreur explicite
+                cols[cle] = nom_long
+
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
                   "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
 
+    # Vérification finale de la colonne critique
+    if cols["nature"] not in df_flux.columns:
+        raise KeyError(f"La colonne '{cols['nature']}' est introuvable. Vérifiez votre fichier Excel.")
+
+    # Filtrage des lignes de type "Volume"
     df_vol = df_flux[df_flux[cols["nature"]].astype(str).str.contains("Volume", case=False, na=False)].copy()
     missions_par_jour = {j: [] for j in jours_cols}
 
     for idx, row in df_vol.iterrows():
+        # Gestion des horaires (conversion en minutes depuis minuit)
         try:
             h_start = row[cols["h_dispo"]].hour * 60 + row[cols["h_dispo"]].minute
             h_end = row[cols["h_limite"]].hour * 60 + row[cols["h_limite"]].minute
         except:
-            h_start, h_end = 360, 1200 
+            h_start, h_end = 360, 1200 # Valeurs par défaut (06h00 - 20h00)
 
+        # Logique de mixité et compatibilité
         mixte_possible = str(row[cols["mixte"]]).strip().upper() == "OUI"
         tag_compatibilite = "MIXTE_OK" if mixte_possible else f"DEDIE_{idx}"
-        exclusions = [x.strip().upper() for x in str(row[cols["regle_excl"]]).split(',') if x.strip()]
+        
+        # Nettoyage de la liste des exclusions
+        exclusions = [x.strip().upper() for x in str(row.get(cols["regle_excl"], "")).split(',') if x.strip()]
 
         for jour in jours_cols:
             qte = pd.to_numeric(row[jour], errors='coerce')
@@ -71,12 +111,15 @@ def preparer_missions_unifiees(df_flux):
                     "tag_compatibilite": tag_compatibilite,
                     "exclusions": exclusions,
                     "cadence": str(row[cols["cadence"]]).strip(),
-                    "est_urgent": "OUI" in str(row[cols["urgence"]]).upper(),
+                    "est_urgent": "OUI" in str(row.get(cols["urgence"], "")).upper(),
                     "quantite_totale": qte,
                     "fenetre_start": h_start,
                     "fenetre_end": h_end
                 })
+
     return missions_par_jour
+
+
 
 def calculer_capacite_emport_finale(mission, vehicule_name, df_vehicules, df_contenants):
     """
