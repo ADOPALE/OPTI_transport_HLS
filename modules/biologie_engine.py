@@ -14,7 +14,58 @@ def minutes_to_hhmm(minutes):
 
 
 
+
 def generate_target_windows(sites_config):
+    """
+    Génère les rendez-vous théoriques.
+    Le 1er passage est calé sur 'open'.
+    Le dernier passage est calé sur 'close' avec interdiction de passer avant.
+    """
+    tasks = []
+    for site_name, config in sites_config.items():
+        ouv, fer, freq = config['open'], config['close'], config['freq']
+        
+        # Sécurité : si 1 seul passage, on le met à la fermeture
+        if freq <= 1:
+            points_passage = [fer]
+        else:
+            # On calcule l'intervalle entre chaque passage pour remplir l'amplitude
+            # Exemple : ouv=8h, fer=18h, freq=3 => Passages à 8h, 13h, 18h
+            intervalle = (fer - ouv) / (freq - 1)
+            points_passage = [ouv + (i * intervalle) for i in range(freq)]
+        
+        # Marge de souplesse pour les calculs (ex: 15-20 min)
+        # On peut la rendre proportionnelle ou fixe
+        marge_standard = 20 
+
+        for i, cible in enumerate(points_passage):
+            is_dernier = (i == len(points_passage) - 1)
+            is_premier = (i == 0)
+
+            if is_dernier:
+                # CONTRAINTE FORTE : Pas plus tôt que l'heure cible (fermeture)
+                # On met une marge basse de 0 et une marge haute de 15 min
+                window = (cible, cible + 15)
+            elif is_premier:
+                # Premier passage : on autorise un peu d'avance ou de retard (± 10 min)
+                window = (max(ouv - 5, cible - 10), cible + 10)
+            else:
+                # Passages intermédiaires : souplesse standard
+                window = (cible - marge_standard, cible + marge_standard)
+
+            tasks.append({
+                'site_name': str(site_name).strip().upper(),
+                'window': window,
+                'target_time': cible,
+                'done': False
+            })
+
+    # Tri chronologique pour faciliter le travail du moteur
+    return sorted(tasks, key=lambda x: x['window'][0])
+
+
+'''
+def generate_target_windows_OLD(sites_config):
     """Génère les rendez-vous théoriques (fenêtres) selon la config utilisateur."""
     tasks = []
     for site_name, config in sites_config.items():
@@ -34,6 +85,7 @@ def generate_target_windows(sites_config):
             })
     # Tri chronologique des besoins
     return sorted(tasks, key=lambda x: x['window'][0])
+'''
 
 # ==========================================
 # PARTIE 2 : MOTEUR DE CALCUL PRINCIPAL
