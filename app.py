@@ -26,7 +26,7 @@ from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauf
 # importer la fonction qui permet de paramétrer les tournées de  camions
 from modules.param_flux import afficher_parametres_logistique
 # importer les fonctions qui permettent de simuler et optimiser les tourneées hebdomadaires
-from simul_flux import preparer_missions_unifiees, simuler_tournees_quotidiennes
+from modules.simul_flux import preparer_missions_unifiees, simuler_tournees_quotidiennes
 
 
 
