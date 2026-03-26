@@ -294,7 +294,7 @@ elif selected == "Synthèse transport":
    
     # Exemple de chargement (à adapter selon votre code)
     if 'data_chargee' in st.session_state:
-        df_flux = st.session_state['df_flux'] # Assurez-vous que le nom correspond
+        df_flux = st.session_state['m_flux'] # Assurez-vous que le nom correspond
     else:
         st.warning("Veuillez charger les données de flux dans l'onglet précédent.")
         st.stop() # Arrête l'exécution si la variable n'existe pas
