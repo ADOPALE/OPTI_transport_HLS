@@ -255,7 +255,7 @@ def afficher_stats_sites(flotte):
     # À ajouter temporairement pour débugger
     print(f"DEBUG: Sites trouvés dans la simulation : {set([p['site'] for v in flotte.values() for vac in v for trne in vac for p in trne])}")
     
-df_passages = pd.DataFrame(passages_data)
+    df_passages = pd.DataFrame(passages_data)
 
     # 2. Affichage du KPI global
     st.metric("Nombre total de tournées réalisées", f"{total_tournees}")
