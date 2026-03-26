@@ -95,7 +95,7 @@ def show_biologie_page():
                 with c1:
                     # Slider calé sur les valeurs Excel (arrondi à 15min)
                     res = st.select_slider(
-                        f"Plage horaire",
+                        f"Horaires de première et dernière collecte",
                         options=range(0, 1441, 15),
                         value=(h_ouvert - (h_ouvert % 15), h_ferme - (h_ferme % 15)),
                         format_func=lambda x: f"{x//60:02d}:{x%60:02d}",
