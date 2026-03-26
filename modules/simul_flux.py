@@ -21,74 +21,62 @@ def convertir_temps_manutention(valeur):
     return float(valeur) if pd.notnull(valeur) else 0.0
 
 def preparer_missions_unifiees(df_flux):
-    # 1. Nettoyage des colonnes
+    # 1. Nettoyage des noms de colonnes
     df_flux.columns = [str(c).strip() for c in df_flux.columns]
     
-    # 2. Identification ultra-souple des colonnes (par mots-clés)
-    def trouver_col(mots):
-        for c in df_flux.columns:
-            if any(m.lower() in c.lower() for m in mots):
-                return c
-        return None
-
-    col_depart = trouver_col(["Point de départ"])
-    col_dest = trouver_col(["Point de destination"])
-    col_contenant = trouver_col(["Nature de contenant"])
-    # On cherche juste "obligation" ou "nature du flux" pour cette colonne très longue
-    col_nature_flux = trouver_col(["obligation", "nature du flux"]) 
-    
+    # 2. On définit les jours (C'est là que les données se trouvent)
     jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-    # On cherche "Quantité Lundi" ou juste "Lundi"
-    jours_map = {j: trouver_col([f"Quantité {j}", j]) for j in jours_nom}
-
     missions_par_jour = {f"Quantité {j}": [] for j in jours_nom}
 
-    # 3. Parcours des lignes
+    # 3. Identification des colonnes par leur POSITION (Index)
+    # Basé sur ton debug : 0=Départ, 1=Dest, 4=Contenant, 8=Mixte
+    # Pour 'Volume', on va la chercher dynamiquement
+    idx_dep = 0
+    idx_dest = 1
+    idx_cont = 4
+    
+    # On cherche l'index de la colonne qui contient "obligation" (la colonne verte sur ton image)
+    idx_nature = next((i for i, c in enumerate(df_flux.columns) if "obligation" in c.lower()), 10)
+
+    # 4. Parcours des lignes (on commence à la ligne 0 puisque tes titres sont en ligne 1)
     for idx, row in df_flux.iterrows():
-        # A. On ignore les lignes où le départ ou la destination sont vides
-        if pd.isna(row.get(col_depart)) or str(row.get(col_depart)).strip() == "":
+        # On récupère les valeurs par position
+        dep = str(row.iloc[idx_dep]).strip().upper()
+        dest = str(row.iloc[idx_dest]).strip().upper()
+        nature_val = str(row.iloc[idx_nature]).strip().lower()
+
+        # SÉCURITÉ : On vérifie si c'est bien une ligne de calcul
+        # Sur ton image, cette colonne contient "Volume"
+        if "volume" not in nature_val:
             continue
+
+        # 5. Extraction des quantités par jour
+        for jour in jours_nom:
+            # On cherche la colonne "Quantité Lundi", "Quantité Mardi", etc.
+            col_nom = next((c for c in df_flux.columns if jour.lower() in c.lower() and "quantité" in c.lower()), None)
             
-        # B. On vérifie la nature du flux (Doit contenir "Volume")
-        nature_val = str(row.get(col_nature_flux, "")).strip().capitalize()
-        if "Volume" not in nature_val:
-            # Optionnel : décommenter pour débugger dans la console
-            # print(f"Ligne {idx} rejetée : Nature = {nature_val}")
-            continue
-
-        # C. Extraction des horaires (avec sécurité)
-        # Sur ton image, les colonnes Heure de mise à dispo sont vers la fin
-        col_h_dispo = trouver_col(["Heure de mise à disposition"])
-        col_h_limite = trouver_col(["Heure max de livraison"])
-        
-        try:
-            h_start = row[col_h_dispo].hour * 60 + row[col_h_dispo].minute
-            h_end = row[col_h_limite].hour * 60 + row[col_h_limite].minute
-        except:
-            h_start, h_end = 360, 1200 # 6h-20h par défaut
-
-        # D. Ventilation par jour
-        for jour_nom, col_excel in jours_map.items():
-            if col_excel:
-                val_qte = row[col_excel]
-                qte = pd.to_numeric(val_qte, errors='coerce')
+            if col_nom:
+                qte = pd.to_numeric(row[col_nom], errors='coerce')
                 
-                if pd.notnull(qte) and qte > 0:
-                    missions_par_jour[f"Quantité {jour_nom}"].append({
+                if qte > 0:
+                    missions_par_jour[f"Quantité {jour}"].append({
                         "id_flux": idx,
-                        "origine": str(row[col_depart]).strip().upper(),
-                        "destination": str(row[col_dest]).strip().upper(),
-                        "contenant": str(row[col_contenant]).strip().upper(),
+                        "origine": dep,
+                        "destination": dest,
+                        "contenant": str(row.iloc[idx_cont]).strip().upper(),
                         "quantite_totale": int(qte),
-                        "est_plein": "PLEIN" in str(row.get("Plein / vide", "Plein")).upper(),
-                        "est_propre": "PROPRE" in str(row.get("Sale / propre", "Propre")).upper(),
-                        "fenetre_start": h_start,
-                        "fenetre_end": h_end,
-                        "tag_compatibilite": "MIXTE_OK" if "OUI" in str(row.get("Transport mixte possible", "")).upper() else f"DEDIE_{idx}",
+                        "est_plein": "PLEIN" in str(row.iloc[5]).upper(),
+                        "est_propre": "PROPRE" in str(row.iloc[6]).upper(),
+                        "fenetre_start": 360, # 06:00
+                        "fenetre_end": 1200, # 20:00
+                        "tag_compatibilite": "MIXTE_OK" if "OUI" in str(row.iloc[8]).upper() else f"DEDIE_{idx}",
                         "exclusions": []
                     })
 
     return missions_par_jour
+
+
+
 
 def calculer_capacite_emport_finale(mission, vehicule_name, df_vehicules, df_contenants):
     """Calcule la capacité réelle (Tetris + Poids)."""
