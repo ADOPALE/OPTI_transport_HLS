@@ -238,15 +238,15 @@ with st.sidebar:
             "nav-link": {"color": "black", "font-size": "15px", "font-weight": "bold", "text-align": "left", "margin": "5px"},
             "nav-link-selected": {"background-color": "#e1e4e8", "color": "black", "font-weight": "900"},
         }
-    )"""
-    """
+    )
+
     if st.session_state.sim_lancee:
         st.divider()
         if st.button("🔄 Réinitialiser la simulation", use_container_width=True):
             st.session_state.sim_lancee = False
             st.session_state.resultat_flotte = None
             st.rerun()
-    """
+"""
 
 if selected == "Accueil":
     show_home()
