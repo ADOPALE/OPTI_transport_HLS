@@ -129,3 +129,33 @@ def calculer_duree_rotation(mission, vehicule_name, qte_a_transporter, df_vehicu
     duree_trajet_retour = matrice_duree.loc[mission['destination'], mission['origine']]
     
     return manutention_totale + duree_trajet_aller + duree_trajet_retour
+
+
+
+
+
+def simuler_tournees_quotidiennes(missions_du_jour, df_vehicules, df_contenants, matrice_duree):
+    """
+    Fonction principale qui transforme les besoins en planning de tournées.
+    """
+    config = st.session_state["params_logistique"]
+    postes_chauffeurs = [] # Liste des plannings de 7h30 créés
+    
+    # --- ÉTAPE 1 : GROUPER PAR COMPATIBILITÉ ---
+    # On crée des lots de missions qui peuvent théoriquement partager un camion
+    groupes = filtrer_par_compatibilite(missions_du_jour)
+
+    for groupe_id, missions in groupes.items():
+        # --- ÉTAPE 2 : CALCULER LE NOMBRE DE TRAJETS ---
+        # Pour chaque mission, on définit le véhicule optimal et le nb de rotations
+        rotations = generer_rotations_physiques(missions, df_vehicules, df_contenants)
+        
+        # --- ÉTAPE 3 : LISSAGE TEMPOREL ---
+        # On place les rotations sur une frise chronologique dès 6h00
+        planning_temporel = lisser_rotations(rotations, matrice_duree, config)
+        
+        # --- ÉTAPE 4 : ASSIGNATION AUX POSTES RH ---
+        # On remplit des "sacs" de 7h30 avec ces rotations
+        postes_chauffeurs.extend(assigner_aux_chauffeurs(planning_temporel, config))
+
+    return postes_chauffeurs
