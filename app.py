@@ -177,6 +177,11 @@ with st.sidebar:
 if selected == "Accueil":
     show_home()
 elif selected == "Calcul Matrices":
+    st.markdown("""
+    ### Cet onglet est un outils préalable qui permet de calculer la matrice des distances site-à-site et la matrice des durées moyennes de trajet. 
+    du fait de la durée de calcul il est recommandée de lancer le calcul une seule fois et de coller le résultat dans l'onglet dédié du fichier de paramétrage.  
+    """)
+
     run_matrix_tool()
 elif selected == "Importer Données":
     show_import()
