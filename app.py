@@ -168,13 +168,23 @@ with st.sidebar:
     st.markdown("### 🧪 BIOLOGIE")
     sel_bio = option_menu(
         menu_title=None,
-        options=["Vérif volumes à distribuer", "Paramétrage BIO", "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO"],
-        icons=["bar-chart-steps", "gear-wide-connected", "play-btn", "clipboard2-pulse", "signpost-split"],
+        options=["Paramétrage BIO", "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO"],
+        icons=["gear-wide-connected", "play-btn", "clipboard2-pulse", "signpost-split"],
+        styles=menu_styles,
+        key="menu_bio"
+    )
+
+    # --- GROUPE 3 : TRANSPORT LOURD ---
+    st.markdown("### 🚚 DISTRIBUTION")
+    sel_bio = option_menu(
+        menu_title=None,
+        options=["Vérif volumes à distribuer", "Véhicules et paramètres", "Simul tournées", "Synthèse transport", "Détail tournées"],
+        icons=["bar-chart-steps", "truck-front", "play-btn", "clipboard2-pulse", "signpost-split"],
         styles=menu_styles,
         key="menu_bio"
     )
     
-    # --- GROUPE 3 : EXPORT ---
+    # --- GROUPE 4 : EXPORT ---
     st.markdown("### 📤 SORTIES")
     sel_export = option_menu(
         menu_title=None,
