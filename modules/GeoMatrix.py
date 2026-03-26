@@ -83,6 +83,12 @@ def run_matrix_tool():
     st.title("📍 Calculateur de Matrices Logistiques")
     st.markdown("---")
 
+    st.markdown("""
+    ### Cet onglet est un outils préalable qui permet de calculer la matrice des distances site-à-site et la matrice des durées moyennes de trajet. 
+    du fait de la durée de calcul il est recommandée de lancer le calcul une seule fois et de coller le résultat dans l'onglet dédié du fichier de paramétrage.  
+    """)
+
+
     # 1. Zone de saisie
     st.subheader("1. Saisie des sites et adresses")
     st.info("💡 **Instruction pour le collage :** Sélectionnez vos données dans Excel, faites Ctrl+C. Revenez ici, cliquez **UNE SEULE FOIS** sur la première case vide (elle doit avoir un contour rouge et faites Ctrl+V.")
