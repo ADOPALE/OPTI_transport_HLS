@@ -254,7 +254,27 @@ def afficher_stats_sites(flotte):
 
     # 3. Graphique de dispersion (Scatter Plot) des passages
     st.write("**Horaires de passage par site**")
-    
+
+    fig_sites = px.scatter(
+        df_passages,
+        x="Heure",
+        y="Site",
+        color="Véhicule",
+        symbol="Véhicule",
+        # On active l'affichage de l'heure et on lui donne un format propre
+        hover_data={
+            "Heure": "|%H:%M",  # Affiche l'heure au format 09:30
+            "Site": True,
+            "Véhicule": True
+        },
+        title="Répartition des collectes sur la journée"
+    )
+
+    # Optionnel : Pour un rendu encore plus propre dans l'infobulle
+    fig_sites.update_traces(
+        hovertemplate="<b>%{y}</b><br>Passage à %{x|%H:%M}<br>Véhicule : %{marker.colorarrow}" 
+    )
+    '''
     fig_sites = px.scatter(
         df_passages,
         x="Heure",
@@ -264,7 +284,8 @@ def afficher_stats_sites(flotte):
         hover_data={"Heure": False, "Site": True},
         title="Répartition des collectes sur la journée"
     )
-
+    '''
+    
     # Personnalisation de l'affichage
     fig_sites.update_traces(marker=dict(size=12, opacity=0.8))
     
