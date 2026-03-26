@@ -23,7 +23,7 @@ def afficher_parametres_logistique():
         for i, vehicule in enumerate(noms_vehicules):
             # Répartit les cases à cocher sur 3 colonnes
             with cols_v[i % 3]:
-                if st.checkbox(f"Inclure {vehicule}", value=True):
+                if st.checkbox(f"{vehicule}", value=True):
                     flotte_active.append(vehicule)
 
         st.divider()
