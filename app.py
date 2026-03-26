@@ -224,12 +224,15 @@ with st.sidebar:
 
 if selected == "Accueil":
     show_home()
+    
 elif selected == "Outil calcul matrices":
     run_matrix_tool()
     
 elif selected == "Importer Données":
     show_import()
+    
 elif selected == "Vérif volumes à distribuer":
+    st.title("📦 Contrôle des volumes à transporter")
     if "data" in st.session_state:
         show_flux_control_charts()
     else:
