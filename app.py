@@ -181,7 +181,7 @@ with st.sidebar:
         options=["Vérif volumes à distribuer", "Véhicules et paramètres", "Simul tournées", "Synthèse transport", "Détail tournées"],
         icons=["bar-chart-steps", "truck-front", "play-btn", "clipboard2-pulse", "signpost-split"],
         styles=menu_styles,
-        key="menu_bio"
+        key="menu_distrib"
     )
     
     # --- GROUPE 4 : EXPORT ---
@@ -209,6 +209,10 @@ with st.sidebar:
     if st.session_state.menu_bio != st.session_state.get('prev_bio'):
         st.session_state.active_menu = st.session_state.menu_bio
         st.session_state.prev_bio = st.session_state.menu_bio
+
+    if st.session_state.menu_distrib != st.session_state.get('prev_distrib'):
+        st.session_state.active_menu = st.session_state.menu_distrib
+        st.session_state.prev_distrib = st.session_state.menu_distrib
         
     if st.session_state.menu_export != st.session_state.get('prev_export'):
         st.session_state.active_menu = st.session_state.menu_export
