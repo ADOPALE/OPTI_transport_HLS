@@ -106,3 +106,26 @@ def calculer_capacite_emport_finale(mission, vehicule_name, df_vehicules, df_con
     resultat_final = int(min(meilleur_sol, capa_poids) * taux_remplissage)
 
     return max(0, resultat_final)
+
+
+
+
+def calculer_duree_rotation(mission, vehicule_name, qte_a_transporter, df_vehicules, matrice_duree):
+    """
+    Calcule le temps total d'un aller-retour (Chargement + Trajet + Déchargement + Retour).
+    """
+    spec_v = df_vehicules[df_vehicules['Types'] == vehicule_name].iloc[0]
+    
+    # A. Temps de manutention (en secondes, converti en minutes)
+    t_mise_a_quai = 10 # Valeur par défaut si format Excel complexe, sinon extraire
+    t_unit_sec = spec_v['Manutention on sans quai (minutes / contenants)'] # On suppose secondes vu les chiffres
+    
+    # On calcule le temps de chargement + déchargement
+    manutention_totale = (t_mise_a_quai * 2) + ((t_unit_sec * qte_a_transporter * 2) / 60)
+    
+    # B. Temps de trajet (Aller + Retour)
+    # On récupère la durée entre l'origine et la destination dans ta matrice_duree
+    duree_trajet_aller = matrice_duree.loc[mission['origine'], mission['destination']]
+    duree_trajet_retour = matrice_duree.loc[mission['destination'], mission['origine']]
+    
+    return manutention_totale + duree_trajet_aller + duree_trajet_retour
