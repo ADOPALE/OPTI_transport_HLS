@@ -252,8 +252,6 @@ def afficher_stats_sites(flotte):
         st.warning("Aucun passage sur site détecté (hors HLS).")
         return
 
-    # À ajouter temporairement pour débugger
-    st.write(f"DEBUG: Sites trouvés dans la simulation : {set([p['site'] for v in flotte.values() for vac in v for trne in vac for p in trne])}")
     
     df_passages = pd.DataFrame(passages_data)
 
