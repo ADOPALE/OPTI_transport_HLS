@@ -108,3 +108,113 @@ def simuler_tournees_quotidiennes(missions_du_jour, df_vehicules, df_contenants,
     if cumul > 0: postes.append(cumul)
     
     return postes
+
+
+def generer_planning_complet(missions_hebdo, df_vehicules, df_contenants, matrice_duree):
+    """
+    Organise les missions en journées de travail réelles pour chaque chauffeur.
+    """
+    planning_final = {}
+    jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+
+    # On utilise le premier véhicule par défaut pour cette version
+    # (Peut être optimisé pour choisir le véhicule selon la mission)
+    v_row = df_vehicules.iloc[0]
+    v_type = str(v_row.iloc[0]).upper()
+
+    for jour in jours_nom:
+        key = f"Quantité {jour}"
+        missions = missions_hebdo.get(key, [])
+        
+        # 1. Création de la liste de toutes les rotations nécessaires
+        toutes_rotations = []
+        for m in missions:
+            # On récupère la capacité (8 pour camion, 2 pour VL par défaut ou via calcul)
+            capa = 8 if "VL" not in v_type else 2
+            
+            qte_restante = m['quantite_totale']
+            while qte_restante > 0:
+                emport = min(qte_restante, capa)
+                
+                # Calcul des durées détaillées
+                trajet = 30.0 # Valeur par défaut
+                try:
+                    trajet = matrice_duree.loc[m['origine'], m['destination']]
+                except: pass
+
+                # Temps de manutention (10min fixe + 1min/contenant)
+                t_manut = 10.0 + (1.0 * emport)
+                duree_totale = (t_manut + trajet) * 2
+
+                toutes_rotations.append({
+                    "label": f"{m['origine']} -> {m['destination']}",
+                    "contenant_type": m['contenant'],
+                    "contenant_qte": emport,
+                    "t_manut": t_manut * 2,
+                    "t_roulage": trajet * 2,
+                    "duree_totale": duree_totale,
+                    "fenetre_end": m.get('fenetre_end', 1200)
+                })
+                qte_restante -= emport
+
+        # 2. Assignation des rotations aux chauffeurs (Lissage 7h30)
+        chauffeurs = []
+        if toutes_rotations:
+            # Tri par heure de fin souhaitée
+            toutes_rotations.sort(key=lambda x: x['fenetre_end'])
+            
+            curr_c = {"type_vehicule": v_type, "tournees": [], "t_total": 0, "t_roulage": 0, "t_manut": 0}
+            heure_actuelle = 360 # 06:00 du matin
+
+            for rot in toutes_rotations:
+                if curr_c["t_total"] + rot["duree_totale"] <= 450:
+                    rot["debut"] = heure_actuelle + curr_c["t_total"]
+                    rot["fin"] = rot["debut"] + rot["duree_totale"]
+                    curr_c["tournees"].append(rot)
+                    curr_c["t_total"] += rot["duree_totale"]
+                    curr_c["t_roulage"] += rot["t_roulage"]
+                    curr_c["t_manut"] += rot["t_manut"]
+                else:
+                    chauffeurs.append(curr_c)
+                    curr_c = {"type_vehicule": v_type, "tournees": [], "t_total": rot["duree_totale"], 
+                              "t_roulage": rot["t_roulage"], "t_manut": rot["t_manut"]}
+                    rot["debut"] = heure_actuelle
+                    rot["fin"] = rot["debut"] + rot["duree_totale"]
+                    curr_c["tournees"].append(rot)
+            
+            if curr_c["tournees"]:
+                chauffeurs.append(curr_c)
+
+        planning_final[key] = {"chauffeurs": chauffeurs}
+
+    return planning_final
+
+def generer_visuel_bin_packing(contenant_type, qte, vehicule_type, df_vehicules, df_contenants):
+    """
+    Génère un graphique Plotly simulant le chargement du véhicule.
+    """
+    import plotly.graph_objects as go
+    
+    # Dimensions par défaut
+    L_v, l_v = (4.0, 2.0) if "VL" not in vehicule_type else (3.0, 1.8)
+    L_c, l_c = 1.2, 0.8 # Palette standard
+    
+    fig = go.Figure()
+    # Dessin du camion
+    fig.add_shape(type="rect", x0=0, y0=0, x1=L_v, y1=l_v, line=dict(color="Blue"), fillcolor="LightBlue", opacity=0.3)
+
+    x_curr, y_curr = 0, 0
+    for i in range(int(qte)):
+        if y_curr + l_c > l_v:
+            y_curr = 0
+            x_curr += L_c
+        
+        if x_curr + L_c <= L_v:
+            fig.add_shape(type="rect", x0=x_curr, y0=y_curr, x1=x_curr+L_c, y1=y_curr+l_c, 
+                          line=dict(color="Black"), fillcolor="Green")
+            y_curr += l_c
+
+    fig.update_layout(title=f"Chargement estimé ({int(qte)} unités)", xaxis_title="Longueur (m)", yaxis_title="Largeur (m)",
+                      width=500, height=300, margin=dict(l=20, r=20, t=40, b=20))
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    return fig
