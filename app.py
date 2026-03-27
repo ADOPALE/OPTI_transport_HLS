@@ -27,6 +27,8 @@ from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauf
 from modules.param_flux import afficher_parametres_logistique
 # importer les fonctions qui permettent de simuler et optimiser les tourneées hebdomadaires
 from modules.simul_flux import preparer_missions_unifiees, simuler_tournees_quotidiennes
+#
+from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle, generer_graphique_gantt
 
 
 
@@ -291,68 +293,51 @@ elif selected == "Synthèse transport":
     st.title("📊 Dimensionnement RH Hebdomadaire")
 
     # 1. VERIFICATION DES DONNÉES
-    # On vérifie que le dictionnaire 'data' existe ET qu'il contient les flux
     if 'data' not in st.session_state or 'm_flux' not in st.session_state['data']:
         st.error("⚠️ Données de flux introuvables. Veuillez importer le fichier Excel d'abord.")
         st.stop()
     
-    # 2. EXTRACTION DES RÉFÉRENTIELS
-    # On extrait tout ce dont l'algorithme a besoin
     data = st.session_state['data']
     df_flux = data['m_flux']
     df_vehicules = data['param_vehicules']
     df_contenants = data['param_contenants']
     matrice_duree = data['matrice_duree']
 
-    # 3. PRÉPARATION & SIMULATION
+    # 2. PRÉPARATION & SIMULATION
     with st.spinner("⏳ Calcul du dimensionnement en cours..."):
         try:
-            # Préparation des missions (Lundi au Dimanche)
+            # On génère les missions
             missions_hebdo = preparer_missions_unifiees(df_flux)
+            
+            # --- CALCUL DU PLANNING DÉTAILLÉ (Nouveau) ---
+            # On stocke le résultat dans le session_state pour que Resultats_simul_flux puisse y accéder
+            st.session_state['planning_detaille'] = generer_planning_complet(
+                missions_hebdo, 
+                df_vehicules, 
+                df_contenants, 
+                matrice_duree
+            )
+            
+            planning = st.session_state['planning_detaille']
 
-            # --- DEBUG 1 ---
-            st.write(f"DEBUG : Nombre de missions détectées le Lundi : {len(missions_hebdo.get('Quantité Lundi', []))}")
-            if len(missions_hebdo.get('Quantité Lundi', [])) > 0:
-                st.write("Exemple de mission :", missions_hebdo['Quantité Lundi'][0])
-            # ---------------
+            # 3. AFFICHAGE DES RÉSULTATS (via le nouveau module)
+            from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
             
-            stats_semaine = []
-            jours_nom = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-            jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
-                          "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
+            # A. Vue Haute : KPIs et Tableau Hebdo
+            afficher_tableau_bord_global(planning)
             
-            for i, jour_col in enumerate(jours_cols):
-                missions_du_jour = missions_hebdo[jour_col]
-                
-                # Exécution du moteur de simulation
-                resultats_jour = simuler_tournees_quotidiennes(
-                    missions_du_jour, 
-                    df_vehicules, 
-                    df_contenants, 
-                    matrice_duree
-                )
-                
-                stats_semaine.append({
-                    "Jour": jours_nom[i],
-                    "Nombre de postes (7h30)": len(resultats_jour)
-                })
+            st.markdown("---")
             
-            # 4. AFFICHAGE DES RÉSULTATS
-            df_stats = pd.DataFrame(stats_semaine)
-            
-            # Affichage des KPIs en colonnes
-            col1, col2 = st.columns(2)
-            max_postes = df_stats["Nombre de postes (7h30)"].max()
-            col1.metric("Besoin Max (ETP)", f"{max_postes} chauffeurs")
-            col2.metric("Moyenne Semaine", f"{round(df_stats['Nombre de postes (7h30)'].mean(), 1)}")
-
-            st.subheader("Détail quotidien")
-            st.table(df_stats)
-            
-            st.info(f"💡 Ce calcul prend en compte le pivotement des contenants et les temps de manutention définis pour chaque véhicule.")
+            # B. Vue Basse : Sélecteur Jour/Chauffeur et Bin Packing
+            afficher_analyse_operationnelle(
+                planning, 
+                df_vehicules, 
+                df_contenants
+            )
 
         except Exception as e:
             st.error(f"❌ Erreur lors de la simulation : {e}")
+            # Optionnel : st.exception(e) pour voir la trace complète pendant le dev
 
 
 elif selected == "Exporter":
