@@ -309,42 +309,52 @@ elif selected == "Synthèse transport":
     df_contenants = data['param_contenants']
     matrice_duree = data['matrice_duree']
 
-    # 2. PRÉPARATION & SIMULATION
-    with st.spinner("⏳ Calcul du dimensionnement en cours..."):
-        try:
-            # On génère les missions
-            missions_hebdo = preparer_missions_unifiees(df_flux)
-            
-            # --- CALCUL DU PLANNING DÉTAILLÉ (Nouveau) ---
-            # On stocke le résultat dans le session_state pour que Resultats_simul_flux puisse y accéder
-            st.session_state['planning_detaille'] = generer_planning_complet(
-                missions_hebdo, 
-                df_vehicules, 
-                df_contenants, 
-                matrice_duree
-            )
-            
-            planning = st.session_state['planning_detaille']
+    # --- NOUVEAU : BOUTON DE LANCEMENT TOUT EN HAUT ---
+    label_btn = "🚀 Relancer la simulation" if 'planning_detaille' in st.session_state else "🚀 Lancer la simulation"
+    
+    if st.button(label_btn, use_container_width=True, type="primary"):
+        with st.spinner("⏳ Calcul du dimensionnement en cours..."):
+            try:
+                # Préparation des missions
+                missions_hebdo = preparer_missions_unifiees(df_flux)
+                
+                # Calcul du planning et stockage en session_state
+                st.session_state['planning_detaille'] = generer_planning_complet(
+                    missions_hebdo, 
+                    df_vehicules, 
+                    df_contenants, 
+                    matrice_duree
+                )
+                st.success("✅ Simulation terminée avec succès !")
+                # On force le refresh pour afficher les résultats immédiatement
+                st.rerun()
 
-            # 3. AFFICHAGE DES RÉSULTATS (via le nouveau module)
-            from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
-            
-            # A. Vue Haute : KPIs et Tableau Hebdo
-            afficher_tableau_bord_global(planning)
-            
-            st.markdown("---")
-            
-            # B. Vue Basse : Sélecteur Jour/Chauffeur et Bin Packing
-            afficher_analyse_operationnelle(
-                planning, 
-                df_vehicules, 
-                df_contenants
-            )
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la simulation : {e}")
+                st.stop()
 
-        except Exception as e:
-            st.error(f"❌ Erreur lors de la simulation : {e}")
-            # Optionnel : st.exception(e) pour voir la trace complète pendant le dev
+    st.markdown("---")
 
+    # 2. AFFICHAGE DES RÉSULTATS (Seulement si le calcul a déjà été fait)
+    if 'planning_detaille' in st.session_state:
+        planning = st.session_state['planning_detaille']
+
+        # Import des modules d'affichage
+        from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
+        
+        # A. Vue Haute : KPIs et Tableau Hebdo
+        afficher_tableau_bord_global(planning)
+        
+        st.markdown("---")
+        
+        # B. Vue Basse : Sélecteur Jour/Chauffeur et Bin Packing
+        afficher_analyse_operationnelle(
+            planning, 
+            df_vehicules, 
+            df_contenants
+        )
+    else:
+        st.info("💡 Cliquez sur le bouton ci-dessus pour générer le dimensionnement transport et les plans de chargement.")
 
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
