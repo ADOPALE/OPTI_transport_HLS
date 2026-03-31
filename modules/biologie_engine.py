@@ -64,29 +64,6 @@ def generate_target_windows(sites_config):
 
 
 
-'''
-def generate_target_windows_OLD(sites_config):
-    """Génère les rendez-vous théoriques (fenêtres) selon la config utilisateur."""
-    tasks = []
-    for site_name, config in sites_config.items():
-        ouv, fer, freq = config['open'], config['close'], config['freq']
-        
-        # Calcul de l'espacement idéal entre deux passages
-        intervalle = (fer - ouv) / freq
-        # Marge de souplesse (20% de l'intervalle) pour aider l'algorithme à grouper
-        marge = intervalle * 0.20 
-        
-        for i in range(freq):
-            cible = ouv + (i + 0.5) * intervalle
-            tasks.append({
-                'site_name': str(site_name).strip().upper(),
-                'window': (max(ouv, cible - marge), min(fer, cible + marge)),
-                'done': False
-            })
-    # Tri chronologique des besoins
-    return sorted(tasks, key=lambda x: x['window'][0])
-'''
-
 # ==========================================
 # PARTIE 2 : MOTEUR DE CALCUL PRINCIPAL
 # ==========================================
