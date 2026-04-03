@@ -70,95 +70,76 @@ def get_route_osrm(waypoints):
 
 
 
-def afficher_stats_vehicules(flotte, df_dist):
+def afficher_stats_vehicules(postes, df_dist):
     """
-    Calcule les KPIs et affiche le graphique d'occupation des véhicules
-    avec alternance de couleurs Bleu/Orange par chauffeur.
+    Calcule les KPIs et affiche le graphique d'occupation.
+    S'adapte à la nouvelle structure : { 'CH_01': [tournee1, tournee2], ... }
     """
-    st.subheader("🚐 Données sur les véhicules")
+    st.subheader("🚐 Données sur les véhicules et chauffeurs")
     
     # --- 1. NETTOYAGE DE LA MATRICE DE DISTANCE ---
     df_dist_clean = df_dist.copy()
-    # On définit la première colonne comme index (noms des sites)
     nom_col_sites = df_dist_clean.columns[0]
     df_dist_clean = df_dist_clean.set_index(nom_col_sites)
-    # Nettoyage des index et colonnes (Majuscules et sans espaces)
     df_dist_clean.index = df_dist_clean.index.astype(str).str.strip().str.upper()
     df_dist_clean.columns = df_dist_clean.columns.astype(str).str.strip().str.upper()
 
     # --- 2. CALCUL DES INDICATEURS ET PRÉPARATION GRAPHIQUE ---
-    nb_vehicules = len(flotte)
+    nb_chauffeurs = len(postes)
     km_totaux = 0
-    nb_chauffeurs = 0
     
-    # Couleurs demandées pour l'alternance des chauffeurs
-    COULEURS_CHAUFFEURS = ["#2E86C1", "#EB984E"] # Bleu / Orange
+    # Couleurs pour l'alternance visuelle (ici on peut alterner par chauffeur)
+    COULEURS = ["#2E86C1", "#EB984E"] 
     
     fig = go.Figure()
 
-    for v_id, vacations in flotte.items():
-        nb_chauffeurs += len(vacations)
+    # On itère sur chaque chauffeur (ou véhicule selon votre renommage)
+    for idx, (c_id, liste_tournees) in enumerate(postes.items()):
+        couleur_actuelle = COULEURS[idx % len(COULEURS)]
         
-        for v_idx, vacation in enumerate(vacations):
-            # Sélection de la couleur selon l'index du chauffeur (0=Bleu, 1=Orange...)
-            couleur_actuelle = COULEURS_CHAUFFEURS[v_idx % len(COULEURS_CHAUFFEURS)]
-            
-            for tournee in vacation:
-                # Calcul des kilomètres de la tournée
-                for i in range(len(tournee) - 1):
+        # Chaque 'liste_tournees' est une liste de tournées unitaires
+        for t_idx, tournee in enumerate(liste_tournees):
+            # CALCUL DES KM
+            # tournee est une liste de dict : [{'site': 'HLS', 'heure': 540}, ...]
+            for i in range(len(tournee) - 1):
+                try:
                     s_dep = str(tournee[i]['site']).strip().upper()
                     s_arr = str(tournee[i+1]['site']).strip().upper()
-                    
-                    try:
+                    if s_dep in df_dist_clean.index and s_arr in df_dist_clean.columns:
                         km_totaux += df_dist_clean.loc[s_dep, s_arr]
-                    except KeyError:
-                        pass # On ignore si la distance est introuvable pour le KPI
+                except (KeyError, IndexError):
+                    pass
 
-                # Ajout du segment au graphique
-                debut = tournee[0]['heure']
-                fin = tournee[-1]['heure']
-                
-                fig.add_trace(go.Bar(
-                    base=[debut],
-                    x=[fin - debut],
-                    y=[v_id],
-                    orientation='h',
-                    marker_color=couleur_actuelle,
-                    name=f"Chauffeur {v_idx + 1}",
-                    showlegend=False,
-                    hovertemplate=(
-                        f"<b>{v_id}</b><br>"
-                        f"Chauffeur n°{v_idx + 1}<br>"
-                        f"Horaire: {str(timedelta(minutes=debut))[:-3]} - {str(timedelta(minutes=fin))[:-3]}"
-                        "<extra></extra>"
-                    )
-                ))
+            # AJOUT AU GRAPHIQUE (Gantt)
+            debut = tournee[0]['heure']
+            fin = tournee[-1]['heure']
+            
+            fig.add_trace(go.Bar(
+                base=[debut],
+                x=[fin - debut],
+                y=[c_id],
+                orientation='h',
+                marker_color=couleur_actuelle,
+                name=c_id,
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>{c_id}</b><br>"
+                    f"Tournée n°{t_idx + 1}<br>"
+                    f"Horaire: {str(timedelta(minutes=debut))[:-3]} - {str(timedelta(minutes=fin))[:-3]}"
+                    "<extra></extra>"
+                )
+            ))
 
     # --- 3. AFFICHAGE DES METRICS ---
+    # Ici, nb_chauffeurs est égal au nombre de clés dans le dictionnaire 'postes'
     km_moyen_chauffeur = km_totaux / nb_chauffeurs if nb_chauffeurs > 0 else 0
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("Véhicules nécessaires", f"{nb_vehicules}")
+    c1.metric("Effectif Chauffeurs", f"{nb_chauffeurs}")
     c2.metric("Distance totale", f"{int(km_totaux)} km")
     c3.metric("Km moyen / chauffeur", f"{int(km_moyen_chauffeur)} km")
 
-    # --- 4. MISE EN FORME DU GRAPHIQUE ---
-    fig.update_layout(
-        title="Occupation temporelle des véhicules (par chauffeur)",
-        xaxis=dict(
-            title="Heure de la journée",
-            tickvals=list(range(300, 1321, 60)), # De 5h à 22h
-            ticktext=[f"{h//60}h" for h in range(300, 1321, 60)],
-            range=[300, 1320] 
-        ),
-        yaxis=dict(autorange="reversed"), # Pour avoir Véhicule 1 en haut
-        barmode='stack',
-        height=400 + (nb_vehicules * 25),
-        margin=dict(l=10, r=10, t=50, b=50)
-    )
-
-    st.plotly_chart(fig, width='stretch')
-
+    
 
 def afficher_stats_chauffeurs(flotte, config_rh):
     """
