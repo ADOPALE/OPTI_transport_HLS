@@ -13,6 +13,7 @@ def show_biologie_page():
         value=False,
         help="Permet de fusionner des tournées avec des décalages progressifs (20 à 30 min) pour les créneaux intermédiaires."
     )
+    st.session_state.souplesse_fusion = souplesse_fusion  # <-- STOCKE LA VALEUR
     st.markdown("---")
     # =========================================
     if "data" not in st.session_state:
