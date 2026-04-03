@@ -176,55 +176,55 @@ def assign_to_vehicles(tournees, config_rh):
             flotte_vehicule[v_new] = [t]
     return flotte_vehicule
     
-def optimiser_postes_chauffeurs(flotte_vehicule, config_rh, souplesse=False):
+def optimiser_postes_chauffeurs(flotte, config_rh, souplesse=False):
     """
-    Remplace intégralement l'ancienne fonction.
-    Garantit aucun chevauchement en respectant RELEVE et PAUSE.
+    Fusionne les tournées unitaires en vacations chauffeurs.
+    Garantit qu'un départ de tournée (T2) est TOUJOURS après le retour de la précédente (T1).
     """
     MAX_AMPLITUDE = config_rh.get('amplitude', 450)
-    DUREE_PAUSE = config_rh.get('pause', 30)
-    DUREE_RELEVE = config_rh.get('releve', 15)
-    
-    # 1. Extraire toutes les tournées de la flotte véhicule pour les traiter par chauffeur
-    all_t = []
-    for v_id in flotte_vehicule:
-        for t in flotte_vehicule[v_id]:
-            all_t.append(t)
-    
-    # 2. Tri chronologique absolu (INDISPENSABLE pour éviter les chevauchements)
-    all_t.sort(key=lambda x: x[0]['heure'])
-    
+    PAUSE = config_rh.get('pause', 30)
+    RELEVE = config_rh.get('releve', 15)
+
+    # 1. On extrait toutes les tournées unitaires de tous les véhicules
+    toutes_tournees = []
+    for v_id, tournees in flotte.items():
+        for t in tournees:
+            toutes_tournees.append(t)
+
+    # 2. TRI CHRONOLOGIQUE ABSOLU par heure de départ du dépôt
+    # C'est ce qui empêche de traiter 10h00 avant 09h00
+    toutes_tournees.sort(key=lambda x: x[0]['heure'])
+
     postes_chauffeurs = {}
     c_count = 1
-    
-    for t_a_placer in all_t:
+
+    for tournee_a_placer in toutes_tournees:
         placed = False
-        h_debut_t = t_a_placer[0]['heure']
-        h_fin_t = t_a_placer[-1]['heure']
-        
+        h_dep_t = tournee_a_placer[0]['heure']
+        h_fin_t = tournee_a_placer[-1]['heure']
+
+        # 3. On cherche un chauffeur existant pour accueillir cette tournée
         for c_id in postes_chauffeurs:
-            vacation = postes_chauffeurs[c_id]
-            h_debut_vacation = vacation[0][0]['heure']
-            h_fin_derniere_t = vacation[-1][-1]['heure']
-            
-            # 3. Déterminer le repos nécessaire avant cette nouvelle tournée
-            # Si le chauffeur a déjà travaillé plus de 3h30 (210 min), on impose la PAUSE
-            # Sinon, on applique la RELÈVE minimum
-            temps_travail_deja_fait = h_fin_derniere_t - h_debut_vacation
-            repos_requis = DUREE_PAUSE if temps_travail_deja_fait > 210 else DUREE_RELEVE
-            
-            # 4. Vérification de faisabilité
-            # - Le début de la nouvelle tournée doit respecter le repos après la fin de la précédente
-            # - L'amplitude totale ne doit pas dépasser le max
-            if h_debut_t >= (h_fin_derniere_t + repos_requis):
+            planning = postes_chauffeurs[c_id]
+            h_debut_vacation = planning[0][0]['heure']
+            h_fin_derniere_tournee = planning[-1][-1]['heure']
+
+            # Détermination du repos nécessaire (Relève ou Pause si > 3h30 de travail)
+            duree_travail_cumulee = h_fin_derniere_tournee - h_debut_vacation
+            repos_requis = PAUSE if duree_travail_cumulee > 210 else RELEVE
+
+            # CONDITION DE NON-CHEVAUCHEMENT STRICTE
+            # Heure Départ T2 >= Heure Arrivée T1 + Repos
+            if h_dep_t >= (h_fin_derniere_tournee + repos_requis):
+                # Vérification de l'amplitude max (Fin T2 - Début T1)
                 if (h_fin_t - h_debut_vacation) <= MAX_AMPLITUDE:
-                    postes_chauffeurs[c_id].append(t_a_placer)
+                    postes_chauffeurs[c_id].append(tournee_a_placer)
                     placed = True
                     break
         
-        # 5. Si pas de place chez les chauffeurs existants, on crée un nouveau poste
+        # 4. Si aucune place, on crée un nouveau poste chauffeur
         if not placed:
-            postes_chauffeurs[f"CH_{c_count:02d}"] = [t_a_placer]
+            postes_chauffeurs[f"CH_{c_count:02d}"] = [tournee_a_placer]
             c_count += 1
-            
+
     return postes_chauffeurs
