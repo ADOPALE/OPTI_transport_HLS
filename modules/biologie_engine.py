@@ -178,53 +178,54 @@ def assign_to_vehicles(tournees, config_rh):
     
 def optimiser_postes_chauffeurs(flotte, config_rh, souplesse=False):
     """
-    Fusionne les tournées unitaires en vacations chauffeurs.
-    Garantit qu'un départ de tournée (T2) est TOUJOURS après le retour de la précédente (T1).
+    Version corrigée : Respecte la structure de base (Véhicule -> [Vacation1, Vacation2])
+    tout en empêchant les chevauchements grâce au tri chronologique.
     """
-    MAX_AMPLITUDE = config_rh.get('amplitude', 450)
+    MAX_POSTE = config_rh.get('amplitude', 450)
     PAUSE = config_rh.get('pause', 30)
     RELEVE = config_rh.get('releve', 15)
 
-    # 1. On extrait toutes les tournées unitaires de tous les véhicules
-    toutes_tournees = []
-    for v_id, tournees in flotte.items():
-        for t in tournees:
-            toutes_tournees.append(t)
+    # 1. On récupère toutes les tournées unitaires (vacations)
+    toutes_vacations = []
+    for v_id, vacations in flotte.items():
+        for vac in vacations:
+            toutes_vacations.append(vac)
 
-    # 2. TRI CHRONOLOGIQUE ABSOLU par heure de départ du dépôt
-    # C'est ce qui empêche de traiter 10h00 avant 09h00
-    toutes_tournees.sort(key=lambda x: x[0]['heure'])
+    # 2. TRI CHRONOLOGIQUE : Empêche de traiter 9h33 avant 9h16
+    toutes_vacations.sort(key=lambda x: x[0]['heure'])
 
-    postes_chauffeurs = {}
-    c_count = 1
+    # 3. Reconstruction de la flotte (Format attendu par vos graphiques)
+    nb_vehicules_max = len(flotte)
+    nouvelle_flotte = {f"Véhicule {i+1}": [] for i in range(nb_vehicules_max)}
 
-    for tournee_a_placer in toutes_tournees:
+    for vac_a_placer in toutes_vacations:
+        debut_v = vac_a_placer[0]['heure']
+        fin_v = vac_a_placer[-1]['heure']
         placed = False
-        h_dep_t = tournee_a_placer[0]['heure']
-        h_fin_t = tournee_a_placer[-1]['heure']
 
-        # 3. On cherche un chauffeur existant pour accueillir cette tournée
-        for c_id in postes_chauffeurs:
-            planning = postes_chauffeurs[c_id]
-            h_debut_vacation = planning[0][0]['heure']
-            h_fin_derniere_tournee = planning[-1][-1]['heure']
+        for v_id in nouvelle_flotte:
+            postes_du_vehicule = nouvelle_flotte[v_id]
+            
+            if not postes_du_vehicule:
+                postes_du_vehicule.append(vac_a_placer)
+                placed = True
+                break
+            else:
+                # On vérifie le dernier point du véhicule pour la relève
+                h_fin_derniere = postes_du_vehicule[-1][-1]['heure']
+                h_debut_premiere = postes_du_vehicule[0][0]['heure']
 
-            # Détermination du repos nécessaire (Relève ou Pause si > 3h30 de travail)
-            duree_travail_cumulee = h_fin_derniere_tournee - h_debut_vacation
-            repos_requis = PAUSE if duree_travail_cumulee > 210 else RELEVE
-
-            # CONDITION DE NON-CHEVAUCHEMENT STRICTE
-            # Heure Départ T2 >= Heure Arrivée T1 + Repos
-            if h_dep_t >= (h_fin_derniere_tournee + repos_requis):
-                # Vérification de l'amplitude max (Fin T2 - Début T1)
-                if (h_fin_t - h_debut_vacation) <= MAX_AMPLITUDE:
-                    postes_chauffeurs[c_id].append(tournee_a_placer)
-                    placed = True
-                    break
+                # Condition de relève stricte
+                if debut_v >= (h_fin_derniere + RELEVE):
+                    # Vérification de l'amplitude max sur le véhicule
+                    if (fin_v - h_debut_premiere) <= MAX_POSTE:
+                        postes_du_vehicule.append(vac_a_placer)
+                        placed = True
+                        break
         
-        # 4. Si aucune place, on crée un nouveau poste chauffeur
         if not placed:
-            postes_chauffeurs[f"CH_{c_count:02d}"] = [tournee_a_placer]
-            c_count += 1
+            # Sécurité (ne devrait pas arriver)
+            v_id_secu = list(nouvelle_flotte.keys())[0]
+            nouvelle_flotte[v_id_secu].append(vac_a_placer)
 
-    return postes_chauffeurs
+    return {k: v for k, v in nouvelle_flotte.items() if v}
