@@ -195,8 +195,42 @@ def assign_to_vehicles(tournees, config_rh):
             flotte_vehicules[f"Véhicule {v_num}"] = [[trne]]
 
     return flotte_vehicules
+    
+def optimiser_postes_chauffeurs(postes, souplesse=False):
+    postes_optimises = []
+    for i, poste in enumerate(postes):
+        if i == 0:
+            # Premier poste : pas de fusion possible avant
+            postes_optimises.append(poste)
+        else:
+            poste_precedent = postes_optimises[-1]
+            fusion_possible = False
 
+            if souplesse:
+                # Tester des décalages progressifs de 20 à 30 minutes
+                for decalage in range(20, 31):  # De 20 à 30 minutes
+                    if (poste['fin'] >= poste_precedent['debut'] - decalage and
+                        poste['debut'] <= poste_precedent['fin'] + decalage):
+                        # Fusionner les postes avec le décalage optimal
+                        postes_optimises[-1] = {
+                            'debut': min(poste['debut'], poste_precedent['debut']),
+                            'fin': max(poste['fin'], poste_precedent['fin']),
+                            'sites': poste_precedent['sites'] + poste['sites']
+                        }
+                        fusion_possible = True
+                        break
 
+            if not fusion_possible:
+                if poste['debut'] <= poste_precedent['fin'] + 20:
+                    postes_optimises[-1] = {
+                        'debut': poste_precedent['debut'],
+                        'fin': poste['fin'],
+                        'sites': poste_precedent['sites'] + poste['sites']
+                    }
+                else:
+                    postes_optimises.append(poste)
+    return postes_optimises
+'''
 def optimiser_postes_chauffeurs(flotte, config_rh):
     """
     Tente de fusionner les vacations pour réduire le nombre de chauffeurs
