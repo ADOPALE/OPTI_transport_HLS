@@ -2,7 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import pandas as pd
-
+from modules.biologie_engine import run_optimization
 
 def show_biologie_page():
     st.title("🧪 Paramétrage des Passages Biologie")
