@@ -67,7 +67,7 @@ def generate_target_windows(sites_config):
 # ==========================================
 # PARTIE 2 : MOTEUR DE CALCUL PRINCIPAL
 # ==========================================
-def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee, config_rh=None):
+def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee, config_rh=None, souplesse=False):
     """
     Moteur d'optimisation mis à jour pour inclure la gestion des chauffeurs et véhicules.
     """
@@ -150,7 +150,7 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee, conf
     resultat_initial = assign_to_vehicles(tournees_unitaires, config_rh)
     
     # On tente de compacter les postes
-    resultat_optimise = optimiser_postes_chauffeurs(resultat_initial, config_rh)
+    resultat_optimise = optimiser_postes_chauffeurs(resultat_initial, config_rh, souplesse=souplesse)
     
     return resultat_optimise
     
