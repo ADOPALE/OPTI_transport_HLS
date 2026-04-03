@@ -103,7 +103,7 @@ def show_simulation_page():
                     sites_config=config["sites"],
                     temps_collecte=config["temps_collecte"],
                     max_tournee=config["duree_max"],
-                    souplesse=souplesse_fusion  # <-- Ajoute ce paramètre
+                    souplesse=st.session_state.get("souplesse_fusion", False)  # <-- RÉCUPÈRE LA VALEUR
                 )
                 
                 # STOCKAGE DES RESULTATS
