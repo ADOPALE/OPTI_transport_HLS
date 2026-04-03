@@ -6,7 +6,14 @@ import pandas as pd
 
 def show_biologie_page():
     st.title("🧪 Paramétrage des Passages Biologie")
-
+ # ===== NOUVEAU : BOUTON DE SOUPLESSE =====
+    souplesse_fusion = st.toggle(
+        "Activer la souplesse de fusion (décalages progressifs 20-30 min)",
+        value=False,
+        help="Permet de fusionner des tournées avec des décalages progressifs (20 à 30 min) pour les créneaux intermédiaires."
+    )
+    st.markdown("---")
+    # =========================================
     if "data" not in st.session_state:
         st.warning("⚠️ Veuillez d'abord importer un fichier Excel.")
         return
