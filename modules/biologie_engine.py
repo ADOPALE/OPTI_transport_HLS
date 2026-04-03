@@ -156,76 +156,134 @@ def run_optimization(m_duree_df, sites_config, temps_collecte, max_tournee, conf
     
 
 def assign_to_vehicles(tournees, config_rh):
-    """Répartit les tournées sur les véhicules sans chevauchement."""
+    """
+    Répartit les tournées par véhicule et par chauffeur (vacation).
+    """
+    MAX_POSTE = config_rh.get('amplitude', 450)
+    PAUSE = config_rh.get('pause', 30)
+    RELEVE = config_rh.get('releve', 15)
+    
     tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
-    flotte_vehicule = {} 
+    flotte_vehicules = {}
     
-    for t in tournees_triees:
-        placed = False
-        h_debut_t = t[0]['heure']
-        for v_id in flotte_vehicule:
-            # Heure de retour au dépôt de la dernière tournée de ce véhicule
-            h_fin_derniere = flotte_vehicule[v_id][-1][-1]['heure']
-            # Le véhicule doit être revenu pour être réutilisé
-            if h_debut_t >= h_fin_derniere:
-                flotte_vehicule[v_id].append(t)
-                placed = True
+    for trne in tournees_triees:
+        debut_trne = trne[0]['heure']
+        fin_trne = trne[-1]['heure']
+        assigned = False
+        
+        for v_id, postes in flotte_vehicules.items():
+            dernier_poste = postes[-1]
+            h_debut_poste = dernier_poste[0][0]['heure']
+            h_fin_poste = dernier_poste[-1][-1]['heure']
+            
+            # 1. Test ajout au chauffeur actuel
+            if (fin_trne - h_debut_poste) <= MAX_POSTE:
+                marge = PAUSE if (h_fin_poste - h_debut_poste) > 180 else 0
+                if h_fin_poste + marge <= debut_trne:
+                    dernier_poste.append(trne)
+                    assigned = True
+                    break
+            
+            # 2. Test relève sur le même véhicule
+            elif h_fin_poste + RELEVE <= debut_trne:
+                postes.append([trne])
+                assigned = True
                 break
-        if not placed:
-            v_new = f"V{len(flotte_vehicule)+1}"
-            flotte_vehicule[v_new] = [t]
-    return flotte_vehicule
+        
+        if not assigned:
+            v_num = len(flotte_vehicules) + 1
+            flotte_vehicules[f"Véhicule {v_num}"] = [[trne]]
+
+    return flotte_vehicules
     
+
 def optimiser_postes_chauffeurs(flotte, config_rh, souplesse=False):
     """
-    Version corrigée : Respecte la structure de base (Véhicule -> [Vacation1, Vacation2])
-    tout en empêchant les chevauchements grâce au tri chronologique.
+    Tente de fusionner les vacations pour réduire le nombre de chauffeurs
+    SANS ajouter de nouveaux véhicules.
     """
     MAX_POSTE = config_rh.get('amplitude', 450)
     PAUSE = config_rh.get('pause', 30)
     RELEVE = config_rh.get('releve', 15)
 
-    # 1. On récupère toutes les tournées unitaires (vacations)
+    # 1. On récupère la liste de TOUTES les vacations (postes chauffeurs)
     toutes_vacations = []
     for v_id, vacations in flotte.items():
         for vac in vacations:
             toutes_vacations.append(vac)
 
-    # 2. TRI CHRONOLOGIQUE : Empêche de traiter 9h33 avant 9h16
-    toutes_vacations.sort(key=lambda x: x[0]['heure'])
+    # 2. On trie par heure de début pour garder une cohérence chronologique
+    toutes_vacations.sort(key=lambda x: x[0][0]['heure'])
 
-    # 3. Reconstruction de la flotte (Format attendu par vos graphiques)
+    # 3. Nouvelle structure de flotte (on réutilise le même nombre de véhicules max)
     nb_vehicules_max = len(flotte)
     nouvelle_flotte = {f"Véhicule {i+1}": [] for i in range(nb_vehicules_max)}
 
     for vac_a_placer in toutes_vacations:
-        debut_v = vac_a_placer[0]['heure']
-        fin_v = vac_a_placer[-1]['heure']
+        debut_v = vac_a_placer[0][0]['heure']
+        fin_v = vac_a_placer[-1][-1]['heure']
         placed = False
 
-        for v_id in nouvelle_flotte:
-            postes_du_vehicule = nouvelle_flotte[v_id]
-            
-            if not postes_du_vehicule:
-                postes_du_vehicule.append(vac_a_placer)
-                placed = True
-                break
-            else:
-                # On vérifie le dernier point du véhicule pour la relève
-                h_fin_derniere = postes_du_vehicule[-1][-1]['heure']
-                h_debut_premiere = postes_du_vehicule[0][0]['heure']
+        # On essaie d'abord de l'ajouter à un chauffeur existant (Fusion de poste)
+        for v_id, postes in nouvelle_flotte.items():
+            for poste in postes:
+                h_debut_poste = poste[0][0]['heure']
+                h_fin_poste = poste[-1][-1]['heure']
 
-                # Condition de relève stricte
-                if debut_v >= (h_fin_derniere + RELEVE):
-                    # Vérification de l'amplitude max sur le véhicule
-                    if (fin_v - h_debut_premiere) <= MAX_POSTE:
-                        postes_du_vehicule.append(vac_a_placer)
+                # Test d'amplitude si on fusionne
+                nouvelle_amp = max(h_fin_poste, fin_v) - min(h_debut_poste, debut_v)
+
+                if nouvelle_amp <= MAX_POSTE:
+                    if souplesse:
+                        # Tester des décalages progressifs de 20 à 30 minutes
+                        for decalage in range(20, 31):  # De 20 à 30 minutes
+                            if (fin_v + decalage >= h_debut_poste and debut_v <= h_fin_poste + decalage):
+                                poste.extend(vac_a_placer)
+                                poste.sort(key=lambda x: x[0]['heure'])
+                                placed = True
+                                break
+                    else:
+                        # Logique stricte actuelle
+                        if fin_v + 5 <= h_debut_poste or debut_v >= h_fin_poste + 5:
+                            poste.extend(vac_a_placer)
+                            poste.sort(key=lambda x: x[0]['heure'])
+                            placed = True
+                            break
+                if placed:
+                    break
+            if placed:
+                break
+
+        # Si fusion impossible, on essaie de créer une nouvelle vacation (nouveau chauffeur)
+        # sur un véhicule existant (Relève)
+        if not placed:
+            for v_id in nouvelle_flotte:
+                postes = nouvelle_flotte[v_id]
+                if not postes:  # Véhicule vide
+                    postes.append(vac_a_placer)
+                    placed = True
+                    break
+                else:
+                    # Test si on peut ajouter une relève sur ce véhicule
+                    conflit = False
+                    for poste in postes:
+                        h_dep = poste[0][0]['heure']
+                        h_fin = poste[-1][-1]['heure']
+                        # Si chevauchement avec une marge de relève
+                        if not (fin_v + RELEVE <= h_dep or debut_v >= h_fin + RELEVE):
+                            conflit = True
+                            break
+
+                    if not conflit:
+                        postes.append(vac_a_placer)
+                        postes.sort(key=lambda x: x[0][0]['heure'])
                         placed = True
                         break
-        
+
+        # Sécurité : Si vraiment on ne peut pas placer (ne devrait pas arriver à iso-véhicules)
         if not placed:
-            # Sécurité (ne devrait pas arriver)
             v_id_secu = list(nouvelle_flotte.keys())[0]
             nouvelle_flotte[v_id_secu].append(vac_a_placer)
 
+    # Nettoyage des véhicules qui seraient devenus vides après compactage
     return {k: v for k, v in nouvelle_flotte.items() if v}
