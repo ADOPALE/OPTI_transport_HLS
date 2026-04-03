@@ -71,80 +71,76 @@ def get_route_osrm(waypoints):
         return None
     return None
 #--------------------
-
-
-
-
-def afficher_stats_vehicules(postes, df_dist):
+def afficher_stats_vehicules(flotte, df_dist):
     """
-    Calcule les KPIs et affiche le graphique d'occupation.
-    S'adapte à la nouvelle structure : { 'CH_01': [tournee1, tournee2], ... }
+    Calcule les KPIs et affiche le graphique d'occupation des véhicules
+    Version compatible avec la structure d'origine (Véhicule > Vacations).
     """
-    st.subheader("🚐 Données sur les véhicules et chauffeurs")
+    st.subheader("🚐 Données sur les véhicules")
     
-    # --- 1. NETTOYAGE DE LA MATRICE DE DISTANCE ---
+    # Nettoyage matrice
     df_dist_clean = df_dist.copy()
     nom_col_sites = df_dist_clean.columns[0]
     df_dist_clean = df_dist_clean.set_index(nom_col_sites)
     df_dist_clean.index = df_dist_clean.index.astype(str).str.strip().str.upper()
     df_dist_clean.columns = df_dist_clean.columns.astype(str).str.strip().str.upper()
 
-    # --- 2. CALCUL DES INDICATEURS ET PRÉPARATION GRAPHIQUE ---
-    nb_chauffeurs = len(postes)
+    nb_vehicules = len(flotte)
     km_totaux = 0
-    
-    # Couleurs pour l'alternance visuelle (ici on peut alterner par chauffeur)
-    COULEURS = ["#2E86C1", "#EB984E"] 
+    nb_chauffeurs = 0
+    COULEURS_CHAUFFEURS = ["#2E86C1", "#EB984E"] # Bleu / Orange
     
     fig = go.Figure()
 
-    # On itère sur chaque chauffeur (ou véhicule selon votre renommage)
-    for idx, (c_id, liste_tournees) in enumerate(postes.items()):
-        couleur_actuelle = COULEURS[idx % len(COULEURS)]
+    for v_id, vacations in flotte.items():
+        nb_chauffeurs += len(vacations)
         
-        # Chaque 'liste_tournees' est une liste de tournées unitaires
-        for t_idx, tournee in enumerate(liste_tournees):
-            # CALCUL DES KM
-            # tournee est une liste de dict : [{'site': 'HLS', 'heure': 540}, ...]
+        for v_idx, tournee in enumerate(vacations):
+            couleur_actuelle = COULEURS_CHAUFFEURS[v_idx % len(COULEURS_CHAUFFEURS)]
+            
+            # Calcul km
             for i in range(len(tournee) - 1):
+                s_dep = str(tournee[i]['site']).strip().upper()
+                s_arr = str(tournee[i+1]['site']).strip().upper()
                 try:
-                    s_dep = str(tournee[i]['site']).strip().upper()
-                    s_arr = str(tournee[i+1]['site']).strip().upper()
-                    if s_dep in df_dist_clean.index and s_arr in df_dist_clean.columns:
-                        km_totaux += df_dist_clean.loc[s_dep, s_arr]
-                except (KeyError, IndexError):
+                    km_totaux += df_dist_clean.loc[s_dep, s_arr]
+                except KeyError:
                     pass
 
-            # AJOUT AU GRAPHIQUE (Gantt)
+            # Graphique
             debut = tournee[0]['heure']
             fin = tournee[-1]['heure']
             
             fig.add_trace(go.Bar(
                 base=[debut],
                 x=[fin - debut],
-                y=[c_id],
+                y=[v_id],
                 orientation='h',
                 marker_color=couleur_actuelle,
-                name=c_id,
+                name=f"Chauffeur {v_idx + 1}",
                 showlegend=False,
                 hovertemplate=(
-                    f"<b>{c_id}</b><br>"
-                    f"Tournée n°{t_idx + 1}<br>"
+                    f"<b>{v_id}</b><br>Chauffeur n°{v_idx + 1}<br>"
                     f"Horaire: {str(timedelta(minutes=debut))[:-3]} - {str(timedelta(minutes=fin))[:-3]}"
                     "<extra></extra>"
                 )
             ))
 
-    # --- 3. AFFICHAGE DES METRICS ---
-    # Ici, nb_chauffeurs est égal au nombre de clés dans le dictionnaire 'postes'
-    km_moyen_chauffeur = km_totaux / nb_chauffeurs if nb_chauffeurs > 0 else 0
-    
+    # Metrics
+    km_moyen = km_totaux / nb_chauffeurs if nb_chauffeurs > 0 else 0
     c1, c2, c3 = st.columns(3)
-    c1.metric("Effectif Chauffeurs", f"{nb_chauffeurs}")
-    c2.metric("Distance totale", f"{int(km_totaux)} km")
-    c3.metric("Km moyen / chauffeur", f"{int(km_moyen_chauffeur)} km")
+    c1.metric("Véhicules", f"{nb_vehicules}")
+    c2.metric("Distance", f"{int(km_totaux)} km")
+    c3.metric("Km moyen/ch.", f"{int(km_moyen)} km")
 
-    
+    fig.update_layout(
+        xaxis=dict(tickvals=list(range(300, 1321, 60)), ticktext=[f"{h//60}h" for h in range(300, 1321, 60)], range=[300, 1320]),
+        yaxis=dict(autorange="reversed"),
+        barmode='stack',
+        height=400 + (nb_vehicules * 25)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
 
 def afficher_stats_chauffeurs(postes, config_rh):
     """Affiche le récapitulatif par chauffeur (Amplitude, Travail, Pauses)."""
