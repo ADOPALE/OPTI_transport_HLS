@@ -102,7 +102,8 @@ def show_simulation_page():
                     m_duree_df=df_duree,
                     sites_config=config["sites"],
                     temps_collecte=config["temps_collecte"],
-                    max_tournee=config["duree_max"]
+                    max_tournee=config["duree_max"],
+                    souplesse=souplesse_fusion  # <-- Ajoute ce paramètre
                 )
                 
                 # STOCKAGE DES RESULTATS
