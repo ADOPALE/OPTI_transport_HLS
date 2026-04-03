@@ -15,11 +15,6 @@ import time
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 
-def minutes_to_hhmm(minutes):
-    h = int(minutes // 60)
-    m = int(minutes % 60)
-    return f"{h:02d}:{m:02d}"
-
 # 1. Géocodage avec Cache pour éviter de taper l'API inutilement
 @st.cache_data(show_spinner=False)
 def geocode_bio_sites(sites_adresses, hls_adresse):
@@ -71,23 +66,32 @@ def get_route_osrm(waypoints):
         return None
     return None
 #--------------------
+
+
+
+
 def afficher_stats_vehicules(flotte, df_dist):
     """
     Calcule les KPIs et affiche le graphique d'occupation des véhicules
-    Version compatible avec la structure d'origine (Véhicule > Vacations).
+    avec alternance de couleurs Bleu/Orange par chauffeur.
     """
     st.subheader("🚐 Données sur les véhicules")
     
-    # Nettoyage matrice
+    # --- 1. NETTOYAGE DE LA MATRICE DE DISTANCE ---
     df_dist_clean = df_dist.copy()
+    # On définit la première colonne comme index (noms des sites)
     nom_col_sites = df_dist_clean.columns[0]
     df_dist_clean = df_dist_clean.set_index(nom_col_sites)
+    # Nettoyage des index et colonnes (Majuscules et sans espaces)
     df_dist_clean.index = df_dist_clean.index.astype(str).str.strip().str.upper()
     df_dist_clean.columns = df_dist_clean.columns.astype(str).str.strip().str.upper()
 
+    # --- 2. CALCUL DES INDICATEURS ET PRÉPARATION GRAPHIQUE ---
     nb_vehicules = len(flotte)
     km_totaux = 0
     nb_chauffeurs = 0
+    
+    # Couleurs demandées pour l'alternance des chauffeurs
     COULEURS_CHAUFFEURS = ["#2E86C1", "#EB984E"] # Bleu / Orange
     
     fig = go.Figure()
@@ -95,81 +99,125 @@ def afficher_stats_vehicules(flotte, df_dist):
     for v_id, vacations in flotte.items():
         nb_chauffeurs += len(vacations)
         
-        for v_idx, tournee in enumerate(vacations):
+        for v_idx, vacation in enumerate(vacations):
+            # Sélection de la couleur selon l'index du chauffeur (0=Bleu, 1=Orange...)
             couleur_actuelle = COULEURS_CHAUFFEURS[v_idx % len(COULEURS_CHAUFFEURS)]
             
-            # Calcul km
-            for i in range(len(tournee) - 1):
-                s_dep = str(tournee[i]['site']).strip().upper()
-                s_arr = str(tournee[i+1]['site']).strip().upper()
-                try:
-                    km_totaux += df_dist_clean.loc[s_dep, s_arr]
-                except KeyError:
-                    pass
+            for tournee in vacation:
+                # Calcul des kilomètres de la tournée
+                for i in range(len(tournee) - 1):
+                    s_dep = str(tournee[i]['site']).strip().upper()
+                    s_arr = str(tournee[i+1]['site']).strip().upper()
+                    
+                    try:
+                        km_totaux += df_dist_clean.loc[s_dep, s_arr]
+                    except KeyError:
+                        pass # On ignore si la distance est introuvable pour le KPI
 
-            # Graphique
-            debut = tournee[0]['heure']
-            fin = tournee[-1]['heure']
-            
-            fig.add_trace(go.Bar(
-                base=[debut],
-                x=[fin - debut],
-                y=[v_id],
-                orientation='h',
-                marker_color=couleur_actuelle,
-                name=f"Chauffeur {v_idx + 1}",
-                showlegend=False,
-                hovertemplate=(
-                    f"<b>{v_id}</b><br>Chauffeur n°{v_idx + 1}<br>"
-                    f"Horaire: {str(timedelta(minutes=debut))[:-3]} - {str(timedelta(minutes=fin))[:-3]}"
-                    "<extra></extra>"
-                )
-            ))
+                # Ajout du segment au graphique
+                debut = tournee[0]['heure']
+                fin = tournee[-1]['heure']
+                
+                fig.add_trace(go.Bar(
+                    base=[debut],
+                    x=[fin - debut],
+                    y=[v_id],
+                    orientation='h',
+                    marker_color=couleur_actuelle,
+                    name=f"Chauffeur {v_idx + 1}",
+                    showlegend=False,
+                    hovertemplate=(
+                        f"<b>{v_id}</b><br>"
+                        f"Chauffeur n°{v_idx + 1}<br>"
+                        f"Horaire: {str(timedelta(minutes=debut))[:-3]} - {str(timedelta(minutes=fin))[:-3]}"
+                        "<extra></extra>"
+                    )
+                ))
 
-    # Metrics
-    km_moyen = km_totaux / nb_chauffeurs if nb_chauffeurs > 0 else 0
+    # --- 3. AFFICHAGE DES METRICS ---
+    km_moyen_chauffeur = km_totaux / nb_chauffeurs if nb_chauffeurs > 0 else 0
+    
     c1, c2, c3 = st.columns(3)
-    c1.metric("Véhicules", f"{nb_vehicules}")
-    c2.metric("Distance", f"{int(km_totaux)} km")
-    c3.metric("Km moyen/ch.", f"{int(km_moyen)} km")
+    c1.metric("Véhicules nécessaires", f"{nb_vehicules}")
+    c2.metric("Distance totale", f"{int(km_totaux)} km")
+    c3.metric("Km moyen / chauffeur", f"{int(km_moyen_chauffeur)} km")
 
+    # --- 4. MISE EN FORME DU GRAPHIQUE ---
     fig.update_layout(
-        xaxis=dict(tickvals=list(range(300, 1321, 60)), ticktext=[f"{h//60}h" for h in range(300, 1321, 60)], range=[300, 1320]),
-        yaxis=dict(autorange="reversed"),
+        title="Occupation temporelle des véhicules (par chauffeur)",
+        xaxis=dict(
+            title="Heure de la journée",
+            tickvals=list(range(300, 1321, 60)), # De 5h à 22h
+            ticktext=[f"{h//60}h" for h in range(300, 1321, 60)],
+            range=[300, 1320] 
+        ),
+        yaxis=dict(autorange="reversed"), # Pour avoir Véhicule 1 en haut
         barmode='stack',
-        height=400 + (nb_vehicules * 25)
+        height=400 + (nb_vehicules * 25),
+        margin=dict(l=10, r=10, t=50, b=50)
     )
-    st.plotly_chart(fig, use_container_width=True)
+
+    st.plotly_chart(fig, width='stretch')
 
 
-def afficher_stats_chauffeurs(postes, config_rh):
-    """Affiche le récapitulatif par chauffeur (Amplitude, Travail, Pauses)."""
-    st.subheader("👨‍✈️ Récapitulatif par Chauffeur")
+def afficher_stats_chauffeurs(flotte, config_rh):
+    """
+    Calcule les indicateurs de performance liés aux chauffeurs (vacations).
+    """
+    st.subheader("👥 Données sur les chauffeurs")
+
+    nb_postes = 0
+    duree_totale_tournees = 0
+    total_tournees = 0
     
-    recap = []
-    for c_id, tournees in postes.items():
-        # Heure de départ de la toute première tournée
-        debut_vacation = tournees[0][0]['heure']
-        # Heure de retour de la toute dernière tournée
-        fin_vacation = tournees[-1][-1]['heure']
+    # Récupération des contraintes RH
+    # Amplitude (ex: 450 min), Pause (ex: 30 min)
+    amplitude_max = config_rh.get('amplitude', 450)
+    pause_reglementaire = config_rh.get('pause', 30)
+
+    for v_id, vacations in flotte.items():
+        nb_postes += len(vacations) # Chaque vacation est un poste chauffeur
         
-        amplitude = fin_vacation - debut_vacation
-        
-        # Calcul du temps de travail effectif (somme des durées de chaque tournée)
-        temps_travail = 0
-        for trne in tournees:
-            temps_travail += (trne[-1]['heure'] - trne[0]['heure'])
-        
-        recap.append({
-            "Chauffeur": c_id,
-            "Début": minutes_to_hhmm(debut_vacation),
-            "Fin": minutes_to_hhmm(fin_vacation),
-            "Amplitude": f"{amplitude // 60}h{amplitude % 60:02d}",
-            "Travail effectif": f"{temps_travail // 60}h{temps_travail % 60:02d}",
-            "Nb Tournées": len(tournees)
-        })
+        for vacation in vacations:
+            total_tournees += len(vacation)
+            for tournee in vacation:
+                # Durée de la tournée = Heure de fin - Heure de début
+                duree_trne = tournee[-1]['heure'] - tournee[0]['heure']
+                duree_totale_tournees += duree_trne
+
+    # --- CALCUL DES INDICATEURS ---
     
-    st.table(pd.DataFrame(recap))
+    # 1. Taux d'occupation moyen
+    # Formule : Temps de roulage / (Amplitude totale - Temps de pause)
+    temps_travail_dispo_par_poste = amplitude_max - pause_reglementaire
+    if nb_postes > 0 and temps_travail_dispo_par_poste > 0:
+        occupation_moyenne = (duree_totale_tournees / (nb_postes * temps_travail_dispo_par_poste)) * 100
+    else:
+        occupation_moyenne = 0
+
+    # 2. Moyenne de tournées par poste
+    tournees_par_poste = total_tournees / nb_postes if nb_postes > 0 else 0
+
+    # --- AFFICHAGE ---
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Nombre de postes (7h30)", f"{nb_postes}")
+    c2.metric("Taux d'occupation moyen", f"{occupation_moyenne:.1f} %")
+    c3.metric("Tournées moyennes / poste", f"{tournees_par_poste:.1f}")
+
+    # Petit graphique de répartition du temps pour un chauffeur type
+    if nb_postes > 0:
+        temps_moyen_roulage = duree_totale_tournees / nb_postes
+        temps_inoccupé = temps_travail_dispo_par_poste - temps_moyen_roulage
+        
+        fig_pie = px.pie(
+            names=["Temps en tournée", "Temps inoccupé / Attente", "Pause réglementaire"],
+            values=[temps_moyen_roulage, max(0, temps_inoccupé), pause_reglementaire],
+            color_discrete_sequence=["#2E86C1", "#D5D8DC", "#EB984E"],
+            title="Répartition moyenne d'une vacation"
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+
 
 def afficher_stats_sites(flotte):
     """
@@ -342,21 +390,82 @@ def afficher_detail_flotte_vehicules(flotte, df_dist):
         
         return vehicule_selectionne, vacations # On retourne ces infos pour l'ensemble suivant
 
-def afficher_detail_itineraire(postes):
-    """Affiche le déroulé chronologique pour chaque chauffeur."""
-    st.subheader("📑 Détail des itinéraires")
+
+
+
+def afficher_detail_itineraire(v_id, vacations, sites_config, hls_adresse):
+    # 1. Création de la liste des tournées pour le menu
+    tous_les_passages = []
+    index_tournee = 1
+    for v_idx, vac in enumerate(vacations):
+        for trne in vac:
+            tous_les_passages.append({
+                "label": f"Tournée {index_tournee} (Chauffeur {v_idx+1})",
+                "data": trne,
+                "chauffeur": v_idx + 1
+            })
+            index_tournee += 1
+
+    st.write("---")
+    col_sel, _ = st.columns([2, 1])
+    with col_sel:
+        selection = st.selectbox("📍 Choisir une tournée à inspecter", tous_les_passages, format_func=lambda x: x["label"])
+
+    if selection:
+        trne_data = selection["data"]
+        st.write(f"#### ⏱️ Journal de bord : {selection['label']}")
+        
+        # 2. Tableau des passages
+        tableau = []
+        for i, p in enumerate(trne_data):
+            h_total = p.get('heure', 0)
+            h_str = f"{int(h_total//60):02d}:{int(h_total%60):02d}"
+            type_arret = "🚀 Départ HLS" if i == 0 else ("🏁 Dépôt (Retour)" if i == len(trne_data)-1 else "🏥 Collecte")
+            tableau.append({
+                "Ordre": i + 1,
+                "Site": str(p.get('site', 'Inconnu')).upper(),
+                "Heure de passage": h_str,
+                "Type": type_arret
+            })
+        st.table(pd.DataFrame(tableau).set_index("Ordre"))
+
+        # 3. PARTIE CARTE AVEC TRACÉ ROUTIER (OSRM)
+        st.write("#### 🗺️ Itinéraire géographique (Tracé routier)")
+        show_map = st.checkbox("🗺️ Charger la carte interactive", value=False)
     
-    for c_id, tournees in postes.items():
-        with st.expander(f"📋 Planning détaillé - {c_id}", expanded=False):
-            data_rows = []
-            for idx, trne in enumerate(tournees):
-                for step in trne:
-                    data_rows.append({
-                        "Tournée": f"n°{idx+1}",
-                        "Heure": minutes_to_hhmm(step['heure']),
-                        "Site": step['site'],
-                        "Action": "Dépôt" if step['site'] == "HLS" else "Collecte"
-                    })
-            
-            df_plan = pd.DataFrame(data_rows)
-            st.dataframe(df_plan, use_container_width=True, hide_index=True)
+        if show_map:
+            with st.spinner("🌍 Calcul de l'itinéraire routier..."):
+                coords_gps = geocode_bio_sites(sites_config, hls_adresse)
+                
+                # Préparation des points (waypoints) pour OSRM
+                waypoints_osrm = []
+                for stop in trne_data:
+                    nom_site = str(stop.get('site', '')).upper() if isinstance(stop, dict) else str(stop).upper()
+                    if nom_site in coords_gps:
+                        waypoints_osrm.append({
+                            "lat": coords_gps[nom_site]["lat"], 
+                            "lon": coords_gps[nom_site]["lon"], 
+                            "nom": nom_site
+                        })
+                
+                if len(waypoints_osrm) >= 2:
+                    # APPEL À OSRM POUR LE TRACÉ RÉEL
+                    route_line = get_route_osrm(waypoints_osrm)
+                    
+                    m = folium.Map(location=[waypoints_osrm[0]['lat'], waypoints_osrm[0]['lon']], zoom_start=12, tiles="CartoDB positron")
+                    
+                    if route_line:
+                        # On dessine le tracé ROUTIER
+                        folium.PolyLine(route_line, color="#2E86C1", weight=5, opacity=0.8).add_to(m)
+                    else:
+                        # Backup ligne droite si OSRM échoue
+                        folium.PolyLine([[w['lat'], w['lon']] for w in waypoints_osrm], color="#2E86C1", weight=2, dash_array='5').add_to(m)
+                    
+                    # Ajout des marqueurs
+                    for i, wp in enumerate(waypoints_osrm):
+                        folium.Marker([wp['lat'], wp['lon']], tooltip=f"{i+1}. {wp['nom']}", 
+                                      icon=folium.Icon(color="blue", icon="info-sign")).add_to(m)
+                    
+                    st_folium(m, width='stretch', height=500, returned_objects=[])
+                else:
+                    st.warning("📍 Pas assez de points géocodés pour tracer la route.")
