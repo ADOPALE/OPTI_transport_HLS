@@ -259,46 +259,126 @@ class MoteurSimulation:
         
         return {"tournees": df_t, "kpis": kpis, "obj_chauffeurs": chauffeurs}
 
-def generer_visuel_bin_packing(contenant_type, qte, vehicule_type, df_vehicules, df_contenants):
-    import plotly.graph_objects as go
-    
-    # Dimensions par défaut sécurisées
-    L_v, l_v = (4.0, 2.3) if "VL" not in str(vehicule_type).upper() else (3.2, 1.9)
-    L_c, l_c = 1.2, 0.8 # Dimensions standards Armoire/Palette
-    
-    # Tentative de récupération des vraies dimensions dans le référentiel
-    try:
-        col_lib = trouver_colonne(df_contenants, ["libellé", "contenant"])
-        row_c = df_contenants[df_contenants[col_lib].str.upper() == str(contenant_type).upper()].iloc[0]
-        L_c = float(row_c[trouver_colonne(df_contenants, ["longueur"])])
-        l_c = float(row_c[trouver_colonne(df_contenants, ["largeur"])])
-    except:
-        pass # Garde les valeurs par défaut si erreur
+import plotly.graph_objects as go
+import random
 
-    fig = go.Figure()
-    # Dessin du contour du camion
-    fig.add_shape(type="rect", x0=0, y0=0, x1=L_v, y1=l_v, 
-                  line=dict(color="RoyalBlue", width=3), fillcolor="LightSteelBlue", opacity=0.2)
-
-    x_curr, y_curr = 0.0, 0.0
-    count = 0
+def generer_visuel_bin_packing(tournee: Tournee, df_vehicules: pd.DataFrame, df_contenants: pd.DataFrame) -> go.Figure:
+    """
+    Génère un visuel 2D (vue de dessus) du chargement du camion via une heuristique NFDH.
+    Affiche quel contenant transporte quoi (Fonction Support) et vers où (Destination).
+    """
     
-    # Boucle de placement simplifiée
-    for i in range(int(qte)):
-        if y_curr + l_c > l_v + 0.01: # Si dépasse la largeur, nouvelle colonne
-            y_curr = 0
-            x_curr += L_c
+    # 1. Récupération des dimensions du véhicule
+    vehicule_info = df_vehicules[df_vehicules["Type"] == tournee.vehicule_type]
+    if vehicule_info.empty:
+        return go.Figure().update_layout(title="Véhicule inconnu")
+    
+    v_row = vehicule_info.iloc[0]
+    # Normalisation robuste des colonnes de dimensions
+    col_dim_v = {c.lower(): c for c in v_row.index}
+    V_L = v_row.get(col_dim_v.get('longueur', ''), 6000) # mm
+    V_W = v_row.get(col_dim_v.get('largeur', ''), 2400)  # mm
+    
+    # 2. Préparation de la liste des contenants à charger
+    contenants_a_placer = []
+    # Palette de couleurs génériques pour les destinations
+    destinations = list(set(j.destination for j in tournee.jobs))
+    couleurs = px.colors.qualitative.Safe
+    color_map = {dest: couleurs[i % len(couleurs)] for i, dest in enumerate(destinations)}
+
+    for job in tournee.jobs:
+        cont_info = df_contenants[df_contenants["Type"] == job.type_contenant]
+        if cont_info.empty:
+            # Dimensions par défaut si inconnu (ex: palette standard)
+            c_l, c_w, c_h = 1200, 800, 1500
+        else:
+            c_row = cont_info.iloc[0]
+            col_dim_c = {c.lower(): c for c in c_row.index}
+            c_l = c_row.get(col_dim_c.get('longueur', ''), 1200)
+            c_w = c_row.get(col_dim_c.get('largeur', ''), 800)
+            c_h = c_row.get(col_dim_c.get('hauteur', ''), 1500)
+
+        for _ in range(int(job.quantite)):
+            contenants_a_placer.append({
+                'l': c_l, 'w': c_w, 'h': c_h,
+                'dest': job.destination,
+                'fs': job.fonction_support,
+                'type': job.type_contenant,
+                'color': color_map[job.destination]
+            })
+
+    # 3. Algorithme Bin Packing 2D (Next Fit Decreasing Height)
+    # Tri par hauteur décroissante
+    contenants_a_placer.sort(key=lambda x: x['h'], reverse=True)
+    
+    rectangles_places = []
+    current_x = 0
+    current_y = 0
+    shelf_height = 0
+    
+    for c in contenants_a_placer:
+        # Vérifier si ça rentre dans la rangée actuelle (largeur)
+        if current_y + c['w'] > V_W:
+            # Nouvelle rangée
+            current_x += shelf_height
+            current_y = 0
+            shelf_height = 0
+            
+        # Vérifier si ça rentre dans le camion (longueur)
+        if current_x + c['l'] > V_L:
+            # Ne rentre plus (débordement virtuel pour le visuel)
+            c['color'] = 'black' # Marquer en noir les contenants qui dépassent
+            
+        # Placement
+        rectangles_places.append({
+            'x': current_x, 'y': current_y,
+            'l': c['l'], 'w': c['w'],
+            'info': c
+        })
         
-        if x_curr + L_c <= L_v + 0.01: # Si rentre dans la longueur
-            fig.add_shape(type="rect", x0=x_curr, y0=y_curr, x1=x_curr+L_c, y1=y_curr+l_c, 
-                          line=dict(color="DarkSlateGrey", width=2), fillcolor="ForestGreen")
-            count += 1
-            y_curr += l_c
+        current_y += c['w']
+        shelf_height = max(shelf_height, c['l'])
 
+    # 4. Génération du graphique Plotly (Vue de dessus)
+    fig = go.Figure()
+
+    # Dessiner le contour du camion
+    fig.add_shape(type="rect", x0=0, y0=0, x1=V_L, y1=V_W, 
+                  line=dict(color="RoyalBlue", width=4), fillcolor="white")
+
+    # Dessiner chaque contenant
+    for r in rectangles_places:
+        c = r['info']
+        hover_text = (f"<b>Contenant:</b> {c['type']}<br>"
+                      f"<b>Contenu (FS):</b> {c['fs']}<br>"
+                      f"<b>Destination:</b> {c['dest']}<br>"
+                      f"<b>Dim:</b> {c['l']}x{c['w']}x{c['h']} mm")
+        
+        fig.add_trace(go.Scatter(
+            x=[r['x'], r['x'] + r['l'], r['x'] + r['l'], r['x'], r['x']],
+            y=[r['y'], r['y'], r['y'] + r['w'], r['y'] + r['w'], r['y']],
+            fill="toself",
+            fillcolor=c['color'],
+            mode='lines',
+            line=dict(color="black", width=1),
+            text=hover_text,
+            hoverinfo="text",
+            showlegend=False
+        ))
+
+    # Configuration des axes
     fig.update_layout(
-        title=f"Chargement : {count} / {int(qte)} {contenant_type}",
-        xaxis=dict(title="Longueur Camion (m)", range=[-0.2, L_v + 0.5]),
-        yaxis=dict(title="Largeur (m)", range=[-0.2, l_v + 0.5], scaleanchor="x", scaleratio=1),
-        width=700, height=400
+        title=f"Plan de chargement : {tournee.vehicule_type} ({V_L}x{V_W} mm) - Vue de dessus",
+        xaxis=dict(title="Longueur (mm)", range=[0, max(V_L, current_x + shelf_height)]),
+        yaxis=dict(title="Largeur (mm)", range=[0, V_W], scaleanchor="x", scaleratio=1),
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=400
     )
+    
+    # Ajout d'une légende factice pour les destinations
+    for dest, color in color_map.items():
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers',
+                                    marker=dict(size=10, color=color),
+                                    showlegend=True, name=dest))
+
     return fig
