@@ -45,19 +45,36 @@ class MoteurSimulation:
         self.jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
     def _construire_hubs(self) -> Dict[str, str]:
-        """Identifie les sites à distance 0 et les groupe en Hubs."""
-        matrice_dist = self.data["matrice_distance"]
-        sites = matrice_dist.index.tolist()
-        mapping_site_hub = {site: site for site in sites}
-        
-        # Algorithme simple de groupement par distance nulle
-        for i, site_a in enumerate(sites):
-            for site_b in sites[i+1:]:
-                if matrice_dist.loc[site_a, site_b] == 0:
+    """Identifie les sites à distance 0 et les groupe en Hubs avec gestion d'index robuste."""
+    matrice_dist = self.data["matrice_distance"]
+    
+    # --- AJOUT SÉCURITÉ INDEX ---
+    # Si l'index est numérique (0,1,2...), on utilise la 1ère colonne comme index
+    if matrice_dist.index.dtype in ['int64', 'int32']:
+        col_sites = matrice_dist.columns[0]
+        matrice_dist = matrice_dist.set_index(col_sites)
+    
+    # On s'assure que les colonnes et l'index sont identiques
+    sites = matrice_dist.index.tolist()
+    matrice_dist.columns = sites 
+    # ----------------------------
+
+    mapping_site_hub = {site: site for site in sites}
+    
+    # Algorithme de groupement par distance nulle
+    for i, site_a in enumerate(sites):
+        for site_b in sites[i+1:]:
+            try:
+                # Utilisation de .at pour plus de performance sur des valeurs uniques
+                if matrice_dist.at[site_a, site_b] == 0:
                     # On unifie sous le nom du premier site rencontré
                     hub_id = mapping_site_hub[site_a]
                     mapping_site_hub[site_b] = hub_id
-        return mapping_site_hub
+            except KeyError:
+                # Sécurité si un site manque dans les colonnes
+                continue
+                
+    return mapping_site_hub
 
     def _preparer_flotte(self) -> pd.DataFrame:
         """Filtre la flotte sélectionnée par l'utilisateur."""
