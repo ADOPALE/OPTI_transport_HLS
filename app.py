@@ -297,65 +297,73 @@ elif selected == "Véhicules et paramètres":
 
 
 elif selected == "Synthèse transport":
-    st.title("📊 Dimensionnement RH Hebdomadaire")
+    st.title("📊 Dimensionnement RH & Optimisation Transport")
 
     # 1. VERIFICATION DES DONNÉES
     if 'data' not in st.session_state or 'm_flux' not in st.session_state['data']:
         st.error("⚠️ Données de flux introuvables. Veuillez importer le fichier Excel d'abord.")
         st.stop()
     
-    data = st.session_state['data']
-    df_flux = data['m_flux']
-    df_vehicules = data['param_vehicules']
-    df_contenants = data['param_contenants']
-    matrice_duree = data['matrice_duree']
-
-    # --- NOUVEAU : BOUTON DE LANCEMENT TOUT EN HAUT ---
+    # 2. BOUTON DE LANCEMENT
     label_btn = "🚀 Relancer la simulation" if 'planning_detaille' in st.session_state else "🚀 Lancer la simulation"
     
     if st.button(label_btn, use_container_width=True, type="primary"):
-        with st.spinner("⏳ Calcul du dimensionnement en cours..."):
+        with st.spinner("⏳ Calcul de l'optimisation des tournées en cours..."):
             try:
-                # Préparation des missions
-                missions_hebdo = preparer_missions_unifiees(df_flux)
+                # Importation du nouveau moteur
+                from modules.simul_flux import MoteurSimulation
                 
-                # Calcul du planning et stockage en session_state
-                st.session_state['planning_detaille'] = generer_planning_complet(
-                    missions_hebdo, 
-                    df_vehicules, 
-                    df_contenants, 
-                    matrice_duree
+                # Initialisation du moteur avec les données et paramètres de la session
+                # On récupère les paramètres logistique (flotte, RH, etc.)
+                params = st.session_state.get("params_logistique", {})
+                
+                moteur = MoteurSimulation(
+                    data=st.session_state['data'], 
+                    params=params
                 )
+                
+                # Exécution de la simulation
+                resultats = moteur.simuler()
+                
+                # Stockage du dictionnaire de sortie complet
+                st.session_state['planning_detaille'] = resultats
+                
                 st.success("✅ Simulation terminée avec succès !")
-                # On force le refresh pour afficher les résultats immédiatement
                 st.rerun()
 
             except Exception as e:
                 st.error(f"❌ Erreur lors de la simulation : {e}")
+                import traceback
+                st.expander("Détail de l'erreur").code(traceback.format_exc())
                 st.stop()
 
     st.markdown("---")
 
-    # 2. AFFICHAGE DES RÉSULTATS (Seulement si le calcul a déjà été fait)
+    # 3. AFFICHAGE DES RÉSULTATS
     if 'planning_detaille' in st.session_state:
         planning = st.session_state['planning_detaille']
+        
+        # Récupération des DataFrames techniques pour les visuels
+        df_vehicules = st.session_state['data']['param_vehicules']
+        df_contenants = st.session_state['data']['param_contenants']
 
-        # Import des modules d'affichage
+        # Import des fonctions d'affichage mises à jour
         from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
         
         # A. Vue Haute : KPIs et Tableau Hebdo
         afficher_tableau_bord_global(planning)
         
-        st.markdown("---")
+        st.divider()
         
         # B. Vue Basse : Sélecteur Jour/Chauffeur et Bin Packing
+        # Cette fonction gère maintenant l'interactivité complète (Timeline + Camion)
         afficher_analyse_operationnelle(
             planning, 
             df_vehicules, 
             df_contenants
         )
     else:
-        st.info("💡 Cliquez sur le bouton ci-dessus pour générer le dimensionnement transport et les plans de chargement.")
+        st.info("💡 Cliquez sur le bouton ci-dessus pour générer les tournées optimisées et les plans de chargement.")
 
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
