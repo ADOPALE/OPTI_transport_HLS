@@ -72,11 +72,11 @@ class MoteurSimulation:
 
     def _preparer_flotte(self) -> pd.DataFrame:
         df_v = self.data["param_vehicules"].copy()
-        flotte_sel = self.params.get("flotte_selectionnee", df_v["Type"].tolist())
+        flotte_sel = self.params.get("flotte_selectionnee", df_v["Types"].tolist())
         # On s'assure que le DataFrame est trié par capacité décroissante pour l'algo
         df_v['cap_tri'] = df_v.apply(lambda x: self._calculer_capacite_vehicule(x), axis=1)
         df_v = df_v.sort_values('cap_tri', ascending=False)
-        return df_v[df_v["Type"].isin(flotte_sel)]
+        return df_v[df_v["Types"].isin(flotte_sel)]
 
     def _calculer_capacite_vehicule(self, row_vehicule) -> float:
         tx_remplissage = self.params.get("taux_remplissage_max", 0.9)
