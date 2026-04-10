@@ -133,4 +133,180 @@ class MoteurSimulation:
         chauffeurs = self.affecter_tournees_aux_chauffeurs(tournees_finales)
         return self.generer_outputs(tournees_finales, chauffeurs)
 
-    def _construire_tournees_jour(self, jour:
+    def _construire_tournees_jour(self, jour: str, jobs: List[Job]) -> List[Tournee]:
+        tournees = []
+        jobs_restants = jobs.copy()
+        while jobs_restants:
+            job = jobs_restants.pop(0)
+            insere = False
+            for t in tournees:
+                if self.flux_compatibles(t, job) and (t.remplissage_actuel + job.quantite <= t.capacite_max):
+                    self._ajouter_job_a_tournee(t, job)
+                    insere = True
+                    break
+            if not insere:
+                v_row = self.flotte.iloc[0]
+                cap = self._calculer_capacite_vehicule(v_row)
+                new_t = Tournee(
+                    id=f"T_{jour}_{len(tournees)+1}",
+                    jour=jour,
+                    vehicule_type=v_row["Type"],
+                    capacite_max=cap,
+                    hub_depart=job.hub_origine
+                )
+                self._ajouter_job_a_tournee(new_t, job)
+                tournees.append(new_t)
+        return tournees
+
+    def _ajouter_job_a_tournee(self, t: Tournee, job: Job):
+        t.jobs.append(job)
+        t.remplissage_actuel += job.quantite
+        if job.destination not in t.itineraire:
+            t.itineraire.append(job.destination)
+        self._recalculer_metriques_tournee(t)
+
+    def _recalculer_metriques_tournee(self, t: Tournee):
+        duree = 0.0
+        dist = 0.0
+        curr = t.hub_depart
+        for stop in t.itineraire:
+            try:
+                duree += self.data["matrice_duree"].at[curr, stop]
+                dist += self.data["matrice_distance"].at[curr, stop]
+                duree += self.calculer_temps_manutention(stop)
+            except:
+                pass
+            curr = stop
+        try:
+            duree += self.data["matrice_duree"].at[curr, t.hub_depart]
+            dist += self.data["matrice_distance"].at[curr, t.hub_depart]
+        except:
+            pass
+        t.duree_totale = duree
+        t.distance_totale = dist
+
+    def affecter_tournees_aux_chauffeurs(self, tournees: List[Tournee]) -> List[Chauffeur]:
+        params_rh = self.params.get("contraintes_rh", {})
+        amplitude_max = params_rh.get("amplitude_max", 450)
+        chauffeurs = []
+        for jour in self.jours:
+            t_du_jour = sorted([t for t in tournees if t.jour == jour], key=lambda x: x.duree_totale, reverse=True)
+            chauffeurs_jour = []
+            for t in t_du_jour:
+                affecte = False
+                for c in chauffeurs_jour:
+                    if c.temps_travail_cumule + t.duree_totale <= amplitude_max:
+                        c.tournees.append(t)
+                        c.temps_travail_cumule += t.duree_totale
+                        affecte = True
+                        break
+                if not affecte:
+                    new_c = Chauffeur(id=f"CH_{jour}_{len(chauffeurs_jour)+1}")
+                    new_c.tournees.append(t)
+                    new_c.temps_travail_cumule = t.duree_totale
+                    chauffeurs_jour.append(new_c)
+            chauffeurs.extend(chauffeurs_jour)
+        return chauffeurs
+
+    def generer_outputs(self, tournees: List[Tournee], chauffeurs: List[Chauffeur]) -> Dict:
+        df_t = pd.DataFrame([{
+            "ID Tournée": t.id,
+            "Jour": t.jour,
+            "Véhicule": t.vehicule_type,
+            "Hub Origine": t.hub_depart,
+            "Arrêts": " > ".join(t.itineraire),
+            "Nb Jobs": len(t.jobs),
+            "Remplissage (%)": round((t.remplissage_actuel / t.capacite_max)*100, 1) if t.capacite_max > 0 else 0,
+            "Distance (km)": round(t.distance_totale, 1),
+            "Durée (min)": round(t.duree_totale, 1)
+        } for t in tournees])
+        
+        jours_list = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+        nb_chauf_par_jour = []
+        for j in jours_list:
+            nb = len([c for c in chauffeurs if c.id.startswith(f"CH_{j}")])
+            nb_chauf_par_jour.append(nb)
+
+        kpis = {
+            "nb_tournees": len(tournees),
+            "nb_chauffeurs_max_jour": max(nb_chauf_par_jour) if nb_chauf_par_jour else 0,
+            "distance_totale": df_t["Distance (km)"].sum() if not df_t.empty else 0,
+            "remplissage_moyen": df_t["Remplissage (%)"].mean() if not df_t.empty else 0,
+            "temps_total_heures": (df_t["Durée (min)"].sum() / 60) if not df_t.empty else 0
+        }
+        
+        # Structure de données nécessaire pour Resultats_simul_flux
+        res_final = {f"Quantité {j}": {"chauffeurs": [c.__dict__ for c in chauffeurs if c.id.startswith(f"CH_{j}")]} for j in jours_list}
+        res_final["tournees"] = df_t
+        res_final["kpis"] = kpis
+        res_final["obj_chauffeurs"] = chauffeurs
+        return res_final
+
+def generer_visuel_bin_packing(tournee: Any, df_vehicules: pd.DataFrame, df_contenants: pd.DataFrame) -> go.Figure:
+    # On gère si tournee est un dictionnaire ou un objet
+    t_id = tournee.id if hasattr(tournee, 'id') else tournee.get('id', 'Inconnu')
+    t_vtype = tournee.vehicule_type if hasattr(tournee, 'vehicule_type') else tournee.get('type_vehicule', 'Inconnu')
+    t_jobs = tournee.jobs if hasattr(tournee, 'jobs') else tournee.get('jobs', [])
+
+    vehicule_info = df_vehicules[df_vehicules["Type"] == t_vtype]
+    if vehicule_info.empty:
+        return go.Figure().update_layout(title="Véhicule inconnu")
+    
+    v_row = vehicule_info.iloc[0]
+    V_L = v_row.get('Longueur', 6000) 
+    V_W = v_row.get('Largeur', 2400)  
+    
+    contenants_a_placer = []
+    destinations = list(set(j.destination if hasattr(j, 'destination') else j['destination'] for j in t_jobs))
+    color_palette = px.colors.qualitative.Safe
+    color_map = {dest: color_palette[i % len(color_palette)] for i, dest in enumerate(destinations)}
+
+    for job in t_jobs:
+        j_type = job.type_contenant if hasattr(job, 'type_contenant') else job['type_contenant']
+        j_qte = job.quantite if hasattr(job, 'quantite') else job['quantite']
+        j_dest = job.destination if hasattr(job, 'destination') else job['destination']
+        j_fs = job.fonction_support if hasattr(job, 'fonction_support') else job['fonction_support']
+
+        cont_info = df_contenants[df_contenants["Type"] == j_type]
+        if cont_info.empty:
+            c_l, c_w, c_h = 1200, 800, 1500
+        else:
+            c_row = cont_info.iloc[0]
+            c_l = c_row.get('Longueur', 1200)
+            c_w = c_row.get('Largeur', 800)
+            c_h = c_row.get('Hauteur', 1500)
+
+        for _ in range(int(j_qte)):
+            contenants_a_placer.append({
+                'l': c_l, 'w': c_w, 'h': c_h,
+                'dest': j_dest, 'fs': j_fs, 'type': j_type,
+                'color': color_map[j_dest]
+            })
+
+    contenants_a_placer.sort(key=lambda x: x['l'], reverse=True)
+    
+    rects = []
+    cur_x, cur_y, shelf_h = 0, 0, 0
+    for c in contenants_a_placer:
+        if cur_y + c['w'] > V_W:
+            cur_x += shelf_h
+            cur_y, shelf_h = 0, 0
+        
+        rects.append({'x': cur_x, 'y': cur_y, 'l': c['l'], 'w': c['w'], 'info': c})
+        cur_y += c['w']
+        shelf_h = max(shelf_h, c['l'])
+
+    fig = go.Figure()
+    fig.add_shape(type="rect", x0=0, y0=0, x1=V_L, y1=V_W, line=dict(color="Black", width=3))
+
+    for r in rects:
+        c = r['info']
+        fig.add_trace(go.Scatter(
+            x=[r['x'], r['x']+r['l'], r['x']+r['l'], r['x'], r['x']],
+            y=[r['y'], r['y'], r['y']+r['w'], r['y']+r['w'], r['y']],
+            fill="toself", fillcolor=c['color'], mode='lines', line=dict(color="black", width=1),
+            text=f"Dest: {c['dest']}<br>Type: {c['type']}", hoverinfo="text", showlegend=False
+        ))
+
+    fig.update_layout(title=f"Chargement {t_vtype}", xaxis_range=[0, V_L], yaxis_range=[0, V_W], height=400)
+    return fig
