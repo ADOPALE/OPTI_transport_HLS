@@ -27,15 +27,8 @@ from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauf
 from modules.param_flux import afficher_parametres_logistique
 # importer les fonctions qui permettent de simuler et optimiser les tourneées hebdomadaires
 #from modules.simul_flux import preparer_missions_unifiees, simuler_tournees_quotidiennes, generer_planning_complet, generer_visuel_bin_packing 
-from modules.simul_flux import (
-    preparer_missions_unifiees, 
-    simuler_tournees_quotidiennes, 
-    generer_planning_complet,      # <--- AJOUTE ÇA
-    generer_visuel_bin_packing     # <--- AJOUTE ÇA
-)
-#
-from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle, generer_graphique_gantt
-
+from modules.simul_flux import MoteurSimulation
+from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
 
 
 # --------- DEFINITION DES FONCTIONS NECESSAIRE POUR L'UI ------------
