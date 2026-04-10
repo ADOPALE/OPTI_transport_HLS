@@ -87,33 +87,48 @@ class MoteurSimulation:
 
     def _filtrer_et_normaliser_flux(self) -> pd.DataFrame:
         df_flux = self.data["m_flux"].copy()
-        col_nature = [c for c in df_flux.columns if "nature" in c.lower()]
-        if not col_nature:
-            return df_flux
-        mask = df_flux[col_nature[0]].astype(str).str.lower().str.contains("volume")
-        return df_flux[mask]
+        # Nom exact de la colonne dans votre fichier 
+        col_filtre = "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)"
+        
+        if col_filtre in df_flux.columns:
+            # On ne garde que les lignes marquées "Volume" 
+            return df_flux[df_flux[col_filtre].astype(str).str.contains("Volume", na=False)]
+        return df_flux
 
     def convertir_flux_en_jobs(self) -> List[Job]:
         df_flux = self._filtrer_et_normaliser_flux()
         jobs = []
+        
         for idx, row in df_flux.iterrows():
-            orig = str(row.get("Origine", ""))
-            dest = str(row.get("Destination", ""))
-            fs = str(row.get("Fonction Support", "Generique"))
-            cont = str(row.get("Type contenant", "Standard"))
+            # Noms exacts de votre fichier CSV 
+            orig = str(row.get("Point de départ", ""))
+            dest = str(row.get("Point de destination", ""))
+            fs = str(row.get("Fonction Support associée", "Generique"))
+            cont = str(row.get("Nature de contenant", "Standard"))
+            
             for jour in self.jours:
-                qte = row.get(jour, 0)
-                if qte > 0:
-                    jobs.append(Job(
-                        id=f"J{idx}_{jour}",
-                        origine=orig,
-                        destination=dest,
-                        hub_origine=self.hubs.get(orig, orig),
-                        fonction_support=fs,
-                        type_contenant=cont,
-                        quantite=float(qte),
-                        jour=jour
-                    ))
+                # Gestion de l'espace final présent dans votre fichier 
+                # Le fichier a "Quantité Lundi " mais "Quantité Dimanche" sans espace
+                col_jour = f"Quantité {jour} " if jour != "Dimanche" else "Quantité Dimanche "
+                qte = row.get(col_jour, 0)
+                
+                # Conversion sécurisée en nombre
+                try:
+                    if pd.notnull(qte) and str(qte).strip() != "":
+                        val_qte = float(str(qte).replace(',', '.'))
+                        if val_qte > 0:
+                            jobs.append(Job(
+                                id=f"J{idx}_{jour}",
+                                origine=orig,
+                                destination=dest,
+                                hub_origine=self.hubs.get(orig, orig),
+                                fonction_support=fs,
+                                type_contenant=cont,
+                                quantite=val_qte,
+                                jour=jour
+                            ))
+                except (ValueError, TypeError):
+                    continue
         return jobs
 
     def flux_compatibles(self, tournee: Tournee, job: Job) -> bool:
@@ -220,26 +235,23 @@ class MoteurSimulation:
             "Distance (km)": round(t.distance_totale, 1),
             "Durée (min)": round(t.duree_totale, 1)
         } for t in tournees])
-        
-        jours_list = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-        nb_chauf_par_jour = []
-        for j in jours_list:
-            nb = len([c for c in chauffeurs if c.id.startswith(f"CH_{j}")])
-            nb_chauf_par_jour.append(nb)
 
-        kpis = {
+        # Initialisation du dictionnaire de sortie
+        res_final = {"tournees": df_t}
+        
+        # Organisation des chauffeurs par jour pour l'affichage 
+        for j in self.jours:
+            chauf_du_jour = [c for c in chauffeurs if c.id.startswith(f"CH_{j}")]
+            # On stocke dans le format "Quantité Lundi" attendu par l'UI
+            res_final[f"Quantité {j}"] = {"chauffeurs": [c.__dict__ for c in chauf_du_jour]}
+
+        # Ajout des KPIs
+        res_final["kpis"] = {
             "nb_tournees": len(tournees),
-            "nb_chauffeurs_max_jour": max(nb_chauf_par_jour) if nb_chauf_par_jour else 0,
             "distance_totale": df_t["Distance (km)"].sum() if not df_t.empty else 0,
-            "remplissage_moyen": df_t["Remplissage (%)"].mean() if not df_t.empty else 0,
             "temps_total_heures": (df_t["Durée (min)"].sum() / 60) if not df_t.empty else 0
         }
         
-        # Structure de données nécessaire pour Resultats_simul_flux
-        res_final = {f"Quantité {j}": {"chauffeurs": [c.__dict__ for c in chauffeurs if c.id.startswith(f"CH_{j}")]} for j in jours_list}
-        res_final["tournees"] = df_t
-        res_final["kpis"] = kpis
-        res_final["obj_chauffeurs"] = chauffeurs
         return res_final
 
 def generer_visuel_bin_packing(tournee: Any, df_vehicules: pd.DataFrame, df_contenants: pd.DataFrame) -> go.Figure:
