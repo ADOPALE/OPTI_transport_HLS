@@ -30,7 +30,7 @@ from modules.param_flux import afficher_parametres_logistique
 from modules.simul_flux import MoteurSimulation
 from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
 
-
+ 
 # --------- DEFINITION DES FONCTIONS NECESSAIRE POUR L'UI ------------
 def show_home():
     st.title("📍 Optimisation des flux logistiques")
