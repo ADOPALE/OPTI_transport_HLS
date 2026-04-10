@@ -201,21 +201,41 @@ class MoteurSimulation:
         return chauffeurs
 
     def generer_outputs(self, tournees: List[Tournee], chauffeurs: List[Chauffeur]) -> Dict:
+        """Produit les DataFrames de synthèse et les KPIs attendus par l'interface."""
         df_t = pd.DataFrame([{
-            "ID Tournée": t.id, "Jour": t.jour, "Véhicule": t.vehicule_type,
-            "Hub Origine": t.hub_depart, "Arrêts": " > ".join(t.itineraire),
-            "Nb Jobs": len(t.jobs), "Distance (km)": round(t.distance_totale, 1),
+            "ID Tournée": t.id, 
+            "Jour": t.jour, 
+            "Véhicule": t.vehicule_type,
+            "Hub Origine": t.hub_depart, 
+            "Arrêts": " > ".join(t.itineraire),
+            "Nb Jobs": len(t.jobs), 
+            "Distance (km)": round(t.distance_totale, 1),
             "Durée (min)": round(t.duree_totale, 1),
             "Remplissage (%)": round((t.remplissage_actuel / t.capacite_max)*100, 1) if t.capacite_max > 0 else 0
         } for t in tournees])
         
-        res = {"tournees": df_t, "obj_chauffeurs": chauffeurs}
+        # Calcul du besoin max de chauffeurs par jour
+        nb_par_jour = []
         for j in self.jours:
-            res[f"Quantité {j}"] = {"chauffeurs": [c.__dict__ for c in chauffeurs if c.id.startswith(f"CH_{j}")]}
+            count = len([c for c in chauffeurs if c.id.startswith(f"CH_{j}")])
+            nb_par_jour.append(count)
         
-        res["kpis"] = {
-            "nb_tournees": len(tournees),
-            "distance_totale": df_t["Distance (km)"].sum() if not df_t.empty else 0,
-            "temps_total_heures": (df_t["Durée (min)"].sum() / 60) if not df_t.empty else 0
+        # Structure de retour
+        res = {
+            "tournees": df_t, 
+            "obj_chauffeurs": chauffeurs,
+            "kpis": {
+                "nb_tournees": len(tournees),
+                "nb_chauffeurs_max_jour": max(nb_par_jour) if nb_par_jour else 0,
+                "distance_totale": df_t["Distance (km)"].sum() if not df_t.empty else 0,
+                "temps_total_heures": (df_t["Durée (min)"].sum() / 60) if not df_t.empty else 0
+            }
         }
+        
+        # Organisation pour l'affichage par onglet (ex: "Quantité Lundi")
+        for j in self.jours:
+            res[f"Quantité {j}"] = {
+                "chauffeurs": [c.__dict__ for c in chauffeurs if c.id.startswith(f"CH_{j}")]
+            }
+        
         return res
