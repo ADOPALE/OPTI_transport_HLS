@@ -309,7 +309,11 @@ elif selected == "Synthèse transport":
                 # Initialisation du moteur avec les données et paramètres de la session
                 # On récupère les paramètres logistique (flotte, RH, etc.)
                 params = st.session_state.get("params_logistique", {})
-                
+                df_dist = st.session_state['data']['matrice_distance']
+                if df_dist.index.dtype == 'int64':
+                    # On force la première colonne en index si ce n'est pas déjà fait
+                    st.session_state['data']['matrice_distance'] = df_dist.set_index(df_dist.columns[0])
+
                 moteur = MoteurSimulation(
                     data=st.session_state['data'], 
                     params=params
