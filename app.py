@@ -1,22 +1,21 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 from pathlib import Path
-from streamlit_folium import st_folium
 import folium
+from streamlit_folium import st_folium
 import pandas as pd
 import plotly.express as px
 
-# Importer la fonction d'encodage géographique + calculer les matrices
+# 1. GÉOGRAPHIE & IMPORT
 from modules.GeoMatrix import run_matrix_tool
-# Importer la fonction d'import du fichier de paramétrage
 from modules.Import import show_import
-# Importer la fonction pour afficher les flux par fonction support
-from modules.dataViz import show_flux_control_charts
-# Importer la fonction qui permet de paramétrer les tournées de biologie
+
+# 2. FLUX & DATAVIZ (On utilise check_flux comme avant)
+from modules.check_flux import show_flux_control_charts
+
+# 3. BIOLOGIE
 from modules.param_bio import show_biologie_page
-# Importer la fonction qui calcule les tournées de biologie
 from modules.biologie_engine import run_optimization
-# Importer les fonctions de visualisation biologie
 from modules.resultats_bio import (
     afficher_stats_vehicules, 
     afficher_stats_chauffeurs, 
@@ -24,10 +23,23 @@ from modules.resultats_bio import (
     afficher_detail_flotte_vehicules, 
     afficher_detail_itineraire
 )
-# Importer les fonctions de transport lourd
+
+# 4. TRANSPORT LOURD (DISTRIBUTION)
 from modules.param_flux import afficher_parametres_logistique
 from modules.simul_flux import MoteurSimulation
-from modules.Resultats_simul_flux import afficher_resultats_complets
+# On importe la nouvelle fonction maître pour les résultats
+from modules.Resultats_simul_flux import (
+    afficher_tableau_bord_global, 
+    afficher_analyse_operationnelle, 
+    afficher_resultats_complets
+)
+
+# Tentative d'import pour show_volumes si disponible
+try:
+    from modules.check_flux import show_volumes
+except ImportError:
+    show_volumes = None
+Pourquoi cela règle le problème ?
  
 # --------- DEFINITION DES FONCTIONS NECESSAIRE POUR L'UI ------------
 def show_home():
