@@ -300,68 +300,44 @@ elif selected == "Synthèse transport":
     if st.button(label_btn, use_container_width=True, type="primary"):
         with st.spinner("⏳ Calcul de l'optimisation des tournées en cours..."):
             try:
-                # Importation du nouveau moteur
-                from modules.simul_flux import MoteurSimulation
-                
-                # Initialisation du moteur avec les données et paramètres de la session
-                # On récupère les paramètres logistique (flotte, RH, etc.)
+                # On récupère les paramètres logistique
                 params = st.session_state.get("params_logistique", {})
-                df_dist = st.session_state['data']['matrice_distance']
-                if df_dist.index.dtype == 'int64':
-                    # On force la première colonne en index si ce n'est pas déjà fait
-                    st.session_state['data']['matrice_distance'] = df_dist.set_index(df_dist.columns[0])
-
+                
+                # Initialisation et exécution du moteur
                 moteur = MoteurSimulation(
                     data=st.session_state['data'], 
                     params=params
                 )
                 
-                # Exécution de la simulation
                 resultats = moteur.simuler()
                 
-                # Stockage du dictionnaire de sortie complet
+                # Stockage du résultat
                 st.session_state['planning_detaille'] = resultats
-                
                 st.success("✅ Simulation terminée avec succès !")
                 st.rerun()
 
             except Exception as e:
                 st.error(f"❌ Erreur lors de la simulation : {e}")
-                import traceback
-                st.expander("Détail de l'erreur").code(traceback.format_exc())
                 st.stop()
 
     st.markdown("---")
 
-    # 3. AFFICHAGE DES RÉSULTATS (Modifié pour inclure le Gantt Global)
+    # 3. AFFICHAGE DES RÉSULTATS (C'est ici que l'alignement doit être parfait)
     if 'planning_detaille' in st.session_state:
         planning = st.session_state['planning_detaille']
         
-        # Récupération des DataFrames techniques nécessaires au Bin Packing
-        df_vehicules = st.session_state['data']['param_vehicules']
-        df_contenants = st.session_state['data']['param_contenants']
+        # Récupération des DataFrames pour les visuels
+        df_v = st.session_state['data']['param_vehicules']
+        df_c = st.session_state['data']['param_contenants']
 
-        # APPEL DE LA FONCTION MAÎTRE 
-        # (Elle affiche : 1. Gantt Global, 2. KPIs, 3. Détail par chauffeur/camion)
+        # Import et appel de la fonction maître
         from modules.Resultats_simul_flux import afficher_resultats_complets
         
-        afficher_resultats_complets(
-            planning, 
-            df_vehicules, 
-            df_contenants
-        )
+        afficher_resultats_complets(planning, df_v, df_c)
+    
     else:
-        st.info("💡 Cliquez sur le bouton ci-dessus pour générer les tournées optimisées et les plans de chargement.")
-        
-        # B. Vue Basse : Sélecteur Jour/Chauffeur et Bin Packing
-        # Cette fonction gère maintenant l'interactivité complète (Timeline + Camion)
-        afficher_analyse_operationnelle(
-            planning, 
-            df_vehicules, 
-            df_contenants
-        )
-    else:
-        st.info("💡 Cliquez sur le bouton ci-dessus pour générer les tournées optimisées et les plans de chargement.")
+        # Ce "else" doit être aligné avec le "if 'planning_detaille' in st.session_state:"
+        st.info("💡 Cliquez sur le bouton ci-dessus pour générer les tournées optimisées.")
 
 elif selected == "Exporter":
     st.title("📥 Exporter les résultats")
