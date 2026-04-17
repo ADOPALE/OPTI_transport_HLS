@@ -236,3 +236,62 @@ class MoteurSimulation:
         for j in self.jours:
             res[f"Quantité {j}"] = {"chauffeurs": [c.__dict__ for c in chauffeurs if c.id.startswith(f"CH_{j}")]}
         return res
+
+    def generer_visuel_bin_packing(tournee: Any):
+    """
+    Génère un graphique Plotly simulant la vue de dessus d'un camion.
+    Chaque job est représenté par un rectangle coloré par destination.
+    """
+    import plotly.graph_objects as go
+    
+    # Dimensions théoriques du camion (basées sur vos types PL/VL)
+    # On pourrait les rendre dynamiques via self.flotte plus tard
+    L_camion = 6.0  # mètres
+    l_camion = 2.4  # mètres
+    
+    fig = go.Figure()
+
+    # On dessine le contour du camion
+    fig.add_shape(type="rect", x0=0, y0=0, x1=L_camion, y1=l_camion,
+                  line=dict(color="Black", width=3))
+
+    # On dispose les contenants (simplifié : un contenant = un rectangle)
+    x_pos, y_pos = 0.1, 0.1
+    largeur_cont = 0.8 # Taille standard d'un roll/palette
+    longueur_cont = 1.2
+    
+    # Palette de couleurs par destination
+    destinations = list(set([j.destination for j in tournee.jobs]))
+    colors = px.colors.qualitative.Safe
+    color_map = {dest: colors[i % len(colors)] for i, dest in enumerate(destinations)}
+
+    for job in tournee.jobs:
+        # On crée autant de rectangles que d'unités dans le job
+        for _ in range(int(job.quantite)):
+            if x_pos + longueur_cont > L_camion:
+                x_pos = 0.1
+                y_pos += largeur_cont + 0.1
+            
+            if y_pos + largeur_cont > l_camion:
+                break # Camion plein visuellement
+
+            fig.add_trace(go.Scatter(
+                x=[x_pos, x_pos + longueur_cont, x_pos + longueur_cont, x_pos, x_pos],
+                y=[y_pos, y_pos, y_pos + largeur_cont, y_pos + largeur_cont, y_pos],
+                fill="toself",
+                fillcolor=color_map[job.destination],
+                name=f"{job.destination} ({job.fonction_support})",
+                mode='lines',
+                line=dict(color="white", width=1),
+                text=f"Dest: {job.destination}<br>Type: {job.type_contenant}",
+                hoverinfo="text"
+            ))
+            x_pos += longueur_cont + 0.1
+
+    fig.update_layout(
+        title=f"Plan de chargement - {tournee.vehicule_type}",
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        showlegend=False, margin=dict(l=10, r=10, t=40, b=10),
+        height=300, plot_bgcolor="white"
+    )
+    return fig
