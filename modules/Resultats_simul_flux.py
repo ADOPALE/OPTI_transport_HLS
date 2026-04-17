@@ -206,3 +206,25 @@ def afficher_gantt_flotte_complete(resultats_sim):
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Aucune activité simulée pour ce jour.")
+
+def afficher_resultats_complets(resultats_sim, df_vehicules, df_contenants):
+    """
+    Cette fonction est le point d'entrée principal. 
+    Elle affiche les sections dans l'ordre souhaité.
+    """
+    
+    # 1. La frise chronologique globale de toute la flotte (Nouvelle vue)
+    # On l'appelle en premier pour avoir la vision globale direct
+    afficher_gantt_flotte_complete(resultats_sim)
+    
+    st.divider() # Ligne de séparation
+    
+    # 2. Les indicateurs globaux (ETP, Distance, etc.)
+    # Votre fonction existante
+    afficher_tableau_bord_global(resultats_sim)
+    
+    st.divider() # Ligne de séparation
+    
+    # 3. L'analyse opérationnelle détaillée (Filtre par chauffeur + Camion)
+    # Votre fonction existante (on lui passe les dataframes nécessaires)
+    afficher_analyse_operationnelle(resultats_sim, df_vehicules, df_contenants)
