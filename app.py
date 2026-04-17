@@ -26,8 +26,7 @@ from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauf
 # importer la fonction qui permet de paramétrer les tournées de  camions
 from modules.param_flux import afficher_parametres_logistique
 from modules.simul_flux import MoteurSimulation
-from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
-
+from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle, afficher_resultats_complets
  
 # --------- DEFINITION DES FONCTIONS NECESSAIRE POUR L'UI ------------
 def show_home():
@@ -334,21 +333,25 @@ elif selected == "Synthèse transport":
 
     st.markdown("---")
 
-    # 3. AFFICHAGE DES RÉSULTATS
+    # 3. AFFICHAGE DES RÉSULTATS (Modifié pour inclure le Gantt Global)
     if 'planning_detaille' in st.session_state:
         planning = st.session_state['planning_detaille']
         
-        # Récupération des DataFrames techniques pour les visuels
+        # Récupération des DataFrames techniques nécessaires au Bin Packing
         df_vehicules = st.session_state['data']['param_vehicules']
         df_contenants = st.session_state['data']['param_contenants']
 
-        # Import des fonctions d'affichage mises à jour
-        from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle
+        # APPEL DE LA FONCTION MAÎTRE 
+        # (Elle affiche : 1. Gantt Global, 2. KPIs, 3. Détail par chauffeur/camion)
+        from modules.Resultats_simul_flux import afficher_resultats_complets
         
-        # A. Vue Haute : KPIs et Tableau Hebdo
-        afficher_tableau_bord_global(planning)
-        
-        st.divider()
+        afficher_resultats_complets(
+            planning, 
+            df_vehicules, 
+            df_contenants
+        )
+    else:
+        st.info("💡 Cliquez sur le bouton ci-dessus pour générer les tournées optimisées et les plans de chargement.")
         
         # B. Vue Basse : Sélecteur Jour/Chauffeur et Bin Packing
         # Cette fonction gère maintenant l'interactivité complète (Timeline + Camion)
