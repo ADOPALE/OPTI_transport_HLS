@@ -45,21 +45,28 @@ class MoteurSimulation:
         self.jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     
     def _construire_hubs(self) -> Dict[str, str]:
-        matrice_dist = self.data["matrice_distance"].copy()
-        if matrice_dist.index.dtype in ['int64', 'int32']:
-            col_sites = matrice_dist.columns[0]
-            matrice_dist = matrice_dist.set_index(col_sites)
-        sites = matrice_dist.index.tolist()
-        matrice_dist.columns = sites 
-        mapping_site_hub = {site: site for site in sites}
-        for i, site_a in enumerate(sites):
-            for site_b in sites[i+1:]:
-                try:
-                    if matrice_dist.at[site_a, site_b] == 0:
-                        hub_id = mapping_site_hub[site_a]
-                        mapping_site_hub[site_b] = hub_id
-                except: continue
-        return mapping_site_hub
+    matrice_dist = self.data["matrice_distance"].copy()
+    if matrice_dist.index.dtype in ['int64', 'int32']:
+        col_sites = matrice_dist.columns[0]
+        matrice_dist = matrice_dist.set_index(col_sites)
+    
+    sites = matrice_dist.index.tolist()
+    mapping_site_hub = {}
+
+    for site in sites:
+        # RÈGLE : Le hub est défini par le nom avant le 1er underscore ou espace
+        # Exemple : "HSJ_PUI_MG" -> "HSJ" | "HOPITAL NANTES" -> "HOPITAL"
+        nom_nettoye = str(site).strip()
+        if "_" in nom_nettoye:
+            hub_id = nom_nettoye.split("_")[0]
+        elif " " in nom_nettoye:
+            hub_id = nom_nettoye.split(" ")[0]
+        else:
+            hub_id = nom_nettoye
+        
+        mapping_site_hub[site] = hub_id
+
+    return mapping_site_hub
 
     def _preparer_flotte(self) -> pd.DataFrame:
         df_v = self.data["param_vehicules"].copy()
@@ -120,31 +127,57 @@ class MoteurSimulation:
         return self.generer_outputs(tournees_finales, chauffeurs)
 
     def _construire_tournees_jour(self, jour: str, jobs: List[Job]) -> List[Tournee]:
-        tournees = []
-        jobs_restants = jobs.copy()
-        while jobs_restants:
-            job = jobs_restants.pop(0)
-            insere = False
-            for t in tournees:
-                if job.hub_origine == t.hub_depart and (t.remplissage_actuel + job.quantite <= t.capacite_max):
-                    t.jobs.append(job)
-                    t.remplissage_actuel += job.quantite
-                    if job.destination not in t.itineraire: t.itineraire.append(job.destination)
-                    self._recalculer_metriques_tournee(t)
-                    insere = True
-                    break
-            if not insere:
-                v_row = self.flotte.iloc[0]
-                new_t = Tournee(
-                    id=f"T_{jour}_{len(tournees)+1}", jour=jour,
-                    vehicule_type=v_row["Types"], hub_depart=job.hub_origine,
-                    capacite_max=self._calculer_capacite_vehicule(v_row)
-                )
-                new_t.jobs.append(job); new_t.remplissage_actuel = job.quantite
-                new_t.itineraire.append(job.destination)
-                self._recalculer_metriques_tournee(new_t)
-                tournees.append(new_t)
-        return tournees
+    tournees = []
+    jobs_restants = jobs.copy()
+    
+    while jobs_restants:
+        # On prend le job le plus volumineux pour initier la tournée
+        job_initial = jobs_restants.pop(0)
+        
+        # On cherche un véhicule adapté (on prend le premier de la flotte triée par capacité)
+        v_row = self.flotte.iloc[0]
+        capacite_v = self._calculer_capacite_vehicule(v_row)
+        
+        new_t = Tournee(
+            id=f"T_{jour}_{len(tournees)+1}", 
+            jour=jour,
+            vehicule_type=v_row["Types"], 
+            hub_depart=job_initial.hub_origine, # Ex: "HSJ"
+            capacite_max=capacite_v
+        )
+        
+        # 1. On charge le job initial
+        new_t.jobs.append(job_initial)
+        new_t.remplissage_actuel = job_initial.quantite
+        if job_initial.destination not in new_t.itineraire:
+            new_t.itineraire.append(job_initial.destination)
+
+        # 2. OPTIMISATION MULTI-QUAIS : 
+        # On cherche d'autres jobs qui partent du MÊME HUB pour remplir ce camion
+        i = 0
+        while i < len(jobs_restants) and new_t.remplissage_actuel < new_t.capacite_max:
+            candidat = jobs_restants[i]
+            
+            # Si le job part du même complexe hospitalier et qu'il y a de la place
+            if candidat.hub_origine == new_t.hub_depart and \
+               (new_t.remplissage_actuel + candidat.quantite <= new_t.capacite_max):
+                
+                # On l'ajoute à la tournée
+                new_t.jobs.append(candidat)
+                new_t.remplissage_actuel += candidat.quantite
+                if candidat.destination not in new_t.itineraire:
+                    new_t.itineraire.append(candidat.destination)
+                
+                # On le retire de la liste des jobs à traiter
+                jobs_restants.pop(i)
+            else:
+                i += 1
+        
+        # 3. Calcul final des distances/temps pour cette tournée multi-quais
+        self._recalculer_metriques_tournee(new_t)
+        tournees.append(new_t)
+        
+    return tournees
 
     def _recalculer_metriques_tournee(self, t: Tournee):
         duree, dist, curr = 0.0, 0.0, t.hub_depart
