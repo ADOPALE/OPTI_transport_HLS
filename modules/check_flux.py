@@ -111,31 +111,65 @@ def show_flux_control_charts():
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- DÉTAIL PAR FONCTION SUPPORT ---
+   # --- DÉTAIL PAR FONCTION SUPPORT ---
     st.markdown("### 🔍 Détail par Fonction Support")
+    
+    # On identifie les fonctions uniques (en ignorant les lignes vides)
+    fonctions = [f for f in df[col_fonc].unique() if str(f).lower() != 'nan' and str(f).strip() != '']
+
     for f in fonctions:
-        df_sub = df_long[df_long[col_fonc].astype(str) == f].groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
-        if df_sub["Valeur"].sum() > 0:
+        # 1. Filtrage sur la fonction support précise
+        df_sub = df_long[df_long[col_fonc].astype(str) == str(f)].copy()
+        
+        # 2. Conversion numérique de la colonne Valeur (pour éviter l'IndexError au .sum())
+        df_sub["Valeur"] = pd.to_numeric(df_sub["Valeur"].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+        
+        # 3. Groupement par Jour et Sens (Aller/Retour)
+        # observed=False assure la stabilité si certaines combinaisons sont vides
+        df_sub_grouped = df_sub.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
+        
+        # On n'affiche que si la fonction support a du volume cette semaine
+        if df_sub_grouped["Valeur"].sum() > 0:
             with st.expander(f"Analyse : {f}", expanded=False):
                 base_color = color_map_base.get(f, "#808080")
+                
+                # Préparation de la couleur transparente pour le "Retour"
                 try:
-                    r, g, b = int(base_color[1:3], 16), int(base_color[3:5], 16), int(base_color[5:7], 16)
+                    r = int(base_color.lstrip('#')[0:2], 16)
+                    g = int(base_color.lstrip('#')[2:4], 16)
+                    b = int(base_color.lstrip('#')[4:6], 16)
                     dark_color = f"rgba({r}, {g}, {b}, 0.4)"
                 except:
                     dark_color = "rgba(128, 128, 128, 0.4)"
                 
                 fig_sub = go.Figure()
+                
+                # On boucle sur les deux sens pour garder l'aspect Barre Gauche / Barre Droite
                 for sens in ["Aller", "Retour"]:
-                    sub_s = df_sub[df_sub[col_sens] == sens]
+                    sub_s = df_sub_grouped[df_sub_grouped[col_sens] == sens]
                     color = base_color if sens == "Aller" else dark_color
                     
                     fig_sub.add_trace(go.Bar(
-                        name=sens, x=sub_s["Jour"], y=sub_s["Valeur"],
+                        name=sens,
+                        x=sub_s["Jour"],
+                        y=sub_s["Valeur"],
                         marker_color=color,
+                        offsetgroup=sens,  # Indispensable pour l'affichage côte à côte
                         text=sub_s["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
-                        textposition='auto',
-                        textfont=dict(color=get_contrast_color(color))
+                        textposition='outside',
+                        textfont=dict(color="white")
                     ))
-                fig_sub.update_layout(template="plotly_dark", barmode="group", height=300)
-                st.plotly_chart(fig_sub, use_container_width=True)
 
+                fig_sub.update_layout(
+                    barmode='group',
+                    xaxis_title=None,
+                    yaxis_title="Nb contenants",
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color="white"),
+                    height=350,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                
+                st.plotly_chart(fig_sub, use_container_width=True)
