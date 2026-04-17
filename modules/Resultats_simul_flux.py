@@ -162,3 +162,47 @@ def generer_graphique_gantt(tournees_df):
     )
     fig.update_yaxes(autorange="reversed")
     return fig
+
+def afficher_gantt_flotte_complete(resultats_sim):
+    """
+    Affiche une frise chronologique de tous les véhicules sur une seule page.
+    Inspiré du module Biologie.
+    """
+    st.header("🕒 Planning de la Flotte")
+    
+    jour_sel = st.selectbox("Choisir le jour à visualiser", 
+                            ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"])
+    
+    # On récupère tous les chauffeurs/véhicules ayant travaillé ce jour-là
+    data_gantt = []
+    for ch in resultats_sim["obj_chauffeurs"]:
+        if ch.id.startswith(f"CH_{jour_sel}"):
+            heure_base = pd.Timestamp("2024-01-01 07:00") # Début de journée théorique
+            current_time = heure_base
+            
+            for i, t in enumerate(ch.tournees):
+                start = current_time
+                end = start + pd.Timedelta(minutes=t.duree_totale)
+                
+                data_gantt.append({
+                    "Véhicule": f"Chauffeur {ch.id.split('_')[-1]} ({t.vehicule_type})",
+                    "Tournée": t.id,
+                    "Début": start,
+                    "Fin": end,
+                    "Remplissage": f"{int((t.remplissage_actuel/t.capacite_max)*100)}%"
+                })
+                # On ajoute 15 min de pause/déchargement entre deux tournées
+                current_time = end + pd.Timedelta(minutes=15)
+
+    if data_gantt:
+        df_gantt = pd.DataFrame(data_gantt)
+        fig = px.timeline(
+            df_gantt, x_start="Début", x_end="Fin", y="Véhicule", 
+            color="Véhicule", text="Remplissage",
+            title=f"Occupation des véhicules le {jour_sel}"
+        )
+        fig.update_yaxes(autorange="reversed")
+        fig.update_layout(xaxis_title="Heure de la journée", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Aucune activité simulée pour ce jour.")
