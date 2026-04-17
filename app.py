@@ -9,6 +9,7 @@ import plotly.express as px
 # --- IMPORTS DES MODULES ---
 from modules.GeoMatrix import run_matrix_tool
 from modules.Import import show_import
+from modules.check_flux import show_flux_control_charts
 from modules.param_bio import show_biologie_page
 from modules.biologie_engine import run_optimization
 from modules.resultats_bio import (
