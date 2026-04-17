@@ -114,62 +114,65 @@ def show_flux_control_charts():
    # --- DÉTAIL PAR FONCTION SUPPORT ---
     st.markdown("### 🔍 Détail par Fonction Support")
     
-    # On identifie les fonctions uniques (en ignorant les lignes vides)
-    fonctions = [f for f in df[col_fonc].unique() if str(f).lower() != 'nan' and str(f).strip() != '']
+    # On identifie les fonctions uniques valides
+    fonctions_liste = [f for f in df[col_fonc].unique() if str(f).lower() != 'nan' and str(f).strip() != '']
 
-    for f in fonctions:
-        # 1. Filtrage sur la fonction support précise
-        df_sub = df_long[df_long[col_fonc].astype(str) == str(f)].copy()
+    for f in fonctions_liste:
+        # 1. Filtrage manuel pour éviter les erreurs d'index Pandas
+        df_f = df_long[df_long[col_fonc].astype(str) == str(f)].copy()
         
-        # 2. Conversion numérique de la colonne Valeur (pour éviter l'IndexError au .sum())
-        df_sub["Valeur"] = pd.to_numeric(df_sub["Valeur"].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
-        
-        # 3. Groupement par Jour et Sens (Aller/Retour)
-        # observed=False assure la stabilité si certaines combinaisons sont vides
-        df_sub_grouped = df_sub.groupby(["Jour", col_sens], observed=False)["Valeur"].sum().reset_index()
-        
-        # On n'affiche que si la fonction support a du volume cette semaine
-        if df_sub_grouped["Valeur"].sum() > 0:
-            with st.expander(f"Analyse : {f}", expanded=False):
-                base_color = color_map_base.get(f, "#808080")
-                
-                # Préparation de la couleur transparente pour le "Retour"
-                try:
-                    r = int(base_color.lstrip('#')[0:2], 16)
-                    g = int(base_color.lstrip('#')[2:4], 16)
-                    b = int(base_color.lstrip('#')[4:6], 16)
-                    dark_color = f"rgba({r}, {g}, {b}, 0.4)"
-                except:
-                    dark_color = "rgba(128, 128, 128, 0.4)"
-                
-                fig_sub = go.Figure()
-                
-                # On boucle sur les deux sens pour garder l'aspect Barre Gauche / Barre Droite
-                for sens in ["Aller", "Retour"]:
-                    sub_s = df_sub_grouped[df_sub_grouped[col_sens] == sens]
-                    color = base_color if sens == "Aller" else dark_color
+        if not df_f.empty:
+            # 2. Calcul des sommes par dictionnaire (Méthode 100% sûre anti-IndexError)
+            jours_standards = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+            stats_finaux = {j: {"Aller": 0, "Retour": 0} for j in jours_standards}
+            
+            for _, row in df_f.iterrows():
+                j_nom = str(row["Jour"])
+                s_nom = str(row[col_sens])
+                val = pd.to_numeric(str(row["Valeur"]).replace(',', '.'), errors='coerce')
+                if j_nom in stats_finaux and s_nom in ["Aller", "Retour"] and pd.notnull(val):
+                    stats_finaux[j_nom][s_nom] += val
+
+            total_f = sum(stats_finaux[j]["Aller"] + stats_finaux[j]["Retour"] for j in jours_standards)
+
+            if total_f > 0:
+                with st.expander(f"Analyse : {f}", expanded=False):
+                    base_color = color_map_base.get(f, "#808080")
                     
-                    fig_sub.add_trace(go.Bar(
-                        name=sens,
-                        x=sub_s["Jour"],
-                        y=sub_s["Valeur"],
-                        marker_color=color,
-                        offsetgroup=sens,  # Indispensable pour l'affichage côte à côte
-                        text=sub_s["Valeur"].apply(lambda x: int(x) if x > 0 else ""),
-                        textposition='outside',
-                        textfont=dict(color="white")
-                    ))
+                    # Couleur pour le Retour
+                    try:
+                        rgb = base_color.lstrip('#')
+                        r, g, b = tuple(int(rgb[i:i+2], 16) for i in (0, 2, 4))
+                        dark_color = f"rgba({r}, {g}, {b}, 0.4)"
+                    except:
+                        dark_color = "rgba(128, 128, 128, 0.4)"
+                    
+                    fig_sub = go.Figure()
+                    
+                    for sens in ["Aller", "Retour"]:
+                        y_vals = [stats_finaux[j][sens] for j in jours_standards]
+                        color = base_color if sens == "Aller" else dark_color
+                        
+                        fig_sub.add_trace(go.Bar(
+                            name=sens,
+                            x=jours_standards,
+                            y=y_vals,
+                            marker_color=color,
+                            offsetgroup=sens,
+                            text=[int(v) if v > 0 else "" for v in y_vals],
+                            textposition='outside',
+                            textfont=dict(color="white")
+                        ))
 
-                fig_sub.update_layout(
-                    barmode='group',
-                    xaxis_title=None,
-                    yaxis_title="Nb contenants",
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color="white"),
-                    height=350,
-                    margin=dict(l=20, r=20, t=40, b=20),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                
-                st.plotly_chart(fig_sub, use_container_width=True)
+                    fig_sub.update_layout(
+                        barmode='group',
+                        xaxis_title=None,
+                        yaxis_title="Nb contenants",
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color="white"),
+                        height=350,
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig_sub, use_container_width=True)
