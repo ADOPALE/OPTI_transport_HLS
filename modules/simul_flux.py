@@ -45,32 +45,29 @@ class MoteurSimulation:
         self.jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     
     def _construire_hubs(self) -> Dict[str, str]:
-    matrice_dist = self.data["matrice_distance"].copy()
-    if matrice_dist.index.dtype in ['int64', 'int32']:
-        col_sites = matrice_dist.columns[0]
-        matrice_dist = matrice_dist.set_index(col_sites)
-    
-    sites = matrice_dist.index.tolist()
-    mapping_site_hub = {}
-
-    for site in sites:
-        # RÈGLE : Le hub est défini par le nom avant le 1er underscore ou espace
-        # Exemple : "HSJ_PUI_MG" -> "HSJ" | "HOPITAL NANTES" -> "HOPITAL"
-        nom_nettoye = str(site).strip()
-        if "_" in nom_nettoye:
-            hub_id = nom_nettoye.split("_")[0]
-        elif " " in nom_nettoye:
-            hub_id = nom_nettoye.split(" ")[0]
-        else:
-            hub_id = nom_nettoye
+        matrice_dist = self.data["matrice_distance"].copy()
+        if matrice_dist.index.dtype in ['int64', 'int32']:
+            col_sites = matrice_dist.columns[0]
+            matrice_dist = matrice_dist.set_index(col_sites)
         
-        mapping_site_hub[site] = hub_id
+        sites = matrice_dist.index.tolist()
+        mapping_site_hub = {}
 
-    return mapping_site_hub
+        for site in sites:
+            nom_nettoye = str(site).strip()
+            if "_" in nom_nettoye:
+                hub_id = nom_nettoye.split("_")[0]
+            elif " " in nom_nettoye:
+                hub_id = nom_nettoye.split(" ")[0]
+            else:
+                hub_id = nom_nettoye
+            
+            mapping_site_hub[site] = hub_id
+        return mapping_site_hub
 
     def _preparer_flotte(self) -> pd.DataFrame:
         df_v = self.data["param_vehicules"].copy()
-        col_type = "Types" # Nom exact dans votre CSV 
+        col_type = "Types"
         flotte_sel = self.params.get("flotte_selectionnee", df_v[col_type].tolist())
         df_v['cap_tri'] = df_v.apply(lambda x: self._calculer_capacite_vehicule(x), axis=1)
         df_v = df_v.sort_values('cap_tri', ascending=False)
@@ -78,7 +75,6 @@ class MoteurSimulation:
 
     def _calculer_capacite_vehicule(self, row_vehicule) -> float:
         tx_remplissage = self.params.get("taux_remplissage_max", 0.9)
-        # On utilise le poids max de votre fichier 
         poids_raw = str(row_vehicule.get("Poids max chargement", "10")).split(' ')[0].replace(',', '.')
         try:
             return float(poids_raw) * tx_remplissage
@@ -101,7 +97,6 @@ class MoteurSimulation:
             fs = str(row.get("Fonction Support associée", ""))
             cont = str(row.get("Nature de contenant", ""))
             for jour in self.jours:
-                # Gestion de l'espace dans "Quantité Lundi " 
                 col_jour = f"Quantité {jour} " if jour != "Dimanche" else "Quantité Dimanche "
                 qte = row.get(col_jour, 0)
                 try:
@@ -127,57 +122,45 @@ class MoteurSimulation:
         return self.generer_outputs(tournees_finales, chauffeurs)
 
     def _construire_tournees_jour(self, jour: str, jobs: List[Job]) -> List[Tournee]:
-    tournees = []
-    jobs_restants = jobs.copy()
-    
-    while jobs_restants:
-        # On prend le job le plus volumineux pour initier la tournée
-        job_initial = jobs_restants.pop(0)
+        tournees = []
+        jobs_restants = jobs.copy()
         
-        # On cherche un véhicule adapté (on prend le premier de la flotte triée par capacité)
-        v_row = self.flotte.iloc[0]
-        capacite_v = self._calculer_capacite_vehicule(v_row)
-        
-        new_t = Tournee(
-            id=f"T_{jour}_{len(tournees)+1}", 
-            jour=jour,
-            vehicule_type=v_row["Types"], 
-            hub_depart=job_initial.hub_origine, # Ex: "HSJ"
-            capacite_max=capacite_v
-        )
-        
-        # 1. On charge le job initial
-        new_t.jobs.append(job_initial)
-        new_t.remplissage_actuel = job_initial.quantite
-        if job_initial.destination not in new_t.itineraire:
-            new_t.itineraire.append(job_initial.destination)
-
-        # 2. OPTIMISATION MULTI-QUAIS : 
-        # On cherche d'autres jobs qui partent du MÊME HUB pour remplir ce camion
-        i = 0
-        while i < len(jobs_restants) and new_t.remplissage_actuel < new_t.capacite_max:
-            candidat = jobs_restants[i]
+        while jobs_restants:
+            job_initial = jobs_restants.pop(0)
+            v_row = self.flotte.iloc[0]
+            capacite_v = self._calculer_capacite_vehicule(v_row)
             
-            # Si le job part du même complexe hospitalier et qu'il y a de la place
-            if candidat.hub_origine == new_t.hub_depart and \
-               (new_t.remplissage_actuel + candidat.quantite <= new_t.capacite_max):
-                
-                # On l'ajoute à la tournée
-                new_t.jobs.append(candidat)
-                new_t.remplissage_actuel += candidat.quantite
-                if candidat.destination not in new_t.itineraire:
-                    new_t.itineraire.append(candidat.destination)
-                
-                # On le retire de la liste des jobs à traiter
-                jobs_restants.pop(i)
-            else:
-                i += 1
-        
-        # 3. Calcul final des distances/temps pour cette tournée multi-quais
-        self._recalculer_metriques_tournee(new_t)
-        tournees.append(new_t)
-        
-    return tournees
+            new_t = Tournee(
+                id=f"T_{jour}_{len(tournees)+1}", 
+                jour=jour,
+                vehicule_type=v_row["Types"], 
+                hub_depart=job_initial.hub_origine,
+                capacite_max=capacite_v
+            )
+            
+            new_t.jobs.append(job_initial)
+            new_t.remplissage_actuel = job_initial.quantite
+            if job_initial.destination not in new_t.itineraire:
+                new_t.itineraire.append(job_initial.destination)
+
+            i = 0
+            while i < len(jobs_restants) and new_t.remplissage_actuel < new_t.capacite_max:
+                candidat = jobs_restants[i]
+                if candidat.hub_origine == new_t.hub_depart and \
+                   (new_t.remplissage_actuel + candidat.quantite <= new_t.capacite_max):
+                    
+                    new_t.jobs.append(candidat)
+                    new_t.remplissage_actuel += candidat.quantite
+                    if candidat.destination not in new_t.itineraire:
+                        new_t.itineraire.append(candidat.destination)
+                    jobs_restants.pop(i)
+                else:
+                    i += 1
+            
+            self._recalculer_metriques_tournee(new_t)
+            tournees.append(new_t)
+            
+        return tournees
 
     def _recalculer_metriques_tournee(self, t: Tournee):
         duree, dist, curr = 0.0, 0.0, t.hub_depart
@@ -237,50 +220,41 @@ class MoteurSimulation:
             res[f"Quantité {j}"] = {"chauffeurs": [c.__dict__ for c in chauffeurs if c.id.startswith(f"CH_{j}")]}
         return res
 
-    def generer_visuel_bin_packing(tournee: Any):
+def generer_visuel_bin_packing(tournee: Any):
     """
     Génère un graphique Plotly simulant la vue de dessus d'un camion.
-    Chaque job est représenté par un rectangle coloré par destination.
     """
-    import plotly.graph_objects as go
-    
-    # Dimensions théoriques du camion (basées sur vos types PL/VL)
-    # On pourrait les rendre dynamiques via self.flotte plus tard
     L_camion = 6.0  # mètres
     l_camion = 2.4  # mètres
     
     fig = go.Figure()
 
-    # On dessine le contour du camion
     fig.add_shape(type="rect", x0=0, y0=0, x1=L_camion, y1=l_camion,
                   line=dict(color="Black", width=3))
 
-    # On dispose les contenants (simplifié : un contenant = un rectangle)
     x_pos, y_pos = 0.1, 0.1
-    largeur_cont = 0.8 # Taille standard d'un roll/palette
+    largeur_cont = 0.8
     longueur_cont = 1.2
     
-    # Palette de couleurs par destination
     destinations = list(set([j.destination for j in tournee.jobs]))
     colors = px.colors.qualitative.Safe
     color_map = {dest: colors[i % len(colors)] for i, dest in enumerate(destinations)}
 
     for job in tournee.jobs:
-        # On crée autant de rectangles que d'unités dans le job
         for _ in range(int(job.quantite)):
             if x_pos + longueur_cont > L_camion:
                 x_pos = 0.1
                 y_pos += largeur_cont + 0.1
             
             if y_pos + largeur_cont > l_camion:
-                break # Camion plein visuellement
+                break 
 
             fig.add_trace(go.Scatter(
                 x=[x_pos, x_pos + longueur_cont, x_pos + longueur_cont, x_pos, x_pos],
                 y=[y_pos, y_pos, y_pos + largeur_cont, y_pos + largeur_cont, y_pos],
                 fill="toself",
                 fillcolor=color_map[job.destination],
-                name=f"{job.destination} ({job.fonction_support})",
+                name=f"{job.destination}",
                 mode='lines',
                 line=dict(color="white", width=1),
                 text=f"Dest: {job.destination}<br>Type: {job.type_contenant}",
