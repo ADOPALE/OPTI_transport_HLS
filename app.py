@@ -175,7 +175,11 @@ elif selected == "Simul tournées": # Transport
 
 elif selected == "Synthèse transport":
     if 'planning_detaille' in st.session_state:
-        afficher_resultats_complets(st.session_state['planning_detaille'], 
-                                   st.session_state['data']['param_vehicules'], 
-                                   st.session_state['data']['param_contenants'])
-    else: st.info("Lancez la simulation transport d'abord.")
+        # On passe bien les dataframes de paramètres
+        afficher_resultats_complets(
+            st.session_state['planning_detaille'], 
+            st.session_state['data']['param_vehicules'], 
+            st.session_state['data']['param_contenants']
+        )
+    else:
+        st.info("⚠️ Aucune simulation n'est en mémoire. Allez dans l'onglet 'Simul tournées' et cliquez sur Lancer.")
