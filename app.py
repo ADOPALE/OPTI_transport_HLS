@@ -39,7 +39,6 @@ try:
     from modules.check_flux import show_volumes
 except ImportError:
     show_volumes = None
-Pourquoi cela règle le problème ?
  
 # --------- DEFINITION DES FONCTIONS NECESSAIRE POUR L'UI ------------
 def show_home():
