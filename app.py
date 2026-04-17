@@ -6,27 +6,28 @@ import folium
 import pandas as pd
 import plotly.express as px
 
-
-
-# importer la fonction d'encodage géographique + calculer les matrices distance et de durée 
+# Importer la fonction d'encodage géographique + calculer les matrices
 from modules.GeoMatrix import run_matrix_tool
-
-# importer la fonction d'import du fichier de paramétrage
+# Importer la fonction d'import du fichier de paramétrage
 from modules.Import import show_import
-# importer la fonction pour afficher les flux par fonction support pour contrôle
-from modules.check_flux import show_flux_control_charts
-
-# importer la fonction qui permet de paramétrer les tournées de biologie
+# Importer la fonction pour afficher les flux par fonction support
+from modules.dataViz import show_flux_control_charts
+# Importer la fonction qui permet de paramétrer les tournées de biologie
 from modules.param_bio import show_biologie_page
-# importer la fonction qui calcule les tournées de biologie
+# Importer la fonction qui calcule les tournées de biologie
 from modules.biologie_engine import run_optimization
-# importer les fonctions qui permettent de visualiser les tournées calculées de biologie dans les onglets synthèse et détail des tournées. 
-from modules.resultats_bio import afficher_stats_vehicules, afficher_stats_chauffeurs, afficher_stats_sites, afficher_detail_flotte_vehicules, afficher_detail_itineraire
-
-# importer la fonction qui permet de paramétrer les tournées de  camions
+# Importer les fonctions de visualisation biologie
+from modules.resultats_bio import (
+    afficher_stats_vehicules, 
+    afficher_stats_chauffeurs, 
+    afficher_stats_sites, 
+    afficher_detail_flotte_vehicules, 
+    afficher_detail_itineraire
+)
+# Importer les fonctions de transport lourd
 from modules.param_flux import afficher_parametres_logistique
 from modules.simul_flux import MoteurSimulation
-from modules.Resultats_simul_flux import afficher_tableau_bord_global, afficher_analyse_operationnelle, afficher_resultats_complets
+from modules.Resultats_simul_flux import afficher_resultats_complets
  
 # --------- DEFINITION DES FONCTIONS NECESSAIRE POUR L'UI ------------
 def show_home():
