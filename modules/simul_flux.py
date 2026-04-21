@@ -12,13 +12,13 @@ class Job:
     origine: str
     destination: str
     hub_origine: str
-    fonction_support: str
     type_contenant: str
     quantite: float
+    poids_total: float
+    surface_totale: float
     jour: str
-    # Nouveaux champs pour la mutualisation
-    mutualise: bool = False
-    nom_mutualisation: Optional[str] = None
+    mutualise: bool
+    nom_mutualisation: Optional[str]
 
 @dataclass
 class Tournee:
@@ -101,44 +101,39 @@ class MoteurSimulation:
         return df_flux
 
     def convertir_flux_en_jobs(self) -> List[Job]:
-        df_flux = self._filtrer_et_normaliser_flux()
-        jobs = []
+        d = st.session_state["data"]
+        df_flux = d["m_flux"]
+        # Référentiel contenants pour poids/dimensions
+        ref_cont = d["param_contenants"].set_index("libellé").to_dict('index')
         
-        # --- NOUVEAU : Identification des colonnes de mutualisation ---
-        col_mut = "Tournées mutualisées ? (OUI / NON)"
-        col_nom_mut = "Nom de la tournée mutualisée"
-
+        jobs = []
         for idx, row in df_flux.iterrows():
-            orig = str(row.get("Point de départ", ""))
-            dest = str(row.get("Point de destination", ""))
-            fs = str(row.get("Fonction Support associée", ""))
-            cont = str(row.get("Nature de contenant", ""))
-            
-            # --- NOUVEAU : Extraction des données de mutualisation ---
-            # On passe en majuscule pour éviter les erreurs de saisie (Oui/OUI)
-            is_mut = str(row.get(col_mut, "")).upper().strip() == "OUI"
-            nom_mut = str(row.get(col_nom_mut, "")) if is_mut else None
+            cont_type = str(row.get("Nature de contenant", ""))
+            etat = str(row.get("Plein / vide", "")).upper()
+            specs = ref_cont.get(cont_type, {})
+            if not specs: continue
+
+            # Sélection du poids selon l'état
+            p_unit = specs.get("Poids plein (T)", 0) if "PLEIN" in etat else specs.get("Poids vide (T)", 0)
+            s_unit = specs.get("dim longueur (m)", 0) * specs.get("dim largeur (m)", 0)
 
             for jour in self.jours:
-                col_jour = f"Quantité {jour} " if jour != "Dimanche" else "Quantité Dimanche "
-                qte = row.get(col_jour, 0)
-                try:
-                    val_qte = float(str(qte).replace(',', '.')) if pd.notnull(qte) and str(qte).strip() != "" else 0
-                    if val_qte > 0:
-                        # On ajoute les infos au Job
-                        jobs.append(Job(
-                            id=f"J{idx}_{jour}", 
-                            origine=orig, 
-                            destination=dest,
-                            hub_origine=self.hubs.get(orig, orig), 
-                            fonction_support=fs,
-                            type_contenant=cont, 
-                            quantite=val_qte, 
-                            jour=jour,
-                            mutualise=is_mut,           # NOUVEAU
-                            nom_mutualisation=nom_mut   # NOUVEAU
-                        ))
-                except: continue
+                qte = row.get(f"Quantité {jour} ", 0) # Attention à l'espace final
+                if pd.notnull(qte) and float(str(qte).replace(',','.')) > 0:
+                    nb = float(str(qte).replace(',','.'))
+                    jobs.append(Job(
+                        id=f"J{idx}_{jour}",
+                        origine=str(row.get("Point de départ", "")),
+                        destination=str(row.get("Point de destination", "")),
+                        hub_origine=self.hubs.get(str(row.get("Point de départ", "")), ""),
+                        type_contenant=cont_type,
+                        quantite=nb,
+                        poids_total=nb * p_unit,
+                        surface_totale=nb * s_unit,
+                        jour=jour,
+                        mutualise=str(row.get("Tournées mutualisées ? (OUI / NON)", "")).upper() == "OUI",
+                        nom_mutualisation=str(row.get("Nom de la tournée mutualisée", ""))
+                    ))
         return jobs
 
     def simuler(self):
@@ -153,63 +148,94 @@ class MoteurSimulation:
         return self.generer_outputs(tournees_finales, chauffeurs)
 
     def _construire_tournees_jour(self, jour: str, jobs: List[Job]) -> List[Tournee]:
+        # On récupère les données de session une seule fois pour la performance
+        d = st.session_state["data"]
+        df_sites = d["param_sites"].set_index("Libellé")
+        df_vehicules = d["param_vehicules"].set_index("Types")
+        
         tournees = []
         jobs_restants = jobs.copy()
         
         while jobs_restants:
-            job_initial = jobs_restants.pop(0)
-            v_row = self.flotte.iloc[0]
-            capacite_v = self._calculer_capacite_vehicule(v_row)
+            # 1. Sélection du véhicule (ici le premier par défaut, à adapter si besoin)
+            v_row = self.flotte.iloc[0] 
+            v_type = v_row["Types"]
+            v_specs = df_vehicules.loc[v_type]
             
+            # Specs physiques du véhicule
+            capa_poids = float(v_specs.get("Poids max chargement", 10))
+            surf_max = float(v_specs.get("dim longueur interne (m)", 0)) * float(v_specs.get("dim largeur interne (m)", 0))
+
+            job_initial = jobs_restants.pop(0)
+            
+            # --- CHECK ACCESSIBILITE SITE INITIAL ---
+            if str(df_sites.at[job_initial.destination, v_type]).upper() != "OUI":
+                # Si le camion par défaut ne peut pas aller au premier site, on cherche une solution ou on logge une erreur
+                continue 
+
             new_t = Tournee(
                 id=f"T_{jour}_{len(tournees)+1}", 
                 jour=jour,
-                vehicule_type=v_row["Types"], 
+                vehicule_type=v_type, 
                 hub_depart=job_initial.hub_origine,
-                capacite_max=capacite_v
+                capacite_max=capa_poids # On garde le poids comme capacité de référence pour l'affichage
             )
             
+            # Initialisation des compteurs physiques
+            new_t.poids_actuel = job_initial.poids_total
+            new_t.surface_actuelle = job_initial.surface_totale
             new_t.jobs.append(job_initial)
-            new_t.remplissage_actuel = job_initial.quantite
-            # On laisse le TSP gérer l'itinéraire à la fin
 
             i = 0
-            while i < len(jobs_restants) and new_t.remplissage_actuel < new_t.capacite_max:
+            while i < len(jobs_restants):
                 candidat = jobs_restants[i]
                 
-                if candidat.hub_origine == new_t.hub_depart:
-                    
-                    # --- ### LOGIQUE MUTUALISATION ### ---
-                    # Par défaut, le job prend de la place
-                    impact_quantite = candidat.quantite
-                    
-                    # Si le job est marqué comme mutualisé
-                    if candidat.mutualise:
-                        # On vérifie si un job ayant le MÊME nom de tournée mutualisée est déjà dans le camion
-                        deja_dans_camion = any(
-                            j.mutualise and j.nom_mutualisation == candidat.nom_mutualisation 
-                            for j in new_t.jobs
-                        )
-                        # Si oui, l'impact sur le volume est de 0 (car c'est le même chargement physique)
-                        if deja_dans_camion:
-                            impact_quantite = 0
-                    # ----------------------------------------
+                # --- CONDITION 1 : MEME HUB ---
+                if candidat.hub_origine != new_t.hub_depart:
+                    i += 1
+                    continue
 
-                    # Vérification si l'impact (0 ou plein volume) rentre dans la capacité
-                    if (new_t.remplissage_actuel + impact_quantite <= new_t.capacite_max):
-                        new_t.jobs.append(candidat)
-                        new_t.remplissage_actuel += impact_quantite
-                        jobs_restants.pop(i)
-                    else:
-                        i += 1
+                # --- CONDITION 2 : ACCESSIBILITE SITE (Quai / Type Véhicule) ---
+                # On vérifie dans param_sites si ce Type de véhicule peut aller à la destination
+                if str(df_sites.at[candidat.destination, v_type]).upper() != "OUI":
+                    i += 1
+                    continue
+
+                # --- CONDITION 3 : COMPATIBILITÉ CONTENANT ---
+                # On vérifie dans param_vehicules si le véhicule accepte ce contenant (colonne au nom du contenant)
+                if str(v_specs.get(candidat.type_contenant, "NON")).upper() != "OUI":
+                    i += 1
+                    continue
+
+                # --- CONDITION 4 : PHYSIQUE (POIDS & SURFACE) + MUTUALISATION ---
+                impact_p = candidat.poids_total
+                impact_s = candidat.surface_totale
+                
+                if candidat.mutualise:
+                    deja_present = any(j.mutualise and j.nom_mutualisation == candidat.nom_mutualisation for j in new_t.jobs)
+                    if deja_present:
+                        impact_p = 0
+                        impact_s = 0
+
+                # On vérifie si ça passe en poids ET en surface au sol
+                if (new_t.poids_actuel + impact_p <= capa_poids) and \
+                   (new_t.surface_actuelle + impact_s <= surf_max):
+                    
+                    new_t.jobs.append(candidat)
+                    new_t.poids_actuel += impact_p
+                    new_t.surface_actuelle += impact_s
+                    # Pour l'affichage global de ton indicateur 132% :
+                    new_t.remplissage_actuel = new_t.poids_actuel 
+                    
+                    jobs_restants.pop(i)
                 else:
                     i += 1
             
-            # --- OPTIMISATION DE L'ITINERAIRE (TSP) ---
-            toutes_destinations = [j.destination for j in new_t.jobs]
+            # --- OPTIMISATION ET METRIQUES FINALES ---
+            toutes_destinations = list(set([j.destination for j in new_t.jobs]))
             new_t.itineraire = self._optimiser_itineraire_tsp(new_t.hub_depart, toutes_destinations)
             
-            # --- CALCUL DES METRIQUES ---
+            # La fonction ci-dessous doit être mise à jour pour inclure les temps de manutention
             self._recalculer_metriques_tournee(new_t)
             
             tournees.append(new_t)
@@ -217,19 +243,62 @@ class MoteurSimulation:
         return tournees
 
     def _recalculer_metriques_tournee(self, t: Tournee):
+        # 1. Préparation des données de référence
+        d = st.session_state["data"]
+        df_sites = d["param_sites"].set_index("Libellé")
+        
+        # On récupère les caractéristiques du véhicule de la tournée
+        # Assure-toi que t.vehicule_type correspond à un "Types" dans l'onglet véhicule
+        v_specs = d["param_vehicules"].set_index("Types").loc[t.vehicule_type]
+        
         duree, dist, curr = 0.0, 0.0, t.hub_depart
+        
+        # 2. Boucle sur l'itinéraire (Aller + Arrêts)
         for stop in t.itineraire:
             try:
-                duree += self.data["matrice_duree"].at[curr, stop]
-                dist += self.data["matrice_distance"].at[curr, stop]
-                duree += 15.0
-            except: pass
+                # --- TEMPS DE TRAJET ET DISTANCE ---
+                dist += d["matrice_distance"].at[curr, stop]
+                duree += d["matrice_duree"].at[curr, stop]
+                
+                # --- TEMPS FIXE : MISE À QUAI ---
+                # On récupère la valeur "Temps de mise à quai - manœuvre, contact/admin (minutes)"
+                tps_fixe = float(v_specs.get("Temps de mise à quai - manœuvre, contact/admin (minutes)", 0))
+                duree += tps_fixe
+                
+                # --- TEMPS VARIABLE : MANUTENTION ---
+                # A. Vérifier si le site a un quai (OUI/NON)
+                presence_quai = str(df_sites.at[stop, "Présence de quai "]).upper().strip() == "OUI"
+                
+                # B. Sélectionner le bon ratio de manutention du véhicule
+                if presence_quai:
+                    ratio_manu = float(v_specs.get("Manutention avec quai (minutes / contenants)", 0))
+                else:
+                    ratio_manu = float(v_specs.get("Manutention sans quai (minutes / contenants)", 0))
+                
+                # C. Calculer le volume déposé/chargé sur ce site précis
+                # On additionne la 'quantite' (nb de contenants) des jobs liés à ce stop
+                nb_contenants_site = sum(j.quantite for j in t.jobs if j.destination == stop)
+                
+                # Ajout du temps de manutention (nb contenants * ratio)
+                # Note : On multiplie par 2 si on considère chargement + déchargement
+                duree += (nb_contenants_site * ratio_manu)
+                
+            except Exception as e:
+                # Si un site manque dans la matrice ou les params, on garde une trace
+                pass 
+                
             curr = stop
+
+        # 3. Retour au Hub (Trajet final)
         try:
-            duree += self.data["matrice_duree"].at[curr, t.hub_depart]
-            dist += self.data["matrice_distance"].at[curr, t.hub_depart]
-        except: pass
-        t.duree_totale, t.distance_totale = duree, dist
+            duree += d["matrice_duree"].at[curr, t.hub_depart]
+            dist += d["matrice_distance"].at[curr, t.hub_depart]
+        except: 
+            pass
+            
+        # 4. Mise à jour de la tournée
+        t.duree_totale = duree
+        t.distance_totale = dist
 
     def _optimiser_itineraire_tsp(self, hub_depart: str, destinations: List[str]) -> List[str]:
         """
