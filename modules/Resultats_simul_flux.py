@@ -6,30 +6,38 @@ import plotly.graph_objects as go
 
 def afficher_tableau_bord_global(resultats_sim):
     """
-    Affiche les KPI de haut niveau (Besoin max, moyenne, distance totale).
-    Exploite le dictionnaire 'kpis' généré par le moteur.
+    Affiche les KPI globaux avec les intitulés exacts du fichier Excel.
     """
     st.header("1. Dimensionnement et Indicateurs Globaux")
     
-    df_t = resultats_sim["tournees"]
     kpis = resultats_sim["kpis"]
+    d = st.session_state["data"]
     
-    # --- Ligne de KPIs ---
+    # Récupération du prix depuis param_vehicules (ajuste l'index si besoin)
+    try:
+        # On prend la valeur de la première ligne pour le prix global
+        prix_carb = float(d["param_vehicules"]["Prix carburant (€/L)"].iloc[0])
+    except:
+        prix_carb = 0.0
+
+    # --- Ligne 1 : Transport ---
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Besoin Max Chauffeurs", f"{kpis['nb_chauffeurs_max_jour']} ETP")
     c2.metric("Total Tournées", f"{kpis['nb_tournees']}")
     c3.metric("Remplissage Moyen", f"{kpis['remplissage_moyen']:.1f} %")
     c4.metric("Distance Totale", f"{int(kpis['distance_totale'])} km")
 
-    # --- Graphique d'activité ---
-    st.subheader("Nombre de tournées par jour")
-    # Réorganisation pour assurer l'ordre chronologique des jours
-    ordre_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
-    df_jour = df_t.groupby("Jour").size().reindex(ordre_jours).fillna(0).reset_index()
-    df_jour.columns = ["Jour", "Nombre de tournées"]
+    # --- Ligne 2 : Énergie et Coûts ---
+    st.markdown("---")
+    e1, e2, e3 = st.columns(3)
     
-    fig_bar = px.bar(df_jour, x="Jour", y="Nombre de tournées", color_discrete_sequence=['#2E7D32'])
-    st.plotly_chart(fig_bar, use_container_width=True)
+    # Utilisation des intitulés exacts pour les unités
+    conso_l = kpis.get('consommation_totale', 0)
+    e1.metric("Consommation (L)", f"{int(conso_l)} L")
+    e2.metric("Coût carbone (kg)", f"{int(kpis.get('co2_total', 0))} kg CO2")
+    
+    cout_total = conso_l * prix_carb
+    e3.metric("Coût carburant total", f"{int(cout_total)} €", delta=f"Base : {prix_carb} €/L")
 
 
 def afficher_analyse_operationnelle(resultats_sim, df_vehicules, df_contenants):
@@ -93,13 +101,20 @@ def afficher_analyse_operationnelle(resultats_sim, df_vehicules, df_contenants):
     st.plotly_chart(fig_timeline, use_container_width=True)
 
     # --- MÉTRIQUES DU CHAUFFEUR ---
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Amplitude Travail", f"{int(c_selected.temps_travail_cumule)} min")
     m2.metric("Nombre de rotations", len(c_selected.tournees))
-    rempl_moyen = np.mean([t.remplissage_actuel/t.capacite_max for t in c_selected.tournees]) * 100
-    m3.metric("Remplissage Moyen", f"{rempl_moyen:.1f} %")
-
-    st.divider()
+    
+    # Remplissage Poids (basé sur ton Poids max chargement)
+    rempl_poids = np.mean([t.poids_actuel/t.capacite_max for t in c_selected.tournees]) * 100
+    m3.metric("Remplissage Poids", f"{rempl_poids:.1f} %")
+    
+    # Remplissage Surface (basé sur tes dimensions internes m2)
+    try:
+        rempl_surf = np.mean([t.surface_actuelle / t.surface_max for t in c_selected.tournees]) * 100
+        m4.metric("Occupation Surface", f"{rempl_surf:.1f} %")
+    except:
+        m4.metric("Occupation Surface", "N/A")
 
     # --- FILTRE 3 : LA TOURNÉE (SÉLECTION POUR VISUEL) ---
     mapping_t = {f"Tournée {t.id} (Hub: {t.hub_depart})": t for t in c_selected.tournees}
@@ -139,11 +154,12 @@ def afficher_analyse_operationnelle(resultats_sim, df_vehicules, df_contenants):
     with st.expander("Voir la liste détaillée des flux de cette tournée"):
         df_jobs_t = pd.DataFrame([{
             "Job ID": j.id,
-            "Origine": j.origine,
             "Destination": j.destination,
             "Fonction Support": j.fonction_support,
-            "Type Contenant": j.type_contenant,
-            "Quantité": j.quantite
+            "Nature de contenant": j.type_contenant,
+            "Quantité": j.quantite,
+            "Poids (T)": round(j.poids_total, 3),
+            "Surface (m2)": round(j.surface_totale, 2)
         } for j in t_selected.jobs])
         st.table(df_jobs_t)
 
