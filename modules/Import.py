@@ -27,9 +27,14 @@ def extraction_donnees(fichier_excel):
                 if not nom_reel:
                     st.error(f"⚠️ Onglet introuvable. On cherchait l'un de ceux-là : {noms_possibles}")
                     return None
+            
+                df = pd.read_excel(xl, sheet_name=sheet_name)
                 
-                df = pd.read_excel(xl, sheet_name=nom_reel)
-                
+                # --- NOUVEAU : FIX POUR LES MATRICES ---
+                if var_name in ["matrice_distance", "matrice_duree"]:
+                    # On définit la première colonne comme index pour pouvoir faire .at[site_A, site_B]
+                    df = df.set_index(df.columns[0])
+                # ---------------------------------------
                 # --- STANDARDISATION DES DONNÉES ---
                 
                 if var_name == "param_sites":
