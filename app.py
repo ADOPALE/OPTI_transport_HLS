@@ -168,18 +168,21 @@ elif selected == "Simul tournées": # Transport
     st.title("🚀 Simulation Transport Lourd")
     if 'data' in st.session_state:
         if st.button("Lancer la simulation Transport", type="primary"):
+            # Ici, on passe tout st.session_state['data'] qui contient "param Contenants", "param_sites", etc.
             moteur = MoteurSimulation(st.session_state['data'], st.session_state.get("params_logistique", {}))
             st.session_state['planning_detaille'] = moteur.simuler()
-            st.success("Simulation terminée !")
-    else: st.error("Importez des données d'abord.")
+            st.success("Simulation terminée ! Allez dans l'onglet 'Synthèse transport' pour voir les résultats.")
+    else: 
+        st.error("⚠️ Importez des données d'abord dans l'onglet 'Importer Données'.")
 
 elif selected == "Synthèse transport":
     if 'planning_detaille' in st.session_state:
-        # On passe bien les dataframes de paramètres
+        # Correction de la clé : "param Contenants" au lieu de "param_contenants"
+        # On s'assure d'envoyer les bons DataFrames au module d'affichage
         afficher_resultats_complets(
             st.session_state['planning_detaille'], 
             st.session_state['data']['param_vehicules'], 
-            st.session_state['data']['param_contenants']
+            st.session_state['data']['param Contenants'] 
         )
     else:
         st.info("⚠️ Aucune simulation n'est en mémoire. Allez dans l'onglet 'Simul tournées' et cliquez sur Lancer.")
