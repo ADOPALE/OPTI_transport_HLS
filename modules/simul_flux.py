@@ -166,8 +166,17 @@ class MoteurSimulation:
                     jobs_restants.pop(i)
                 else:
                     i += 1
+                    
+            # --- NOUVEAU : OPTIMISATION DE L'ITINERAIRE (TSP) ---
+            # 1. On récupère toutes les destinations des jobs chargés
+            toutes_destinations = [j.destination for j in new_t.jobs]
             
+            # 2. On calcule le chemin le plus court entre elles
+            new_t.itineraire = self._optimiser_itineraire_tsp(new_t.hub_depart, toutes_destinations)
+            
+            # 3. On calcule les métriques (distance, durée) sur cet itinéraire optimisé
             self._recalculer_metriques_tournee(new_t)
+            
             tournees.append(new_t)
             
         return tournees
@@ -187,6 +196,28 @@ class MoteurSimulation:
         except: pass
         t.duree_totale, t.distance_totale = duree, dist
 
+    def _optimiser_itineraire_tsp(self, hub_depart, destinations):
+    """Réorganise les étapes pour minimiser la distance totale (Heuristique TSP)."""
+    if not destinations:
+        return []
+    
+    itineraire_optimise = []
+    # On utilise set() pour éviter de visiter deux fois le même quai si plusieurs jobs y vont
+    points_a_visiter = list(set(destinations))
+    position_actuelle = hub_depart
+
+    while points_a_visiter:
+        # Trouver le point le plus proche de la position actuelle via la matrice de distance
+        prochain_point = min(
+            points_a_visiter, 
+            key=lambda p: self.data["matrice_distance"].at[position_actuelle, p]
+        )
+        itineraire_optimise.append(prochain_point)
+        points_a_visiter.remove(prochain_point)
+        position_actuelle = prochain_point
+        
+    return itineraire_optimise
+    
     def affecter_tournees_aux_chauffeurs(self, tournees: List[Tournee]) -> List[Chauffeur]:
         amp_max = self.params.get("contraintes_rh", {}).get("amplitude_max", 450)
         chauffeurs = []
