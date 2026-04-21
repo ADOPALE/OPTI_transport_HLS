@@ -177,12 +177,11 @@ elif selected == "Simul tournées": # Transport
 
 elif selected == "Synthèse transport":
     if 'planning_detaille' in st.session_state:
-        # Correction de la clé : "param Contenants" au lieu de "param_contenants"
-        # On s'assure d'envoyer les bons DataFrames au module d'affichage
+        # Utilise la clé 'param_contenants' conforme à ta note technique
         afficher_resultats_complets(
             st.session_state['planning_detaille'], 
             st.session_state['data']['param_vehicules'], 
-            st.session_state['data']['param Contenants'] 
+            st.session_state['data']['param_contenants'] # <--- Vérifie bien l'orthographe ici
         )
     else:
         st.info("⚠️ Aucune simulation n'est en mémoire. Allez dans l'onglet 'Simul tournées' et cliquez sur Lancer.")
