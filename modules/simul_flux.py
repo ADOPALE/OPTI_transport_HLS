@@ -45,25 +45,35 @@ class MoteurSimulation:
         self.jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     
     def _construire_hubs(self) -> Dict[str, str]:
-        matrice_dist = self.data["matrice_distance"].copy()
-        if matrice_dist.index.dtype in ['int64', 'int32']:
-            col_sites = matrice_dist.columns[0]
-            matrice_dist = matrice_dist.set_index(col_sites)
-        
-        sites = matrice_dist.index.tolist()
-        mapping_site_hub = {}
+    """
+    Identifie les quais appartenant au même site (distance = 0) 
+    sans utiliser de noms de villes en dur.
+    """
+    matrice_dist = self.data["matrice_distance"].copy()
+    
+    # Nettoyage de l'index si nécessaire
+    if matrice_dist.index.dtype in ['int64', 'int32']:
+        col_sites = matrice_dist.columns[0]
+        matrice_dist = matrice_dist.set_index(col_sites)
+    
+    sites = matrice_dist.index.tolist()
+    mapping_site_hub = {}
+    visites = set()
 
-        for site in sites:
-            nom_nettoye = str(site).strip()
-            if "_" in nom_nettoye:
-                hub_id = nom_nettoye.split("_")[0]
-            elif " " in nom_nettoye:
-                hub_id = nom_nettoye.split(" ")[0]
-            else:
-                hub_id = nom_nettoye
+    for s1 in sites:
+        if s1 not in visites:
+            # On trouve tous les sites dont la distance avec s1 est 0
+            # Cela regroupe Blanchisserie, Restauration, etc., s'ils sont au même endroit
+            groupe = matrice_dist.index[matrice_dist[s1] == 0].tolist()
             
-            mapping_site_hub[site] = hub_id
-        return mapping_site_hub
+            # On définit un ID de Hub générique basé sur le premier site du groupe
+            hub_id = f"HUB_{s1}" 
+            
+            for site in groupe:
+                mapping_site_hub[site] = hub_id
+                visites.add(site)
+                
+    return mapping_site_hub
 
     def _preparer_flotte(self) -> pd.DataFrame:
         df_v = self.data["param_vehicules"].copy()
