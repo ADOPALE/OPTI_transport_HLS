@@ -4,8 +4,7 @@ import streamlit as st
 import pandas as pd
 
 def extraction_donnees(fichier_excel):
-    # Ce mapping fait le pont entre "N'importe quel nom dans l'Excel" 
-    # et "Le nom unique utilisé dans le code"
+    # 1. Le mapping flexible pour trouver les onglets peu importe leur nom
     mapping_entree = {
         "matrice_distance": ["matrice Dist", "matrice_distance", "Distances"],
         "matrice_duree": ["matrice Durée", "matrice_duree", "Temps"],
@@ -21,69 +20,39 @@ def extraction_donnees(fichier_excel):
             feuilles_dispo = xl.sheet_names
             
             for var_name, noms_possibles in mapping_entree.items():
-                # On cherche quel nom de l'Excel correspond à notre variable
+                # On cherche quel nom de l'Excel correspond à notre variable standard
                 nom_reel = next((n for n in noms_possibles if n in feuilles_dispo), None)
                 
                 if not nom_reel:
                     st.error(f"⚠️ Onglet introuvable. On cherchait l'un de ceux-là : {noms_possibles}")
                     return None
-            
-                df = pd.read_excel(xl, sheet_name=sheet_name)
                 
-                # --- NOUVEAU : FIX POUR LES MATRICES ---
+                # Lecture de l'onglet trouvé
+                df = pd.read_excel(xl, sheet_name=nom_reel)
+                
+                # --- FIX POUR LES MATRICES (Indexation par nom de site) ---
                 if var_name in ["matrice_distance", "matrice_duree"]:
-                    # On définit la première colonne comme index pour pouvoir faire .at[site_A, site_B]
                     df = df.set_index(df.columns[0])
-                # ---------------------------------------
-                # --- STANDARDISATION DES DONNÉES ---
                 
+                # --- STANDARDISATION DES DONNÉES SITES ---
                 if var_name == "param_sites":
-                    # On garde Site, Adresse et Accessibilité pour nourrir 'accessibilite_sites' et 'adresses'
-                    # On crée les deux clés demandées par les autres modules
+                    # Création des clés attendues par les modules Biologie et Carto
                     data_dict["accessibilite_sites"] = df.iloc[:, [0, 2]].copy()
                     data_dict["accessibilite_sites"].columns = ["site", "accessibilite"]
                     
                     data_dict["adresses"] = df.iloc[:, [0, 1]].copy()
                     data_dict["adresses"].columns = ["site", "adresse"]
                     
-                    # On garde aussi l'onglet complet sous le nom standard
+                    # On garde aussi l'onglet complet sous le nom standard pour le transport
                     data_dict["param_sites"] = df 
                 else:
+                    # Pour les autres (flux, véhicules, contenants), on stocke sous le nom standard
                     data_dict[var_name] = df
                     
         return data_dict
+
     except Exception as e:
         st.error(f"Erreur lors de l'extraction : {e}")
-        return None
-    
-    data_dict = {}
-    try:
-        with pd.ExcelFile(fichier_excel, engine='openpyxl') as xl:
-            for var_name, sheet_name in mapping.items():
-                if sheet_name not in xl.sheet_names:
-                    st.error(f"⚠️ Onglet manquant : {sheet_name}")
-                    return None
-                
-                df = pd.read_excel(xl, sheet_name=sheet_name)
-                
-                # --- TRAITEMENT SPÉCIFIQUE DE L'ONGLET "param Sites" ---
-                
-                # Cas 1 : On ne garde que Site et Accessibilité (Colonnes A et C)
-                if var_name == "accessibilite_sites":
-                    df = df.iloc[:, [0, 2]]
-                    df.columns = ["site", "accessibilite"]
-                
-                # Cas 2 : On ne garde que Site et Adresse (Colonnes A et B)
-                elif var_name == "adresses":
-                    df = df.iloc[:, [0, 1]]
-                    df.columns = ["site", "adresse"]
-                
-                # -------------------------------------------------------
-                
-                data_dict[var_name] = df
-        return data_dict
-    except Exception as e:
-        st.error(f"Erreur : {e}")
         return None
 
 def show_import():
