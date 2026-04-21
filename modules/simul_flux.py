@@ -45,35 +45,34 @@ class MoteurSimulation:
         self.jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     
     def _construire_hubs(self) -> Dict[str, str]:
-    """
-    Identifie les quais appartenant au même site (distance = 0) 
-    sans utiliser de noms de villes en dur.
-    """
-    matrice_dist = self.data["matrice_distance"].copy()
-    
-    # Nettoyage de l'index si nécessaire
-    if matrice_dist.index.dtype in ['int64', 'int32']:
-        col_sites = matrice_dist.columns[0]
-        matrice_dist = matrice_dist.set_index(col_sites)
-    
-    sites = matrice_dist.index.tolist()
-    mapping_site_hub = {}
-    visites = set()
+        """
+        Identifie les sites situés à la même adresse géographique (distance = 0)
+        pour permettre le groupage multi-flux sans dépendre des noms de sites.
+        """
+        matrice_dist = self.data["matrice_distance"].copy()
+        
+        # S'assurer que l'index de la matrice correspond aux noms des sites
+        if matrice_dist.index.dtype in ['int64', 'int32']:
+            col_sites = matrice_dist.columns[0]
+            matrice_dist = matrice_dist.set_index(col_sites)
+        
+        sites = matrice_dist.index.tolist()
+        mapping_site_hub = {}
+        visites = set()
 
-    for s1 in sites:
-        if s1 not in visites:
-            # On trouve tous les sites dont la distance avec s1 est 0
-            # Cela regroupe Blanchisserie, Restauration, etc., s'ils sont au même endroit
-            groupe = matrice_dist.index[matrice_dist[s1] == 0].tolist()
-            
-            # On définit un ID de Hub générique basé sur le premier site du groupe
-            hub_id = f"HUB_{s1}" 
-            
-            for site in groupe:
-                mapping_site_hub[site] = hub_id
-                visites.add(site)
+        for s1 in sites:
+            if s1 not in visites:
+                # On groupe tous les sites qui sont à 0 km de s1 (quais d'un même établissement)
+                groupe = matrice_dist.index[matrice_dist[s1] == 0].tolist()
                 
-    return mapping_site_hub
+                # On crée un identifiant de HUB générique (ex: HUB_SITE_A)
+                hub_id = f"HUB_{s1}" 
+                
+                for site in groupe:
+                    mapping_site_hub[site] = hub_id
+                    visites.add(site)
+                    
+        return mapping_site_hub
 
     def _preparer_flotte(self) -> pd.DataFrame:
         df_v = self.data["param_vehicules"].copy()
@@ -196,27 +195,30 @@ class MoteurSimulation:
         except: pass
         t.duree_totale, t.distance_totale = duree, dist
 
-    def _optimiser_itineraire_tsp(self, hub_depart, destinations):
-    """Réorganise les étapes pour minimiser la distance totale (Heuristique TSP)."""
-    if not destinations:
-        return []
-    
-    itineraire_optimise = []
-    # On utilise set() pour éviter de visiter deux fois le même quai si plusieurs jobs y vont
-    points_a_visiter = list(set(destinations))
-    position_actuelle = hub_depart
-
-    while points_a_visiter:
-        # Trouver le point le plus proche de la position actuelle via la matrice de distance
-        prochain_point = min(
-            points_a_visiter, 
-            key=lambda p: self.data["matrice_distance"].at[position_actuelle, p]
-        )
-        itineraire_optimise.append(prochain_point)
-        points_a_visiter.remove(prochain_point)
-        position_actuelle = prochain_point
+    def _optimiser_itineraire_tsp(self, hub_depart: str, destinations: List[str]) -> List[str]:
+        """
+        Organise l'ordre des livraisons pour minimiser les kilomètres parcourus.
+        Utilise l'algorithme du plus proche voisin.
+        """
+        if not destinations:
+            return []
         
-    return itineraire_optimise
+        itineraire_optimise = []
+        # On dédoublonne les points de livraison pour ne pas s'arrêter deux fois au même quai
+        points_a_visiter = list(set(destinations))
+        position_actuelle = hub_depart
+
+        while points_a_visiter:
+            # On cherche le site le plus proche parmi ceux qui restent à livrer
+            prochain_point = min(
+                points_a_visiter, 
+                key=lambda p: self.data["matrice_distance"].at[position_actuelle, p]
+            )
+            itineraire_optimise.append(prochain_point)
+            points_a_visiter.remove(prochain_point)
+            position_actuelle = prochain_point
+            
+        return itineraire_optimise
     
     def affecter_tournees_aux_chauffeurs(self, tournees: List[Tournee]) -> List[Chauffeur]:
         amp_max = self.params.get("contraintes_rh", {}).get("amplitude_max", 450)
