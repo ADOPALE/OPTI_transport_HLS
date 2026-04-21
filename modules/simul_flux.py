@@ -151,7 +151,7 @@ class MoteurSimulation:
     def _construire_tournees_jour(self, jour: str, jobs: List[Job]) -> List[Tournee]:
         # On récupère les données de session une seule fois pour la performance
         d = st.session_state["data"]
-        df_sites = d["param_sites"].set_index("Libellé")
+        df_sites = d["param Sites"].set_index("Libellé")
         df_vehicules = d["param_vehicules"].set_index("Types")
         
         tournees = []
