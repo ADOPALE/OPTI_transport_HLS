@@ -16,6 +16,9 @@ class Job:
     type_contenant: str
     quantite: float
     jour: str
+    # Nouveaux champs pour la mutualisation
+    mutualise: bool = False
+    nom_mutualisation: Optional[str] = None
 
 @dataclass
 class Tournee:
@@ -100,21 +103,40 @@ class MoteurSimulation:
     def convertir_flux_en_jobs(self) -> List[Job]:
         df_flux = self._filtrer_et_normaliser_flux()
         jobs = []
+        
+        # --- NOUVEAU : Identification des colonnes de mutualisation ---
+        col_mut = "Tournées mutualisées ? (OUI / NON)"
+        col_nom_mut = "Nom de la tournée mutualisée"
+
         for idx, row in df_flux.iterrows():
             orig = str(row.get("Point de départ", ""))
             dest = str(row.get("Point de destination", ""))
             fs = str(row.get("Fonction Support associée", ""))
             cont = str(row.get("Nature de contenant", ""))
+            
+            # --- NOUVEAU : Extraction des données de mutualisation ---
+            # On passe en majuscule pour éviter les erreurs de saisie (Oui/OUI)
+            is_mut = str(row.get(col_mut, "")).upper().strip() == "OUI"
+            nom_mut = str(row.get(col_nom_mut, "")) if is_mut else None
+
             for jour in self.jours:
                 col_jour = f"Quantité {jour} " if jour != "Dimanche" else "Quantité Dimanche "
                 qte = row.get(col_jour, 0)
                 try:
                     val_qte = float(str(qte).replace(',', '.')) if pd.notnull(qte) and str(qte).strip() != "" else 0
                     if val_qte > 0:
+                        # On ajoute les infos au Job
                         jobs.append(Job(
-                            id=f"J{idx}_{jour}", origine=orig, destination=dest,
-                            hub_origine=self.hubs.get(orig, orig), fonction_support=fs,
-                            type_contenant=cont, quantite=val_qte, jour=jour
+                            id=f"J{idx}_{jour}", 
+                            origine=orig, 
+                            destination=dest,
+                            hub_origine=self.hubs.get(orig, orig), 
+                            fonction_support=fs,
+                            type_contenant=cont, 
+                            quantite=val_qte, 
+                            jour=jour,
+                            mutualise=is_mut,           # NOUVEAU
+                            nom_mutualisation=nom_mut   # NOUVEAU
                         ))
                 except: continue
         return jobs
@@ -149,31 +171,45 @@ class MoteurSimulation:
             
             new_t.jobs.append(job_initial)
             new_t.remplissage_actuel = job_initial.quantite
-            if job_initial.destination not in new_t.itineraire:
-                new_t.itineraire.append(job_initial.destination)
+            # On laisse le TSP gérer l'itinéraire à la fin
 
             i = 0
             while i < len(jobs_restants) and new_t.remplissage_actuel < new_t.capacite_max:
                 candidat = jobs_restants[i]
-                if candidat.hub_origine == new_t.hub_depart and \
-                   (new_t.remplissage_actuel + candidat.quantite <= new_t.capacite_max):
+                
+                if candidat.hub_origine == new_t.hub_depart:
                     
-                    new_t.jobs.append(candidat)
-                    new_t.remplissage_actuel += candidat.quantite
-                    if candidat.destination not in new_t.itineraire:
-                        new_t.itineraire.append(candidat.destination)
-                    jobs_restants.pop(i)
+                    # --- ### LOGIQUE MUTUALISATION ### ---
+                    # Par défaut, le job prend de la place
+                    impact_quantite = candidat.quantite
+                    
+                    # Si le job est marqué comme mutualisé
+                    if candidat.mutualise:
+                        # On vérifie si un job ayant le MÊME nom de tournée mutualisée est déjà dans le camion
+                        deja_dans_camion = any(
+                            j.mutualise and j.nom_mutualisation == candidat.nom_mutualisation 
+                            for j in new_t.jobs
+                        )
+                        # Si oui, l'impact sur le volume est de 0 (car c'est le même chargement physique)
+                        if deja_dans_camion:
+                            impact_quantite = 0
+                    # ----------------------------------------
+
+                    # Vérification si l'impact (0 ou plein volume) rentre dans la capacité
+                    if (new_t.remplissage_actuel + impact_quantite <= new_t.capacite_max):
+                        new_t.jobs.append(candidat)
+                        new_t.remplissage_actuel += impact_quantite
+                        jobs_restants.pop(i)
+                    else:
+                        i += 1
                 else:
                     i += 1
-                    
-            # --- NOUVEAU : OPTIMISATION DE L'ITINERAIRE (TSP) ---
-            # 1. On récupère toutes les destinations des jobs chargés
-            toutes_destinations = [j.destination for j in new_t.jobs]
             
-            # 2. On calcule le chemin le plus court entre elles
+            # --- OPTIMISATION DE L'ITINERAIRE (TSP) ---
+            toutes_destinations = [j.destination for j in new_t.jobs]
             new_t.itineraire = self._optimiser_itineraire_tsp(new_t.hub_depart, toutes_destinations)
             
-            # 3. On calcule les métriques (distance, durée) sur cet itinéraire optimisé
+            # --- CALCUL DES METRIQUES ---
             self._recalculer_metriques_tournee(new_t)
             
             tournees.append(new_t)
