@@ -4,56 +4,44 @@ import streamlit as st
 import pandas as pd
 
 def extraction_donnees(fichier_excel):
-    # 1. Le mapping flexible
-    mapping_entree = {
-        "matrice_distance": ["matrice Dist", "matrice_distance", "Distances"],
-        "matrice_duree": ["matrice Durée", "matrice_duree", "Temps"],
-        "m_flux": ["M flux", "m_flux", "Flux"],
-        "param_contenants": ["param Contenants", "param_contenants", "Contenants"],
-        "param_vehicules": ["param Véhicules", "param_vehicules", "Véhicules"],
-        "param_sites": ["param Sites", "param_sites", "Sites"]
+    mapping = {
+        "matrice_distance": "matrice Dist",
+        "matrice_duree": "matrice Durée",
+        "m_flux": "M flux",
+        "param_contenants": "param Contenants",
+        "param_vehicules": "param Véhicules",
+        "accessibilite_sites": "param Sites",
+        "adresses": "param Sites"  # On lit le même onglet une deuxième fois
     }
     
     data_dict = {}
     try:
         with pd.ExcelFile(fichier_excel, engine='openpyxl') as xl:
-            feuilles_dispo = xl.sheet_names
-            
-            for var_name, noms_possibles in mapping_entree.items():
-                nom_reel = next((n for n in noms_possibles if n in feuilles_dispo), None)
-                
-                if not nom_reel:
-                    st.error(f"⚠️ Onglet introuvable. On cherchait l'un de ceux-là : {noms_possibles}")
+            for var_name, sheet_name in mapping.items():
+                if sheet_name not in xl.sheet_names:
+                    st.error(f"⚠️ Onglet manquant : {sheet_name}")
                     return None
                 
-                # Lecture brute
-                df = pd.read_excel(xl, sheet_name=nom_reel)
+                df = pd.read_excel(xl, sheet_name=sheet_name)
                 
-                # SÉCURITÉ MINIMUM : On enlève juste les espaces autour des noms (pas de majuscules forcées)
-                # Cela évite que "Nantes " soit différent de "Nantes"
-                df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
-                df.columns = [c.strip() if isinstance(c, str) else c for c in df.columns]
-
-                # --- FIX POUR LES MATRICES ---
-                if var_name in ["matrice_distance", "matrice_duree"]:
-                    df = df.set_index(df.columns[0])
+                # --- TRAITEMENT SPÉCIFIQUE DE L'ONGLET "param Sites" ---
                 
-                # --- STOCKAGE ---
-                if var_name == "param_sites":
-                    data_dict["accessibilite_sites"] = df.iloc[:, [0, 2]].copy()
-                    data_dict["accessibilite_sites"].columns = ["site", "accessibilite"]
-                    
-                    data_dict["adresses"] = df.iloc[:, [0, 1]].copy()
-                    data_dict["adresses"].columns = ["site", "adresse"]
-                    
-                    data_dict["param_sites"] = df 
-                else:
-                    data_dict[var_name] = df
-                    
+                # Cas 1 : On ne garde que Site et Accessibilité (Colonnes A et C)
+                if var_name == "accessibilite_sites":
+                    df = df.iloc[:, [0, 2]]
+                    df.columns = ["site", "accessibilite"]
+                
+                # Cas 2 : On ne garde que Site et Adresse (Colonnes A et B)
+                elif var_name == "adresses":
+                    df = df.iloc[:, [0, 1]]
+                    df.columns = ["site", "adresse"]
+                
+                # -------------------------------------------------------
+                
+                data_dict[var_name] = df
         return data_dict
-
     except Exception as e:
-        st.error(f"Erreur lors de l'extraction : {e}")
+        st.error(f"Erreur : {e}")
         return None
 
 def show_import():
