@@ -180,47 +180,68 @@ elif selected == "Véhicules et paramètres":
     afficher_parametres_logistique()
 
 elif selected == "Simul tournées": # Transport
-    st.title("🚀 Simulation Transport Lourd")
+    st.title("🚀 Simulation Transport Lourd (Flotte Homogène)")
+    
     if 'data' in st.session_state:
-        if st.button("Lancer la simulation Transport", type="primary"):
-            # Ici, on passe tout st.session_state['data'] qui contient "param Contenants", "param_sites", etc.
-            if 'data' not in st.session_state:
-                st.error("⚠️ Aucune donnée chargée dans 'st.session_state'. Veuillez importer des données.")
-            else:
-                st.write(f"Données chargées : {st.session_state['data']}")  # Afficher les données chargées
-                st.write("Démarrage de la simulation transport...")
-                
-            moteur = MoteurSimulation(st.session_state['data'], st.session_state.get("params_logistique", {}))
-            st.session_state['planning_detaille'] = moteur.simuler()
-            st.success("Simulation terminée ! Allez dans l'onglet 'Synthèse transport' pour voir les résultats.")
-            # --- AFFICHAGE IMMÉDIAT DES RÉSULTATS ---
-            if 'planning_detaille' in st.session_state:
-                res = st.session_state['planning_detaille']
-                
-                # 1. Affichage des KPIs en colonnes
-                st.subheader("📊 Indicateurs Clés (Hebdo)")
-                k = res["kpis"]
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Tournées", k["nb_tournees"])
-                col2.metric("Distance Totale", f"{k['distance_totale']:,.0f} km")
-                col3.metric("Remplissage Moyen", f"{k['remplissage_moyen']:.1f}%")
-                col4.metric("Chauffeurs Max/Jour", k["nb_chauffeurs_max_jour"])
+        # Bouton pour lancer la simulation exhaustive (100 itérations de la semaine)
+        if st.button("Lancer l'optimisation Hebdo Homogène", type="primary"):
+            with st.spinner("🧠 Analyse de 100 scénarios de semaines complètes pour optimiser la flotte..."):
+                try:
+                    # Appel du nouveau moteur (simul_flux_2)
+                    # La fonction retourne le meilleur score (pic de flotte minimal + km optimisés)
+                    resultats_hebdo = lancer_simulation(st.session_state['data'])
+                    
+                    # On stocke les résultats dans le session_state
+                    st.session_state['planning_detaille'] = resultats_hebdo
+                    st.success(f"✅ Analyse terminée. Flotte fixe requise : {resultats_hebdo['kpis']['nb_chauffeurs_max_jour']} camions.")
+                except Exception as e:
+                    st.error(f"Erreur lors de la simulation : {e}")
+
+        # --- AFFICHAGE DES RÉSULTATS SI DISPONIBLES ---
+        if 'planning_detaille' in st.session_state:
+            res = st.session_state['planning_detaille']
+            k = res["kpis"]
             
-                # 2. Focus sur la première tournée (T1 Lundi)
-                st.divider()
-                st.subheader("🔍 Détail : Première tournée (Lundi)")
+            # 1. Affichage des KPIs Globaux (Hebdo)
+            st.divider()
+            st.subheader("📊 Indicateurs Clés de la Semaine (Meilleur scénario)")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Flotte Fixe (Pic)", f"{k['nb_chauffeurs_max_jour']} Véhicules")
+            col2.metric("Distance Totale", f"{k['distance_totale']:,.0f} km")
+            col3.metric("Remplissage Moyen", f"{k['remplissage_moyen']:.1f}%")
+            col4.metric("Total Tournées", k["nb_tournees"])
+            
+            # 2. Aperçu rapide du Lundi (Jour de référence souvent chargé)
+            st.subheader("🔍 Aperçu : Planning du Lundi")
+            
+            # On récupère les données du lundi dans le détail des jours
+            lundi_data = res["detail_jours"].get("Lundi", {})
+            
+            if lundi_data:
+                col_a, col_b = st.columns(2)
+                col_a.info(f"Nombre de chauffeurs mobilisés : {len(lundi_data['chauffeurs'])}")
+                col_b.info(f"Nombre de tournées : {len(lundi_data['tournees'])}")
                 
-                df_t = res["tournees"]
-                # On filtre sur l'ID de la première tournée du lundi
-                t1_lundi = df_t[df_t["ID Tournée"].str.contains("T_Lundi_1", na=False)]
+                # Petit tableau récapitulatif des tournées du lundi
+                liste_t = []
+                for t in lundi_data["tournees"]:
+                    liste_t.append({
+                        "ID": t.id,
+                        "Départ HSJ": f"{int(t.h_debut_hsj//60):02d}h{int(t.h_debut_hsj%60):02d}",
+                        "Fin HSJ": f"{int(t.h_fin_hsj//60):02d}h{int(t.h_fin_hsj%60):02d}",
+                        "KM": f"{t.km_totaux:.1f}",
+                        "Type": "Sale" if t.is_sale_tournee else "Propre",
+                        "Remplissage": f"{(t.remplissage_L / 7.5)*100:.1f}%" # 7.5m par défaut pour PL 19T
+                    })
                 
-                if not t1_lundi.empty:
-                    st.dataframe(t1_lundi, use_container_width=True)
-                else:
-                    st.info("Aucune tournée 'T_Lundi_1' n'a été générée.")
+                st.table(pd.DataFrame(liste_t).head(10)) # Affiche les 10 premières tournées
+                st.caption("Allez dans l'onglet 'Synthèse transport' ou 'Détail tournées' pour voir le reste de la semaine.")
+            else:
+                st.warning("Aucune donnée disponible pour le Lundi dans ce scénario.")
+                
     else: 
         st.error("⚠️ Importez des données d'abord dans l'onglet 'Importer Données'.")
-
 elif selected == "Synthèse transport":
     if 'planning_detaille' in st.session_state:
         # Utilise la clé 'param_contenants' conforme à ta note technique
