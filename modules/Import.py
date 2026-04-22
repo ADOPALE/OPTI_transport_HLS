@@ -71,9 +71,9 @@ def show_import():
         
         with tab1:
             st.write("**Matrice Distance**")
-            st.dataframe(data["matrice_distance"], use_container_width=True)
+           # st.dataframe(data["matrice_distance"], use_container_width=True)
             st.write("**Matrice Durée**")
-            st.dataframe(data["matrice_duree"], use_container_width=True)
+            #st.dataframe(data["matrice_duree"], use_container_width=True)
             
         with tab2:
             st.write("**Flux (m_flux)**")
