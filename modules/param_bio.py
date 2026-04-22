@@ -23,14 +23,13 @@ def show_biologie_page():
     # 1. Récupération des données m_flux
     df_flux = st.session_state["data"]["m_flux"].copy()
     
-    # On identifie la colonne K (index 10) pour filtrer sur "Fréquences"
+    # On identifie la colonne M (index 12) pour filtrer sur "Fréquences"
     # On utilise .strip() pour ignorer les espaces invisibles et .lower() pour la casse
-    col_k = df_flux.columns[10]
-    df_freq = df_flux[df_flux[col_k].astype(str).str.lower().str.strip().str.contains("fréquence", na=False)]
+    col_m = df_flux.columns[12]
+    df_freq = df_flux[df_flux[col_m].astype(str).str.lower().str.strip().str.contains("fréquence", na=False)]
 
     if df_freq.empty:
-        st.error(f"❌ Aucune ligne avec la mention 'Fréquences' trouvée dans la colonne K.")
-        return
+        st.error(f"❌ Aucune ligne avec la mention 'Fréquences' trouvée dans la colonne M.")
 
     # 2. Vérification de l'unicité des sites (Colonne A = Index 0)
     col_a = df_flux.columns[0]
