@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import math
 import random
@@ -23,7 +22,6 @@ class Job:
     h_limite: float
     is_sale: bool
     prioritaire: bool
-    mutualise_id: Optional[str] = None
 
 @dataclass
 class Tournee:
@@ -34,10 +32,9 @@ class Tournee:
     km_totaux: float = 0.0
     is_sale_tournee: bool = False
     jobs_contenu: List[Dict] = field(default_factory=list)
-    etapes: List[Dict] = field(default_factory=list)
-    remplissage_L: float = 0.0 # Longueur occupée sur le plateau
+    remplissage_L: float = 0.0
 
-# --- MOTEUR D'OPTIMISATION ---
+# --- MOTEUR D'OPTIMISATION HEBDOMADAIRE HOMOGÈNE ---
 
 class MoteurSimulation:
     def __init__(self, data: Dict):
@@ -48,7 +45,7 @@ class MoteurSimulation:
         self.mat_dist = data['matrice_distance']
         self.mat_dur = data['matrice_duree']
         
-        # Paramètres RH
+        # Paramètres fixes
         self.h_prise_poste = 390  # 06:30
         self.shift_max = 450      # 7h30
         self.nettoyage_t = 20     # minutes
@@ -56,18 +53,20 @@ class MoteurSimulation:
 
     def _to_min(self, t):
         if pd.isna(t) or t == "": return 390
-        if isinstance(t, datetime): return t.hour * 60 + t.minute
+        if isinstance(t, datetime) if 'datetime' in globals() else False: return t.hour * 60 + t.minute
         try:
-            h, m = map(int, str(t).split(':')[:2])
-            return h * 60 + m
+            parts = str(t).split(':')
+            return int(parts[0]) * 60 + int(parts[1])
         except: return 390
 
     def get_travel(self, d, a):
-        try: return float(self.mat_dist.at[d, a]), float(self.mat_dur.at[d, a])
-        except: return 0.0, 0.0
+        try:
+            return float(self.mat_dist.at[d, a]), float(self.mat_dur.at[d, a])
+        except:
+            return 0.0, 0.0
 
     def bin_packing_needed_L(self, job, v_type, qte):
-        """Calcule la longueur de plancher consommée selon la largeur du camion"""
+        """Calcule la longueur consommée en respectant la largeur du plateau"""
         l_camion = self.ref_veh[v_type]['dim largeur interne (m)']
         nb_front = max(1, math.floor(l_camion / job.larg_u))
         nb_rangees = math.ceil(qte / nb_front)
@@ -76,8 +75,9 @@ class MoteurSimulation:
     def preparer_jobs(self, jour):
         df = self.data['m_flux']
         col_qte = f"Quantité {jour} "
-        mask = (df['Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)'] == 'Volume') & (df[col_qte] > 0)
+        if col_qte not in df.columns: return []
         
+        mask = (df['Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)'] == 'Volume') & (df[col_qte] > 0)
         jobs = []
         for idx, row in df[mask].iterrows():
             c = self.ref_cont.get(row['Nature de contenant'], {})
@@ -93,111 +93,120 @@ class MoteurSimulation:
             ))
         return jobs
 
-    def construire_solution_unitaire(self, jour, random_factor=0.2):
-        """Génère UNE solution complète pour la journée"""
+    def construire_journee(self, jour, random_factor=0.2):
+        """Génère les tournées d'un jour avec une part d'aléatoire pour l'exploration"""
         jobs = self.preparer_jobs(jour)
         tournees = []
+        v_type = "PL 19T" # On travaille sur une flotte homogène de gros porteurs
+        v_cfg = self.ref_veh[v_type]
         
         while any(j.reste_a_livrer > 0 for j in jobs):
-            # Sélection du prochain job (avec une part d'aléatoire pour l'optimisation)
             dispo = [j for j in jobs if j.reste_a_livrer > 0]
             dispo.sort(key=lambda x: (not x.prioritaire, x.h_limite))
             
-            # On pioche dans les top candidats au lieu de prendre toujours le 1er (Randomized Greedy)
+            # Sélection aléatoire parmi les meilleurs candidats (GRASP)
             idx_pick = 0 if random.random() > random_factor else random.randint(0, min(len(dispo)-1, 2))
             job_maitre = dispo[idx_pick]
             
-            # Choix véhicule
-            v_type = "PL 19T" # Peut être randomisé aussi pour tester d'autres flottes
-            v_cfg = self.ref_veh[v_type]
+            t = Tournee(id=f"T_{jour[:2]}_{len(tournees)+1}", vehicule_type=v_type, 
+                        h_debut_hsj=0, is_sale_tournee=job_maitre.is_sale)
             
-            t = Tournee(id=f"T_{len(tournees)+1}", vehicule_type=v_type, h_debut_hsj=0, is_sale_tournee=job_maitre.is_sale)
-            
-            # Remplissage
+            # Remplissage opportuniste (Bin Packing Largeur)
             L_max = v_cfg['dim longueur interne (m)']
-            poids_max = v_cfg['Poids max chargement']
-            
-            # Ajout opportuniste
             for j in dispo:
                 if j.is_sale != t.is_sale_tournee: continue
                 if self.ref_sites.get(j.destination, {}).get(v_type) != "OUI": continue
                 
-                # Combien peut-on en mettre ?
                 l_libre = L_max - t.remplissage_L
                 if l_libre <= 0: continue
                 
-                # Test Bin Packing
                 nb_front = max(1, math.floor(v_cfg['dim largeur interne (m)'] / j.larg_u))
                 rangees_possibles = math.floor(l_libre / j.long_u)
-                max_qte_geometrie = rangees_possibles * nb_front
+                max_qte = rangees_possibles * nb_front
                 
-                qte_a_charger = min(j.reste_a_livrer, max_qte_geometrie)
-                
+                qte_a_charger = min(j.reste_a_livrer, max_qte)
                 if qte_a_charger > 0:
                     t.jobs_contenu.append({"job": j, "qte": qte_a_charger})
                     t.remplissage_L += self.bin_packing_needed_L(j, v_type, qte_a_charger)
                     j.reste_a_livrer -= qte_a_charger
 
-            # Calcul des temps et distances
+            # Calcul itinéraire (Départ HSJ -> Origine -> Destination -> Retour HSJ)
             curr_loc = "HSJ"
-            curr_time = max(self.h_prise_poste, job_maitre.h_dispo - 30) # Estimation départ
-            t.h_debut_hsj = curr_time
+            dist_init, dur_init = self.get_travel("HSJ", job_maitre.origine)
+            t.h_debut_hsj = max(self.h_prise_poste, job_maitre.h_dispo - dur_init)
+            curr_time = t.h_debut_hsj
             
             for jb in t.jobs_contenu:
-                dist, dur = self.get_travel(curr_loc, jb['job'].origine)
-                curr_time += dur + self.manut_fixe
-                dist_liv, dur_liv = self.get_travel(jb['job'].origine, jb['job'].destination)
-                curr_time += dur_liv + (jb['qte'] * 0.5) # +30s par chariot
-                t.km_totaux += (dist + dist_liv)
+                d1, t1 = self.get_travel(curr_loc, jb['job'].origine)
+                curr_time += t1 + self.manut_fixe
+                d2, t2 = self.get_travel(jb['job'].origine, jb['job'].destination)
+                curr_time += t2 + (jb['qte'] * 0.5) # 30s par contenant
+                t.km_totaux += (d1 + d2)
                 curr_loc = jb['job'].destination
             
-            # Retour HSJ
-            d_ret, dur_ret = self.get_travel(curr_loc, "HSJ")
-            t.h_fin_hsj = curr_time + dur_ret
+            d_ret, t_ret = self.get_travel(curr_loc, "HSJ")
+            t.h_fin_hsj = curr_time + t_ret
             t.km_totaux += d_ret
             tournees.append(t)
             
         return tournees
 
-    def optimiser_journee(self, jour, nb_iterations=100):
-        meilleure_sol = None
+    def assigner_rh(self, tournees):
+        """Multi-trip : réutilisation des chauffeurs à la minute près (ex: 10h02)"""
+        tournees.sort(key=lambda x: x.h_debut_hsj)
+        chauffeurs = [] 
+        for t in tournees:
+            assigne = False
+            for c in chauffeurs:
+                der = c[-1]
+                delai = self.nettoyage_t if (der.is_sale_tournee and not t.is_sale_tournee) else 2
+                if der.h_fin_hsj + delai <= t.h_debut_hsj:
+                    if (t.h_fin_hsj - c[0].h_debut_hsj) <= self.shift_max:
+                        c.append(t)
+                        assigne = True
+                        break
+            if not assigne: chauffeurs.append([t])
+        return chauffeurs
+
+    def simuler_semaine_homogene(self, nb_iterations=100):
+        meilleure_semaine = None
         meilleur_score = float('inf')
-        
-        for _ in range(nb_iterations):
-            sol = self.construire_solution_unitaire(jour)
-            # Fitness : Coût = (Nb Camions * 500) + (Km Totaux * 2)
-            score = (len(sol) * 500) + (sum(t.km_totaux for t in sol) * 2)
+        jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
+
+        for i in range(nb_iterations):
+            semaine_test = {}
+            pic_flotte = 0
+            km_hebdo = 0
+            remplissage_cumul = []
+
+            for j in jours:
+                t_jour = self.construire_journee(j)
+                c_jour = self.assigner_rh(t_jour)
+                
+                semaine_test[j] = {"tournees": t_jour, "chauffeurs": c_jour}
+                pic_flotte = max(pic_flotte, len(c_jour))
+                km_hebdo += sum(t.km_totaux for t in t_jour)
+                for t in t_jour:
+                    v_max_L = self.ref_veh[t.vehicule_type]['dim longueur interne (m)']
+                    remplissage_cumul.append(t.remplissage_L / v_max_L)
+
+            # Score : Priorité absolue au nombre de véhicules (le pic de flotte)
+            score = (pic_flotte * 1000000) + km_hebdo
             
             if score < meilleur_score:
                 meilleur_score = score
-                meilleure_sol = sol
-                
-        return meilleure_sol
+                meilleure_semaine = {
+                    "detail_jours": semaine_test,
+                    "kpis": {
+                        "nb_chauffeurs_max_jour": pic_flotte,
+                        "nb_tournees": sum(len(d["tournees"]) for d in semaine_test.values()),
+                        "distance_totale": km_hebdo,
+                        "remplissage_moyen": (sum(remplissage_cumul)/len(remplissage_cumul)*100) if remplissage_cumul else 0
+                    }
+                }
+        return meilleure_semaine
 
-    def assigner_rh(self, tournees):
-        tournees.sort(key=lambda x: x.h_debut_hsj)
-        chauffeurs = [] # Liste de listes de tournees
-        
-        for t in tournees:
-            place_trouvee = False
-            for c in chauffeurs:
-                dernier_t = c[-1]
-                delai = self.nettoyage_t if (dernier_t.is_sale_tournee and not t.is_sale_tournee) else 2
-                
-                if dernier_t.h_fin_hsj + delai <= t.h_debut_hsj:
-                    if (t.h_fin_hsj - c[0].h_debut_hsj) <= self.shift_max:
-                        c.append(t)
-                        place_trouvee = True
-                        break
-            if not place_trouvee:
-                chauffeurs.append([t])
-        return chauffeurs
-
+# --- FONCTION D'APPEL ---
 def lancer_simulation(data):
     moteur = MoteurSimulation(data)
-    resultats = {}
-    for j in ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]:
-        t_opti = moteur.optimiser_journee(j, nb_iterations=100)
-        c_opti = moteur.assigner_rh(t_opti)
-        resultats[j] = {"tournees": t_opti, "chauffeurs": c_opti}
-    return resultats
+    return moteur.simuler_semaine_homogene(nb_iterations=100)
