@@ -158,7 +158,8 @@ class MoteurSimulation:
         outputs = self.generer_outputs(tournees_finales, chauffeurs)
 
          # Ajoutez ceci pour vérifier ce qui est généré
-        print(outputs)  # Vérifiez les résultats dans la console
+        #print(outputs)  # Vérifiez les résultats dans la console 
+        print('simul terminée')
     
          # Stocker les résultats dans session_state pour les utiliser dans Streamlit
         st.session_state['planning_detaille'] = outputs
