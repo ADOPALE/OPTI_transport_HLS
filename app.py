@@ -51,6 +51,20 @@ def show_simulation_page():
     if "biologie_config" not in st.session_state:
         st.warning("⚠️ Configuration manquante. Validez vos paramètres dans l'onglet 'Paramétrage BIO'.")
         return
+     # Vérification de la présence de 'param_sites'
+    if 'param_sites' not in st.session_state['data']:
+        st.error("⚠️ 'param_sites' est manquant dans les données. Veuillez vérifier votre fichier d'import.")
+        return  # Sortir de la fonction si la clé est manquante
+    else:
+        param_sites = st.session_state['data']['param_sites']
+        if not isinstance(param_sites, pd.DataFrame):
+            st.error("⚠️ Les données de 'param_sites' ne sont pas un DataFrame.")
+            return  # Sortir de la fonction si ce n'est pas un DataFrame
+        elif 'Libellé' not in param_sites.columns:
+            st.error("⚠️ La colonne 'Libellé' est manquante dans 'param_sites'.")
+            return  # Sortir de la fonction si la colonne 'Libellé' est manquante
+        else:
+            st.write(f"'param_sites' est correctement chargé avec {len(param_sites)} lignes.")
 
     config = st.session_state["biologie_config"]
     btn_label = "🚀 Relancer la simulation" if st.session_state.get("sim_lancee") else "🚀 Lancer la simulation"
