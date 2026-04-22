@@ -28,8 +28,8 @@ def extraction_donnees(fichier_excel):
                 
                 # Cas 1 : On ne garde que Site et Accessibilité (Colonnes A et C)
                 if var_name == "param_sites":
-                    df = df.iloc[:, [0, 2]]
-                    df.columns = ["Libellé", "accessibilite"]
+                    df.columns = df.columns.str.strip()  # Enlever les espaces en trop dans les noms de colonnes
+                # --- FIN TRAITEMENT SPÉCIFIQUE ---
                 
                 # Cas 2 : On ne garde que Site et Adresse (Colonnes A et B)
                 elif var_name == "adresses":
