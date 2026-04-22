@@ -88,12 +88,12 @@ def show_biologie_page():
                 except:
                     return defaut_min
 
-            # Application aux colonnes S(18), T(19) et W(22)
-            h_ouvert = extraire_minutes(row.iloc[18], 480)
-            h_ferme = extraire_minutes(row.iloc[19], 1080)
+            # Application aux colonnes U(20), V(21) et Y(24)
+            h_ouvert = extraire_minutes(row.iloc[20], 480)
+            h_ferme = extraire_minutes(row.iloc[21], 1080)
             
             # Pour la fréquence (W), on s'assure d'avoir un entier
-            val_w = row.iloc[22]
+            val_w = row.iloc[24]
             if pd.isna(val_w) or str(val_w).strip() == "":
                 nb_passages = 3
             else:
