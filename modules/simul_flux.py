@@ -48,7 +48,7 @@ class MoteurSimulation:
         self.flotte = self._preparer_flotte()
         self.jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
       
-        print('Init OK')  # Vérifiez les résultats dans la console
+        st.write('Init OK')  # Vérifiez les résultats dans la console
     
     def _construire_hubs(self) -> Dict[str, str]:
         """
@@ -78,7 +78,7 @@ class MoteurSimulation:
                     mapping_site_hub[site] = hub_id
                     visites.add(site)
                     
-        print('Hubs construit OK')  # Vérifiez les résultats dans la console            
+        st.write('Hubs construit OK')  # Vérifiez les résultats dans la console            
         return mapping_site_hub
 
     def _preparer_flotte(self) -> pd.DataFrame:
@@ -88,7 +88,7 @@ class MoteurSimulation:
         df_v['cap_tri'] = df_v.apply(lambda x: self._calculer_capacite_vehicule(x), axis=1)
         df_v = df_v.sort_values('cap_tri', ascending=False)
         
-        print('Préparer flotte OK')  # Vérifiez les résultats dans la console
+        st.write('Préparer flotte OK')  # Vérifiez les résultats dans la console
        
         return df_v[df_v[col_type].isin(flotte_sel)]
 
