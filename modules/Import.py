@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 
 def extraction_donnees(fichier_excel):
-    # 1. Le mapping flexible pour trouver les onglets peu importe leur nom
+    # 1. Le mapping flexible
     mapping_entree = {
         "matrice_distance": ["matrice Dist", "matrice_distance", "Distances"],
         "matrice_duree": ["matrice Durée", "matrice_duree", "Temps"],
@@ -20,21 +20,39 @@ def extraction_donnees(fichier_excel):
             feuilles_dispo = xl.sheet_names
             
             for var_name, noms_possibles in mapping_entree.items():
-                # On cherche quel nom de l'Excel correspond à notre variable standard
                 nom_reel = next((n for n in noms_possibles if n in feuilles_dispo), None)
-            
+                
                 if not nom_reel:
-                    st.error(f"⚠️ Onglet introuvable. On cherchait l'un de ceux-là : {noms_possibles}")
+                    st.error(f"⚠️ Onglet introuvable : {noms_possibles}")
                     return None
               
                 # Lecture de l'onglet trouvé
                 df = pd.read_excel(xl, sheet_name=nom_reel)
                 
-                # --- FIX POUR LES MATRICES (Indexation par nom de site) ---
+                # --- 1. NETTOYAGE GÉNÉRAL (Indispensable) ---
+                # Supprime les espaces et force les majuscules partout
+                df.columns = [str(c).strip().upper() for c in df.columns]
+                df = df.map(lambda x: x.strip().upper() if isinstance(x, str) else x)
+                
+                # --- 2. HARMONISATION "HUB_" POUR LES MATRICES ---
                 if var_name in ["matrice_distance", "matrice_duree"]:
+                    # On ajoute "HUB_" aux noms des sites (lignes et colonnes) 
+                    # pour que ça matche avec l'ID généré par le moteur
+                    
+                    # Pour la 1ère colonne (les lignes)
+                    df.iloc[:, 0] = df.iloc[:, 0].apply(lambda x: f"HUB_{x}" if not x.startswith("HUB_") else x)
+                    
+                    # Pour les en-têtes (les colonnes), sauf la 1ère qui est le titre
+                    new_cols = [df.columns[0]]
+                    for c in df.columns[1:]:
+                        new_name = f"HUB_{c}" if not str(c).startswith("HUB_") else c
+                        new_cols.append(new_name)
+                    df.columns = new_cols
+                    
+                    # Enfin, on définit l'index
                     df = df.set_index(df.columns[0])
                 
-                # --- STANDARDISATION DES DONNÉES SITES ---
+                # --- 3. TRAITEMENT DES SITES ---
                 if var_name == "param_sites":
                     data_dict["accessibilite_sites"] = df.iloc[:, [0, 2]].copy()
                     data_dict["accessibilite_sites"].columns = ["site", "accessibilite"]
