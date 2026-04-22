@@ -4,66 +4,105 @@ import streamlit as st
 import pandas as pd
 
 def extraction_donnees(fichier_excel):
-    # 1. Le mapping flexible pour trouver les onglets peu importe leur nom
-    mapping_entree = {
-        "matrice_distance": ["matrice Dist", "matrice_distance", "Distances"],
-        "matrice_duree": ["matrice Durée", "matrice_duree", "Temps"],
-        "m_flux": ["M flux", "m_flux", "Flux"],
-        "param_contenants": ["param Contenants", "param_contenants", "Contenants"],
-        "param_vehicules": ["param Véhicules", "param_vehicules", "Véhicules"],
-        "param_sites": ["param Sites", "param_sites", "Sites"]
-    }
-    
-    data_dict = {}
-    try:
-        with pd.ExcelFile(fichier_excel, engine='openpyxl') as xl:
-            feuilles_dispo = xl.sheet_names
-            
-            for var_name, noms_possibles in mapping_entree.items():
-                nom_reel = next((n for n in noms_possibles if n in feuilles_dispo), None)
-                
-                if not nom_reel:
-                    st.error(f"⚠️ Onglet introuvable : {noms_possibles}")
-                    return None
-                
-                # 1. Lecture de l'onglet
-                df = pd.read_excel(xl, sheet_name=nom_reel)
-                
-                # --- MODIFICATION À INTÉGRER ICI ---
-                # A. Nettoyage des noms de colonnes (enlève espaces et force majuscules)
-                df.columns = [str(c).strip().upper() for c in df.columns]
 
-                # B. Nettoyage des données texte (pour que "Hls" devienne "HLS")
-                # On applique le strip et le upper uniquement sur les colonnes de texte
-                for col in df.columns:
-                    if df[col].dtype == 'object':
-                        df[col] = df[col].astype(str).str.strip().str.upper()
-                # ------------------------------------
+    # 1. Le mapping flexible pour trouver les onglets peu importe leur nom
+
+    mapping_entree = {
+
+        "matrice_distance": ["matrice Dist", "matrice_distance", "Distances"],
+
+        "matrice_duree": ["matrice Durée", "matrice_duree", "Temps"],
+
+        "m_flux": ["M flux", "m_flux", "Flux"],
+
+        "param_contenants": ["param Contenants", "param_contenants", "Contenants"],
+
+        "param_vehicules": ["param Véhicules", "param_vehicules", "Véhicules"],
+
+        "param_sites": ["param Sites", "param_sites", "Sites"]
+
+    }
+
+    
+
+    data_dict = {}
+
+    try:
+
+        with pd.ExcelFile(fichier_excel, engine='openpyxl') as xl:
+
+            feuilles_dispo = xl.sheet_names
+
+            
+
+            for var_name, noms_possibles in mapping_entree.items():
+
+                # On cherche quel nom de l'Excel correspond à notre variable standard
+
+                nom_reel = next((n for n in noms_possibles if n in feuilles_dispo), None)
+
                 
-                # --- TON CODE EXISTANT (FIX MATRICES) ---
+
+                if not nom_reel:
+
+                    st.error(f"⚠️ Onglet introuvable. On cherchait l'un de ceux-là : {noms_possibles}")
+
+                    return None
+
+                
+
+                # Lecture de l'onglet trouvé
+
+                df = pd.read_excel(xl, sheet_name=nom_reel)
+
+                
+
+                # --- FIX POUR LES MATRICES (Indexation par nom de site) ---
+
                 if var_name in ["matrice_distance", "matrice_duree"]:
-                    # Maintenant que les colonnes sont nettoyées, l'indexation sera propre
+
                     df = df.set_index(df.columns[0])
+
                 
+
                 # --- STANDARDISATION DES DONNÉES SITES ---
+
                 if var_name == "param_sites":
+
                     # Création des clés attendues par les modules Biologie et Carto
+
                     data_dict["accessibilite_sites"] = df.iloc[:, [0, 2]].copy()
+
                     data_dict["accessibilite_sites"].columns = ["site", "accessibilite"]
+
                     
+
                     data_dict["adresses"] = df.iloc[:, [0, 1]].copy()
+
                     data_dict["adresses"].columns = ["site", "adresse"]
+
                     
+
                     # On garde aussi l'onglet complet sous le nom standard pour le transport
+
                     data_dict["param_sites"] = df 
+
                 else:
+
                     # Pour les autres (flux, véhicules, contenants), on stocke sous le nom standard
+
                     data_dict[var_name] = df
+
                     
+
         return data_dict
 
+
+
     except Exception as e:
+
         st.error(f"Erreur lors de l'extraction : {e}")
+
         return None
 
 def show_import():
