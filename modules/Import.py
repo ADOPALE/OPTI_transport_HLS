@@ -27,7 +27,7 @@ def extraction_donnees(fichier_excel):
                 # --- TRAITEMENT SPÉCIFIQUE DE L'ONGLET "param Sites" ---
                 
                 # Cas 1 : On ne garde que Site et Accessibilité (Colonnes A et C)
-                if var_name == "accessibilite_sites":
+                if var_name == "param_sites":
                     df = df.iloc[:, [0, 2]]
                     df.columns = ["site", "accessibilite"]
                 
