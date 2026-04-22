@@ -76,7 +76,7 @@ def show_import():
             st.write("**Flux (m_flux)**")
             st.dataframe(data["m_flux"], use_container_width=True)
             st.write("**Accessibilité Sites**")
-            st.dataframe(data["accessibilite_sites"], use_container_width=True)
+            st.dataframe(data["param_sites"], use_container_width=True)
             
         with tab3:
             st.write("**Contenants**")
