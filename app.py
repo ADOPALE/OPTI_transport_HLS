@@ -192,6 +192,31 @@ elif selected == "Simul tournées": # Transport
             moteur = MoteurSimulation(st.session_state['data'], st.session_state.get("params_logistique", {}))
             st.session_state['planning_detaille'] = moteur.simuler()
             st.success("Simulation terminée ! Allez dans l'onglet 'Synthèse transport' pour voir les résultats.")
+            # --- AFFICHAGE IMMÉDIAT DES RÉSULTATS ---
+            if 'planning_detaille' in st.session_state:
+                res = st.session_state['planning_detaille']
+                
+                # 1. Affichage des KPIs en colonnes
+                st.subheader("📊 Indicateurs Clés (Hebdo)")
+                k = res["kpis"]
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Tournées", k["nb_tournees"])
+                col2.metric("Distance Totale", f"{k['distance_totale']:,.0f} km")
+                col3.metric("Remplissage Moyen", f"{k['remplissage_moyen']:.1f}%")
+                col4.metric("Chauffeurs Max/Jour", k["nb_chauffeurs_max_jour"])
+            
+                # 2. Focus sur la première tournée (T1 Lundi)
+                st.divider()
+                st.subheader("🔍 Détail : Première tournée (Lundi)")
+                
+                df_t = res["tournees"]
+                # On filtre sur l'ID de la première tournée du lundi
+                t1_lundi = df_t[df_t["ID Tournée"].str.contains("T_Lundi_1", na=False)]
+                
+                if not t1_lundi.empty:
+                    st.dataframe(t1_lundi, use_container_width=True)
+                else:
+                    st.info("Aucune tournée 'T_Lundi_1' n'a été générée.")
     else: 
         st.error("⚠️ Importez des données d'abord dans l'onglet 'Importer Données'.")
 
