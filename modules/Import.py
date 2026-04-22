@@ -36,17 +36,14 @@ def extraction_donnees(fichier_excel):
                 
                 # --- STANDARDISATION DES DONNÉES SITES ---
                 if var_name == "param_sites":
-                    # Création des clés attendues par les modules Biologie et Carto
                     data_dict["accessibilite_sites"] = df.iloc[:, [0, 2]].copy()
                     data_dict["accessibilite_sites"].columns = ["site", "accessibilite"]
                     
                     data_dict["adresses"] = df.iloc[:, [0, 1]].copy()
                     data_dict["adresses"].columns = ["site", "adresse"]
                     
-                    # On garde aussi l'onglet complet sous le nom standard pour le transport
                     data_dict["param_sites"] = df 
                 else:
-                    # Pour les autres (flux, véhicules, contenants), on stocke sous le nom standard
                     data_dict[var_name] = df
                     
         return data_dict
