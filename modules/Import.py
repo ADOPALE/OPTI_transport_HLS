@@ -20,18 +20,29 @@ def extraction_donnees(fichier_excel):
             feuilles_dispo = xl.sheet_names
             
             for var_name, noms_possibles in mapping_entree.items():
-                # On cherche quel nom de l'Excel correspond à notre variable standard
                 nom_reel = next((n for n in noms_possibles if n in feuilles_dispo), None)
                 
                 if not nom_reel:
-                    st.error(f"⚠️ Onglet introuvable. On cherchait l'un de ceux-là : {noms_possibles}")
+                    st.error(f"⚠️ Onglet introuvable : {noms_possibles}")
                     return None
                 
-                # Lecture de l'onglet trouvé
+                # 1. Lecture de l'onglet
                 df = pd.read_excel(xl, sheet_name=nom_reel)
                 
-                # --- FIX POUR LES MATRICES (Indexation par nom de site) ---
+                # --- MODIFICATION À INTÉGRER ICI ---
+                # A. Nettoyage des noms de colonnes (enlève espaces et force majuscules)
+                df.columns = [str(c).strip().upper() for c in df.columns]
+
+                # B. Nettoyage des données texte (pour que "Hls" devienne "HLS")
+                # On applique le strip et le upper uniquement sur les colonnes de texte
+                for col in df.columns:
+                    if df[col].dtype == 'object':
+                        df[col] = df[col].astype(str).str.strip().str.upper()
+                # ------------------------------------
+                
+                # --- TON CODE EXISTANT (FIX MATRICES) ---
                 if var_name in ["matrice_distance", "matrice_duree"]:
+                    # Maintenant que les colonnes sont nettoyées, l'indexation sera propre
                     df = df.set_index(df.columns[0])
                 
                 # --- STANDARDISATION DES DONNÉES SITES ---
