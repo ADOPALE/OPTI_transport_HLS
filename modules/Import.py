@@ -71,18 +71,18 @@ def show_import():
         
         with tab1:
             st.write("**Matrice Distance**")
-           # st.dataframe(data["matrice_distance"], use_container_width=True)
+            st.dataframe(data["matrice_distance"], use_container_width=True)
             st.write("**Matrice Durée**")
-            #st.dataframe(data["matrice_duree"], use_container_width=True)
+            st.dataframe(data["matrice_duree"], use_container_width=True)
             
         with tab2:
             st.write("**Flux (m_flux)**")
-            #st.dataframe(data["m_flux"], use_container_width=True)
+            st.dataframe(data["m_flux"], use_container_width=True)
             st.write("**Accessibilité Sites**")
-            #st.dataframe(data["param_sites"], use_container_width=True)
+            st.dataframe(data["param_sites"], use_container_width=True)
             
         with tab3:
             st.write("**Contenants**")
-            #st.dataframe(data["param_contenants"], use_container_width=True)
+            st.dataframe(data["param_contenants"], use_container_width=True)
             st.write("**Véhicules**")
-            #st.dataframe(data["param_vehicules"], use_container_width=True)
+            st.dataframe(data["param_vehicules"], use_container_width=True)
