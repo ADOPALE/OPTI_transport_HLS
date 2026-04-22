@@ -152,7 +152,7 @@ class MoteurSimulation:
             tournees_jour = self._construire_tournees_jour(jour, jobs_du_jour)
             tournees_finales.extend(tournees_jour)
         chauffeurs = self.affecter_tournees_aux_chauffeurs(tournees_finales)
-        return self.generer_outputs(tournees_finales, chauffeurs)
+        #return self.generer_outputs(tournees_finales, chauffeurs)
 
          # Générer les résultats
         outputs = self.generer_outputs(tournees_finales, chauffeurs)
