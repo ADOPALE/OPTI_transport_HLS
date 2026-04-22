@@ -168,7 +168,18 @@ class MoteurSimulation:
             surf_max = float(v_specs.get("dim longueur interne (m)", 0)) * float(v_specs.get("dim largeur interne (m)", 0))
 
             job_initial = jobs_restants.pop(0)
-            
+
+
+            print(f"Destination: {job_initial.destination}")
+            print(f"Type de véhicule (v_type): {v_type}")
+            print("Index du DataFrame:", df_sites.index)
+            print("Colonnes du DataFrame:", df_sites.columns)
+
+            # Ensuite, vérifiez si la ligne et la colonne existent
+            if job_initial.destination not in df_sites.index:
+                print(f"Erreur: L'index '{job_initial.destination}' n'existe pas dans df_sites.")
+            if v_type not in df_sites.columns:
+                print(f"Erreur: La colonne '{v_type}' n'existe pas dans df_sites.")
             # --- CHECK ACCESSIBILITE SITE INITIAL ---
             if str(df_sites.at[job_initial.destination, v_type]).upper() != "OUI":
                 # Si le camion par défaut ne peut pas aller au premier site, on cherche une solution ou on logge une erreur
