@@ -44,6 +44,7 @@ def extraction_donnees(fichier_excel):
         st.error(f"Erreur : {e}")
         return None
 
+
 def show_import():
     st.header("⚙️ Importation des données")
     uploaded_file = st.file_uploader("Charger le fichier Excel", type=["xlsx"])
@@ -54,6 +55,8 @@ def show_import():
             if resultat:
                 st.session_state["data"] = resultat
                 st.success("✅ Données chargées !")
+                # FORCE le rafraîchissement pour que app.py reconnaisse les nouvelles données
+                st.rerun()
 
     # --- LA CORRECTION EST ICI ---
     if "data" in st.session_state:
