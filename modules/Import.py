@@ -10,7 +10,7 @@ def extraction_donnees(fichier_excel):
         "m_flux": "M flux",
         "param_contenants": "param Contenants",
         "param_vehicules": "param Véhicules",
-        "accessibilite_sites": "param Sites",
+        "param_sites": "param Sites",
         "adresses": "param Sites"  # On lit le même onglet une deuxième fois
     }
     
