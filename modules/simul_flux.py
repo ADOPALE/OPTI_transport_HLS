@@ -316,6 +316,7 @@ class MoteurSimulation:
 
         while points_a_visiter:
             # On cherche le site le plus proche parmi ceux qui restent à livrer
+            st.write(f"DEBUG - Position: '{position_actuelle}' | Liste à visiter: {points_a_visiter}")
             prochain_point = min(
                 points_a_visiter, 
                 key=lambda p: self.data["matrice_distance"].at[position_actuelle, p]
