@@ -181,9 +181,13 @@ class MoteurSimulation:
             if v_type not in df_sites.columns:
                 print(f"Erreur: La colonne '{v_type}' n'existe pas dans df_sites.")
             # --- CHECK ACCESSIBILITE SITE INITIAL ---
-            if str(df_sites.at[job_initial.destination, v_type]).upper() != "OUI":
-                # Si le camion par défaut ne peut pas aller au premier site, on cherche une solution ou on logge une erreur
-                continue 
+            # Utilisation de get() pour accéder de manière sûre à l'index et à la colonne
+            value = df_sites.get(job_initial.destination, {}).get(v_type, None)
+
+            # Vérification de la valeur
+            if value is None or str(value).upper() != "OUI":
+                # Si l'accès est possible mais que ce n'est pas "OUI", on logge également
+                continue  # Si l'accessibilité échoue, on continue sans ajouter ce job à la tournée
 
             new_t = Tournee(
                 id=f"T_{jour}_{len(tournees)+1}", 
