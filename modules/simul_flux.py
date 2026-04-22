@@ -148,6 +148,18 @@ class MoteurSimulation:
         chauffeurs = self.affecter_tournees_aux_chauffeurs(tournees_finales)
         return self.generer_outputs(tournees_finales, chauffeurs)
 
+         # Générer les résultats
+         outputs = self.generer_outputs(tournees_finales, chauffeurs)
+
+         # Ajoutez ceci pour vérifier ce qui est généré
+         print(outputs)  # Vérifiez les résultats dans la console
+    
+         # Stocker les résultats dans session_state pour les utiliser dans Streamlit
+         st.session_state['planning_detaille'] = outputs
+    
+    # Retourner les résultats pour un éventuel usage interne
+         return outputs
+
     def _construire_tournees_jour(self, jour: str, jobs: List[Job]) -> List[Tournee]:
         # On récupère les données de session une seule fois pour la performance
         d = st.session_state["data"]
