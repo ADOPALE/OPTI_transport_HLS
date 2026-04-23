@@ -88,33 +88,9 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
             except (KeyError, IndexError):
                 continue
 
-        """
         # Si un véhicule est trouvé, on calcule le poids pour chaque jour
         if v_elu is not None and meilleure_capa > 0:
-            try:
-                duree = matrice_duree.loc[site_dep, site_arr]
-                # Vérification présence de quai à la destination
-                a_quai = df_sites.loc[df_sites['Libellé'] == site_arr, 'Présence de quai'].values[0] == "OUI"
-                
-                # Sélection du temps de manutention (conversion minutes décimales)
-                if a_quai:
-                    t_manut_unit = to_decimal_minutes(v_elu['Manutention avec quai (minutes / contenants)'])
-                else:
-                    t_manut_unit = to_decimal_minutes(v_elu['Manutention sans quai (minutes / contenants)'])
-
-                for j in jours_cols:
-                    qte = flux[j]
-                    if qte > 0:
-                        nb_trajets = math.ceil(qte / meilleure_capa)
-                        # Poids = (Durée + (Capa * T_manut) + Mise_à_quai) * Nb_trajets
-                        poids = (duree + (meilleure_capa * t_manut_unit) + t_mise_quai) * nb_trajets
-                        poids_totaux_par_jour[j] += poids
-            except KeyError:
-                st.error("on ne rentre jamais dans la boucle try")
-                continue
-        """
-        # Si un véhicule est trouvé, on calcule le poids pour chaque jour
-        if v_elu is not None and meilleure_capa > 0:
+            st.write(v_elu;flux;meilleure_capa) 
             try:
                 # --- NETTOYAGE DE LA MATRICE ---
                 # On s'assure que les index/colonnes de la matrice sont propres pour le test
