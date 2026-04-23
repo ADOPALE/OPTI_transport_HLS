@@ -105,31 +105,62 @@ def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avan
 def ordonnancer_flotte_optimale(couloirs, matrice_duree):
     """
     Boucle de décrémentation pour trouver le nombre minimal de chauffeurs.
+    Adaptée à la structure des paramètres : amplitude_totale, temps_fixes, etc.
     """
     if "params_logistique" not in st.session_state:
+        st.error("❌ Paramètres logistiques introuvables dans la session.")
         return None
 
     params = st.session_state["params_logistique"]
-    h_prise_min = to_decimal_minutes(params["rh"]["h_prise_min"])
-    h_fin_max = to_decimal_minutes(params["rh"]["h_fin_max"])
-    duree_poste_max = params["rh"]["duree_poste_max_minutes"]
-    t_prepa = params["rh"]["temps_prepa_vehicule"]
-    t_fin_poste = params["rh"]["temps_fin_poste"]
-    depot = params["stationnement_initial"].upper()
+    rh = params["rh"]
+
+    # --- ADAPTATION DES CLÉS (NOM DE TON DICTIONNAIRE) ---
+    try:
+        # On convertit les objets time/string en minutes décimales
+        h_prise_min = to_decimal_minutes(rh["h_prise_min"])
+        h_fin_max = to_decimal_minutes(rh["h_fin_max"])
+        
+        # Ton dictionnaire utilise 'amplitude_totale' pour la durée du poste
+        duree_poste_max = rh["amplitude_totale"]
+        
+        # Ton dictionnaire utilise 'temps_fixes' pour (t_prise + t_fin)
+        # On peut diviser par 2 pour t_prepa et t_fin ou adapter tenter_sequencage
+        t_prepa = rh["temps_fixes"] / 2  
+        t_fin_poste = rh["temps_fixes"] / 2
+        
+        # Récupération du dépôt (avec repli sur HLS si absent)
+        depot = params.get("stationnement_initial", "HLS").upper()
+        
+    except KeyError as e:
+        st.error(f"❌ Erreur : La clé {e} est absente de params_logistique['rh'].")
+        return None
 
     # Mise à plat de tous les Super Jobs lissés
     tous_les_jobs = []
-    for sens_dict in couloirs.values():
-        for liste_sj in sens_dict.values():
-            tous_les_jobs.extend(liste_sj)
-    tous_les_jobs.sort(key=lambda x: x['h_depart_actuelle'])
+    # On vérifie si couloirs est un dictionnaire de dictionnaires (par sens)
+    if isinstance(couloirs, dict):
+        for sens_dict in couloirs.values():
+            if isinstance(sens_dict, dict):
+                for liste_sj in sens_dict.values():
+                    tous_les_jobs.extend(liste_sj)
+            else:
+                tous_les_jobs.extend(sens_dict)
+    else:
+        tous_les_jobs = couloirs
 
-    # Estimation N_max (base de départ)
-    n_max = sum(st.session_state.get("resultat_lissage_flotte", {"GLOBAL": 10}).values())
+    # Tri par heure de départ prévue après lissage
+    tous_les_jobs.sort(key=lambda x: x.get('h_depart_actuelle', x.get('h_dispo_max', 0)))
+
+    # Estimation N_max (base de départ pour la boucle de test)
+    # On commence par tester avec un nombre de camions égal au nombre de jobs si besoin
+    n_max = len(tous_les_jobs)
+    if n_max == 0:
+        return None
     
     solution_optimale = None
 
-    # Test itératif de N camions à 1 camion
+    # Test itératif de N camions à 1 camion pour trouver le minimum viable
+    # On descend pour voir jusqu'où on peut réduire la flotte
     for n_test in range(n_max, 0, -1):
         res = tenter_sequencage(
             n_test, tous_les_jobs, depot, matrice_duree, 
@@ -139,7 +170,8 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
         if res["succes"]:
             solution_optimale = res
         else:
-            break # On a trouvé la limite inférieure
+            # Si n_test échoue, alors la solution optimale était n_test + 1
+            break 
             
     return solution_optimale
 
