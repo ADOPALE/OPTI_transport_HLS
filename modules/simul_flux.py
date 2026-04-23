@@ -42,38 +42,39 @@ FONCTION - CHOIX_JMAX
 cette fonction permet de stabiliser le besoin de transport récurrent en intégrant une marge pour être sur qu'avec les flux du JMax on sera bien capable de transporter tous les autres jours. 
 """
 def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_sites):
-    # --- PRÉPARATION DES COLONNES ---
+    """
+    Identifie le Jmax en utilisant uniquement la flotte sélectionnée par l'utilisateur.
+    Vérifie la faisabilité de chaque flux avant de lancer les calculs.
+    """
+    # 1. Récupération de la flotte sélectionnée
+    if "params_logistique" not in st.session_state:
+        st.error("❌ Les paramètres logistiques ne sont pas configurés. Allez dans l'onglet 'Paramètres'.")
+        return df_recurrent
+    
+    vehicules_autorises = st.session_state["params_logistique"]["vehicules_selectionnes"]
+    # On filtre le DataFrame des véhicules pour ne garder que ceux cochés
+    col_nom_v = df_vehicules.columns[0]
+    df_v_actifs = df_vehicules[df_vehicules[col_nom_v].isin(vehicules_autorises)].copy()
+
+    # --- PRÉPARATION DES COLONNES (Identique précédent) ---
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
                   "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
-
-    #6 min de mise à quai (manoeuvre (temps arbitraire) 
     t_mise_quai = 6.0  
-
-    # ---INITIALISATION---- 
     poids_totaux_par_jour = {j: 0.0 for j in jours_cols}
     
-    # --- NETTOYAGE DES RÉFÉRENTIELS (SÉCURISÉ) ---
-    # 1. Nettoyage des colonnes de df_sites
+    # Nettoyage Sites & Matrice (Identique précédent)
     df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
-    
-    # 2. Identification dynamique de la colonne 'Libellé'
     col_libelle = next((c for c in df_sites.columns if "LIBEL" in c or "SITE" in c), None)
-    
     if col_libelle:
         df_sites[col_libelle] = df_sites[col_libelle].astype(str).str.strip().str.upper()
-    else:
-        st.error("❌ Impossible de trouver la colonne 'Libellé' dans param_sites.")
-        return df_recurrent
-
-    # 3. Identification dynamique de la colonne 'Quai'
     col_quai = next((c for c in df_sites.columns if "QUAI" in c), "PRÉSENCE DE QUAI")
-
-    # --- PRÉPARATION MATRICE ---
     matrice_duree.columns = [str(c).strip().upper() for c in matrice_duree.columns]
     col_sites_depart = matrice_duree.columns[0]
     matrice_duree[col_sites_depart] = matrice_duree[col_sites_depart].astype(str).str.strip().str.upper()
 
-    # --- ÉTAPE 1 : CALCUL DES POIDS FICTIFS ---
+    # --- ÉTAPE 1 : CALCUL ET VÉRIFICATION DE COMPATIBILITÉ ---
+    flux_impossibles = []
+
     for _, flux in df_recurrent.iterrows():
         site_dep = str(flux['Point de départ']).strip().upper()
         site_arr = str(flux['Point de destination']).strip().upper()
@@ -87,10 +88,10 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
         meilleure_capa = 0
         v_elu = None
 
-        for _, v in df_vehicules.iterrows():
+        # ON BOUCLE UNIQUEMENT SUR LES VÉHICULES ACTIFS
+        for _, v in df_v_actifs.iterrows():
             type_vehicule = str(v['Types']).strip().upper()
             try:
-                # Utilisation de col_libelle au lieu de 'Libellé' fixe
                 acc_dep = df_sites.loc[df_sites[col_libelle] == site_dep, type_vehicule].values[0]
                 acc_arr = df_sites.loc[df_sites[col_libelle] == site_arr, type_vehicule].values[0]
                 
@@ -102,47 +103,48 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
             except:
                 continue
 
-        if v_elu is not None and meilleure_capa > 0:
-            try:
-                # Recherche manuelle ligne par ligne
-                ligne_matrice = matrice_duree[matrice_duree[col_sites_depart] == site_dep]
+        # --- VERIFICATION CRITIQUE ---
+        if v_elu is None or meilleure_capa == 0:
+            flux_impossibles.append(f"🚩 {site_dep} ➔ {site_arr} ({type_cont})")
+            continue
+
+        # Calcul du poids (si compatible)
+        try:
+            ligne_matrice = matrice_duree[matrice_duree[col_sites_depart] == site_dep]
+            if not ligne_matrice.empty and site_arr in matrice_duree.columns:
+                duree = ligne_matrice[site_arr].values[0]
+                a_quai_rows = df_sites.loc[df_sites[col_libelle] == site_arr, col_quai]
+                a_quai = a_quai_rows.values[0] == "OUI" if not a_quai_rows.empty else False
                 
-                if not ligne_matrice.empty and site_arr in matrice_duree.columns:
-                    duree = ligne_matrice[site_arr].values[0]
-                    
-                    # Détermination quai avec col_quai dynamique
-                    a_quai_rows = df_sites.loc[df_sites[col_libelle] == site_arr, col_quai]
-                    a_quai = a_quai_rows.values[0] == "OUI" if not a_quai_rows.empty else False
-                    
-                    col_m = 'Manutention avec quai (minutes / contenants)' if a_quai else 'Manutention sans quai (minutes / contenants)'
-                    t_manut = to_decimal_minutes(v_elu[col_m])
+                col_m = 'Manutention avec quai (minutes / contenants)' if a_quai else 'Manutention sans quai (minutes / contenants)'
+                t_manut = to_decimal_minutes(v_elu[col_m])
 
-                    for j in jours_cols:
-                        qte = flux[j]
-                        if qte > 0:
-                            nb_trajets = math.ceil(qte / meilleure_capa)
-                            poids = (duree + (meilleure_capa * t_manut) + t_mise_quai) * nb_trajets
-                            poids_totaux_par_jour[j] += poids
-            except:
-                continue
+                for j in jours_cols:
+                    qte = flux[j]
+                    if qte > 0:
+                        nb_trajets = math.ceil(qte / meilleure_capa)
+                        poids = (duree + (meilleure_capa * t_manut) + t_mise_quai) * nb_trajets
+                        poids_totaux_par_jour[j] += poids
+        except:
+            continue
 
-    # --- ÉTAPE 2 : IDENTIFICATION JMAX ET RÈGLE DES 10% ---
-    if all(v == 0 for v in poids_totaux_par_jour.values()):
-        j_max_nom = "Quantité Lundi"
-        st.warning("⚠️ Poids calculés à 0.0. Vérifiez la correspondance des noms de sites.")
-    else:
-        j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
-   
+    # --- ÉTAPE 2 : GESTION DES ERREURS BLOQUANTES ---
+    if flux_impossibles:
+        st.error("### ❌ Erreur : Flux impossibles à transporter")
+        st.write("Aucun des véhicules sélectionnés n'est compatible avec les contraintes d'accès ou de capacité pour :")
+        for f in flux_impossibles:
+            st.write(f)
+        st.stop() # Arrête l'exécution ici pour ne pas donner de faux résultats
+
+    # --- ÉTAPE 3 : IDENTIFICATION JMAX (Identique précédent) ---
+    j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
     
-    # Construction du texte de détail (ex: Lun: 120min | Mar: 150min...)
-    # On enlève "Quantité " du nom pour que ce soit plus court à l'affichage
+    # Affichage
     detail_jours = " | ".join([f"{k.replace('Quantité ', '')}: {round(v, 1)} min" for k, v in poids_totaux_par_jour.items()])
-    
-    # Affichage complet
     st.info(f"📊 **Jmax identifié** : {j_max_nom.replace('Quantité ', '')}")
-    st.write(f"⚖️ **Détail des charges calculées :**\n\n{detail_jours}")
+    st.write(f"⚖️ **Détail des charges (flotte sélectionnée) :**\n\n{detail_jours}")
 
-
+    # Règle des 10%
     def appliquer_regle_marge(row):
         val_j_max = row[j_max_nom]
         val_max_semaine = max([row[j] for j in jours_cols])
@@ -152,8 +154,6 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
     df_sequence_type['Quantité_Séquence_Type'] = df_sequence_type.apply(appliquer_regle_marge, axis=1)
     
     return df_sequence_type
-
-
 
 
 
