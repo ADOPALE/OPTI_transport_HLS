@@ -42,35 +42,29 @@ def segmenter_flux(df):
 FONCTION - CHOIX_JMAX
 cette fonction permet de stabiliser le besoin de transport récurrent en intégrant une marge pour être sur qu'avec les flux du JMax on sera bien capable de transporter tous les autres jours. 
 """
-
 def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_sites):
     """
-    Identifie le jour le plus chargé (Jmax) en calculant les poids fictifs (temps de trajet + manutention).
-    Transforme la première colonne de la matrice en index pour permettre la recherche par nom de site.
+    Identifie le jour le plus chargé (Jmax) sans utiliser set_index.
+    Cherche manuellement le site de départ dans la colonne 0 des matrices.
     """
     # --- PRÉPARATION DES COLONNES ---
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
                   "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
     
-    t_mise_quai = 6.0  # Temps fixe par trajet en minutes
+    t_mise_quai = 6.0  
     poids_totaux_par_jour = {j: 0.0 for j in jours_cols}
     
     # --- NETTOYAGE DES RÉFÉRENTIELS ---
-    # Nettoyage des sites (Lignes et Colonnes)
     df_sites['Libellé'] = df_sites['Libellé'].astype(str).str.strip().str.upper()
     df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
 
-    # --- NETTOYAGE CRITIQUE DE LA MATRICE (Correction Unnamed: 0) ---
-    # On vérifie si la première colonne est "Unnamed: 0" ou si l'index est numérique
-    if 'Unnamed: 0' in matrice_duree.columns:
-        matrice_duree = matrice_duree.set_index('Unnamed: 0')
-    elif str(matrice_duree.index.dtype).startswith('int'):
-        # Si l'index est 0, 1, 2... on prend la première colonne comme index
-        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
-    
-    # Nettoyage des index et colonnes de la matrice pour matcher avec les flux
-    matrice_duree.index = matrice_duree.index.astype(str).str.strip().str.upper()
+    # --- PRÉPARATION MATRICE (SANS INDEX) ---
+    # On s'assure que les colonnes de la matrice sont en majuscules (pour les sites en colonnes)
     matrice_duree.columns = [str(c).strip().upper() for c in matrice_duree.columns]
+    # On identifie le nom de la première colonne (qui contient les sites de départ)
+    col_sites_depart = matrice_duree.columns[0]
+    # On nettoie les valeurs de cette colonne
+    matrice_duree[col_sites_depart] = matrice_duree[col_sites_depart].astype(str).str.strip().str.upper()
 
     # --- ÉTAPE 1 : CALCUL DES POIDS FICTIFS ---
     for _, flux in df_recurrent.iterrows():
@@ -78,7 +72,6 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
         site_arr = str(flux['Point de destination']).strip().upper()
         type_cont = str(flux['Nature de contenant']).strip().upper()
         
-        # Récupération infos contenant
         try:
             cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == type_cont].iloc[0]
         except (IndexError, KeyError):
@@ -92,7 +85,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
             type_vehicule = str(v['Types']).strip().upper()
             
             try:
-                # Vérification accessibilité
+                # Vérification accessibilité dans param_sites
                 acc_dep = df_sites.loc[df_sites['Libellé'] == site_dep, type_vehicule].values[0]
                 acc_arr = df_sites.loc[df_sites['Libellé'] == site_arr, type_vehicule].values[0]
                 
@@ -101,52 +94,59 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
                     if capa > meilleure_capa:
                         meilleure_capa = capa
                         v_elu = v
-            except (KeyError, IndexError):
+            except:
                 continue
 
-        # Calcul de la charge si véhicule et trajet trouvés
+        # Calcul de la charge
         if v_elu is not None and meilleure_capa > 0:
             try:
-                # Recherche dans la matrice (maintenant que l'index est corrigé)
-                if site_dep in matrice_duree.index and site_arr in matrice_duree.columns:
-                    duree = matrice_duree.loc[site_dep, site_arr]
+                # RECHERCHE MANUELLE DANS LA MATRICE (SANS INDEX)
+                # 1. On trouve la ligne correspondant au site de départ
+                ligne_matrice = matrice_duree[matrice_duree[col_sites_depart] == site_dep]
+                
+                # 2. On vérifie si la ligne ET la colonne d'arrivée existent
+                if not ligne_matrice.empty and site_arr in matrice_duree.columns:
+                    duree = ligne_matrice[site_arr].values[0]
                     
-                    # Détermination manutention (Quai vs Hors Quai)
-                    a_quai = df_sites.loc[df_sites['Libellé'] == site_arr, 'PRÉSENCE DE QUAI'].values[0] == "OUI"
+                    # Détermination manutention
+                    a_quai_rows = df_sites.loc[df_sites['Libellé'] == site_arr, 'PRÉSENCE DE QUAI']
+                    a_quai = a_quai_rows.values[0] == "OUI" if not a_quai_rows.empty else False
                     
-                    if a_quai:
-                        t_manut = to_decimal_minutes(v_elu['Manutention avec quai (minutes / contenants)'])
-                    else:
-                        t_manut = to_decimal_minutes(v_elu['Manutention sans quai (minutes / contenants)'])
+                    col_manut = 'Manutention avec quai (minutes / contenants)' if a_quai else 'Manutention sans quai (minutes / contenants)'
+                    t_manut = to_decimal_minutes(v_elu[col_manut])
 
                     for j in jours_cols:
                         qte = flux[j]
                         if qte > 0:
                             nb_trajets = math.ceil(qte / meilleure_capa)
+                            # Formule : (Temps trajet + Temps manutention total + Temps mise à quai fixe) * Nb trajets
                             poids = (duree + (meilleure_capa * t_manut) + t_mise_quai) * nb_trajets
                             poids_totaux_par_jour[j] += poids
-            except Exception:
+            except Exception as e:
+                # Optionnel : st.write(f"Erreur calcul poids: {e}")
                 continue
 
     # --- ÉTAPE 2 : IDENTIFICATION JMAX ET RÈGLE DES 10% ---
-    j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
+    # Sécurité si aucun poids n'a été calculé (évite une erreur sur max())
+    if all(v == 0 for v in poids_totaux_par_jour.values()):
+        j_max_nom = "Quantité Lundi"
+        st.warning("⚠️ Attention : Aucun poids n'a pu être calculé (vérifiez les noms des sites dans la matrice).")
+    else:
+        j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
     
-    st.write(f"📊 **Analyse terminée** : Jour le plus chargé = **{j_max_nom}** ({round(poids_totaux_par_jour[j_max_nom], 1)} min)")
+    st.info(f"📊 **Analyse terminée** : Jour le plus chargé = **{j_max_nom}** ({round(poids_totaux_par_jour[j_max_nom], 1)} min)")
 
     def appliquer_regle_marge(row):
         val_j_max = row[j_max_nom]
-        # On calcule le max de la semaine pour cette ligne
         val_max_semaine = max([row[j] for j in jours_cols])
-        
-        # Si un autre jour dépasse le Jmax de plus de 10%, on sécurise avec le max
-        if val_max_semaine > (val_j_max * 1.10):
-            return val_max_semaine
-        return val_j_max
+        return val_max_semaine if val_max_semaine > (val_j_max * 1.10) else val_j_max
 
     df_sequence_type = df_recurrent.copy()
     df_sequence_type['Quantité_Séquence_Type'] = df_sequence_type.apply(appliquer_regle_marge, axis=1)
     
     return df_sequence_type
+
+
 
 
 
