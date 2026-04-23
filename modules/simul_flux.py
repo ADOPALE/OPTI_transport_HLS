@@ -423,6 +423,46 @@ def calculer_capacite_max(vehicule, contenant):
     return int(capacite_finale)
 
 
+"""
+Fonction outil pour trouver le véhicule le plus performant pour un flux donné.
+Utilisée par le lissage de flotte et par le graphique de charge.
+"""
+def identifier_meilleur_vehicule(site_dep, site_arr, type_cont, df_vehicules, df_contenants, df_sites, col_libelle):
+    
+    meilleure_capa = 0
+    v_elu = None
+    
+    # 1. Récupération des infos du contenant
+    try:
+        cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == type_cont.upper()].iloc[0]
+    except:
+        return None, 0
+    
+    # 2. On boucle sur les véhicules pour trouver le meilleur compromis
+    for _, v in df_vehicules.iterrows():
+        type_v_nom = str(v['Types']).strip().upper()
+        try:
+            # On vérifie si le camion peut entrer sur les sites
+            acc_dep = df_sites.loc[df_sites[col_libelle] == site_dep, type_v_nom].values[0]
+            acc_arr = df_sites.loc[df_sites[col_libelle] == site_arr, type_v_nom].values[0]
+            
+            if acc_dep == "OUI" and acc_arr == "OUI":
+                # On appelle ta fonction de Bin-Packing
+                capa = calculer_capacite_max(v, cont_info)
+                
+                # On garde le véhicule qui transporte le plus de marchandise
+                if capa > meilleure_capa:
+                    meilleure_capa = capa
+                    v_elu = v
+        except:
+            continue
+            
+    return v_elu, meilleure_capa
+
+
+
+
+
 """Convertit un objet time ou une chaîne HH:MM:SS en minutes décimales."""
 def to_decimal_minutes(time_val):
     if isinstance(time_val, str):
