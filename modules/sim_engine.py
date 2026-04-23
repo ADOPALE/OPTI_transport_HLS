@@ -218,68 +218,68 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
             
     return solution_optimale
 
-def tenter_sequencage(n_vehicules, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin):
-    postes = []
-    for i in range(n_vehicules):
-        postes.append({
-            'id_chauffeur': f"CH_{i+1:02d}",
+def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin):
+    # On gère maintenant des CAMIONS
+    camions = []
+    for i in range(n_camions):
+        camions.append({
+            'id_camion': f"V_{i+1:02d}",
             'pos': depot,
-            'h_dispo': h_start + t_prepa,
-            'missions': [],
-            'dernier_type_sanitaire': None,
-            'pause_faite': False,
-            'total_nettoyages': 0,
-            'amplitude': 0
+            'h_dispo_vehicule': h_start, # Disponibilité physique du véhicule
+            'postes': [] # Liste des chauffeurs qui vont se succéder sur ce camion
         })
 
-    jobs_copy = copy.deepcopy(jobs_a_faire)
+    jobs_copy = sorted(copy.deepcopy(jobs_a_faire), key=lambda x: x['h_depart_actuelle'])
 
     for sj in jobs_copy:
-        meilleur_candidat = None
-        score_min = float('inf')
+        attribue = False
         
-        for p in postes:
-            score, h_dep, net = calculer_score_opportuniste(p, sj, matrice_duree, t_fin) # t_fin sert de t_nettoyage
+        # On cherche un camion capable d'accueillir ce job
+        for c in camions:
+            # On regarde le dernier poste actif sur ce camion
+            if not c['postes'] or c['postes'][-1]['fini']:
+                # Créer un nouveau poste (nouveau chauffeur) sur ce camion
+                nouveau_p = {
+                    'id_chauffeur': f"{c['id_camion']}_CH_{len(c['postes'])+1}",
+                    'h_debut_service': None,
+                    'h_dispo': max(c['h_dispo_vehicule'], h_start) + t_prepa,
+                    'missions': [],
+                    'amplitude': 0,
+                    'fini': False
+                }
+                c['postes'].append(nouveau_p)
+
+            p_actuel = c['postes'][-1]
             
+            # Calcul de faisabilité pour le chauffeur actuel
+            score, h_dep, net = calculer_score_opportuniste(p_actuel, sj, matrice_duree, t_fin)
             h_fin_m = h_dep + sj['poids_total']
-            site_arr = sj['jobs'][-1].destination.upper()
-            t_retour = matrice_duree.loc[site_arr, depot]
-            h_retour_depot = h_fin_m + t_retour + t_fin
+            h_retour_depot = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
             
-            # Vérifications strictes
-            if (h_retour_depot - h_start <= max_poste) and \
-               (h_fin_m <= sj['h_deadline_min']) and \
-               (h_retour_depot <= h_limite):
-                
-                if score < score_min:
-                    score_min = score
-                    meilleur_candidat = {
-                        'p': p, 'h_dep': h_dep, 'h_fin': h_fin_m, 
-                        'h_ret': h_retour_depot, 'nettoyage': net
-                    }
+            debut_service_test = p_actuel['h_debut_service'] if p_actuel['h_debut_service'] is not None else (h_dep - t_prepa)
+            
+            # CONDITION DE RELÈVE : 
+            # Si le job dépasse l'amplitude du chauffeur actuel, on clôture son poste et on en crée un nouveau
+            if (h_retour_depot - debut_service_test > max_poste):
+                p_actuel['fini'] = True
+                # Au prochain tour de boucle 'for c in camions', un nouveau poste sera créé pour ce véhicule
+                continue 
 
-        if meilleur_candidat:
-            sel = meilleur_candidat
-            p = sel['p']
-            # Gestion pause (si trou > 45min)
-            if not p['pause_faite'] and (sel['h_dep'] - p['h_dispo'] >= 45):
-                p['pause_faite'] = True
+            # Si le chauffeur peut le faire dans son amplitude
+            if h_fin_m <= sj['h_deadline_min'] and h_retour_depot <= h_limite:
+                # Attribution au chauffeur (et donc au camion)
+                p_actuel['h_debut_service'] = debut_service_test
+                p_actuel['missions'].append({'sj': sj, 'h_dep': h_dep, 'h_fin': h_fin_m})
+                p_actuel['h_dispo'] = h_fin_m
+                c['h_dispo_vehicule'] = h_fin_m
+                p_actuel['amplitude'] = h_retour_depot - p_actuel['h_debut_service']
+                attribue = True
+                break
+        
+        if not attribue:
+            return {"succes": False} # Aucun camion n'a pu prendre le job (même avec relève)
 
-            p['missions'].append({
-                'sj': sj,
-                'h_dep': sel['h_dep'],
-                'h_fin': sel['h_fin'],
-                'nettoyage_effectue': sel['nettoyage']
-            })
-            p['pos'] = sj['jobs'][-1].destination.upper()
-            p['h_dispo'] = sel['h_fin']
-            p['dernier_type_sanitaire'] = sj['jobs'][0].type_propre_sale
-            p['amplitude'] = sel['h_ret'] - h_start
-            if sel['nettoyage']: p['total_nettoyages'] += 1
-        else:
-            return {"succes": False}
-
-    return {"succes": True, "postes": postes}
+    return {"succes": True, "camions": camions}
 
 
 
