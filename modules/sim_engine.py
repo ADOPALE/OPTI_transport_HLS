@@ -217,59 +217,70 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
 
 
 
-def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin):
+def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
+    """
+    Tente de caser les jobs pour un type de véhicule spécifique (v_type) sans aucune marge de dépassement.
+    """
     camions = []
     for i in range(n_camions):
         camions.append({
-            'id_camion': f"V_{i+1:02d}",
+            'id_camion': f"{v_type}_{i+1:02d}",
+            'type': v_type,
             'pos_actuelle': depot,
             'h_dispo_vehicule': h_start,
             'postes': []
         })
 
-    jobs_copy = sorted(copy.deepcopy(jobs_a_faire), key=lambda x: x['h_depart_actuelle'])
+    jobs_copy = sorted(copy.deepcopy(jobs_a_faire), key=lambda x: x.get('h_depart_actuelle', 0))
 
     for sj in jobs_copy:
         attribue = False
-        raison_echec = "Aucun camion disponible" # Par défaut
+        raison_echec = "Inconnu"
         
         for c in camions:
             besoin_nouveau_chauffeur = False
+            
+            # A. Test sur le chauffeur actuel du camion
             if not c['postes'] or c['postes'][-1]['fini']:
                 besoin_nouveau_chauffeur = True
             else:
-                p_actuel = c['postes'][-1]
-                score, h_dep, net = calculer_score_opportuniste(p_actuel, sj, matrice_duree, t_fin)
+                p_act = c['postes'][-1]
+                score, h_dep, net = calculer_score_opportuniste(p_act, sj, matrice_duree, t_fin)
                 h_fin_m = h_dep + sj['poids_total']
                 h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
-                debut_service = p_actuel['h_debut_service'] if p_actuel['h_debut_service'] is not None else (h_dep - t_prepa)
+                debut = p_act['h_debut_service'] if p_act['h_debut_service'] is not None else (h_dep - t_prepa)
                 
-                if (h_ret - debut_service > max_poste) or (h_ret > h_limite):
-                    p_actuel['fini'] = True
+                # CONDITION STRICTE : Pas une minute de plus que l'amplitude ou la fin d'exploitation
+                if (h_ret - debut > max_poste) or (h_ret > h_limite):
+                    p_act['fini'] = True
                     besoin_nouveau_chauffeur = True
             
+            # B. Tentative avec Relève (Nouveau chauffeur)
             if besoin_nouveau_chauffeur:
                 h_dispo_v = max(c['h_dispo_vehicule'], h_start)
                 p_neuf = {
                     'id_chauffeur': f"{c['id_camion']}_CH_{len(c['postes'])+1}",
-                    'h_debut_service': None, 'h_dispo': h_dispo_v + t_prepa,
-                    'pos': c['pos_actuelle'], 'missions': [], 'amplitude': 0,
-                    'fini': False, 'dernier_type_sanitaire': None, 'total_nettoyages': 0
+                    'v_type': v_type,
+                    'h_debut_service': None,
+                    'h_dispo': h_dispo_v + t_prepa,
+                    'pos': c['pos_actuelle'],
+                    'missions': [],
+                    'amplitude': 0,
+                    'fini': False,
+                    'dernier_type_sanitaire': None,
+                    'total_nettoyages': 0
                 }
                 
                 score, h_dep, net = calculer_score_opportuniste(p_neuf, sj, matrice_duree, t_fin)
                 h_fin_m = h_dep + sj['poids_total']
                 h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
                 
-                # --- DIAGNOSTIC PRECIS ---
+                # TESTS DE FAISABILITÉ STRICTS
                 if h_fin_m > sj['h_deadline_min']:
-                    raison_echec = f"Deadline dépassée ({h_fin_m:.1f} > {sj['h_deadline_min']})"
                     continue
                 if (h_ret - (h_dep - t_prepa)) > max_poste:
-                    raison_echec = f"Amplitude trop longue ({(h_ret - (h_dep - t_prepa)):.1f} > {max_poste})"
                     continue
                 if h_ret > h_limite:
-                    raison_echec = f"Retour dépôt trop tard ({h_ret:.1f} > {h_limite})"
                     continue
                 
                 p_neuf['h_debut_service'] = h_dep - t_prepa
@@ -278,29 +289,29 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
             else:
                 p_cible = c['postes'][-1]
 
-            # Si on arrive ici, c'est que p_cible est valide
+            # C. Attribution
             score, h_dep, net = calculer_score_opportuniste(p_cible, sj, matrice_duree, t_fin)
             h_fin_m = h_dep + sj['poids_total']
+            
             p_cible['missions'].append({'sj': sj, 'h_dep': h_dep, 'h_fin': h_fin_m, 'nettoyage_effectue': net})
             p_cible['pos'] = sj['jobs'][-1].destination.upper()
             p_cible['h_dispo'] = h_fin_m
             p_cible['dernier_type_sanitaire'] = sj['jobs'][0].type_propre_sale
             if net: p_cible['total_nettoyages'] += 1
+            
             c['pos_actuelle'] = p_cible['pos']
             c['h_dispo_vehicule'] = h_fin_m
+            
             h_ret_final = h_fin_m + matrice_duree.loc[p_cible['pos'], depot] + t_fin
             p_cible['amplitude'] = h_ret_final - p_cible['h_debut_service']
+            
             attribue = True
             break
             
         if not attribue:
-            # On n'affiche le message que pour la dernière tentative (quand n_camions est max)
-            if n_camions >= 100:
-                st.error(f"❌ Échec sur {sj['id_super_job']} : {raison_echec}")
             return {"succes": False}
 
     return {"succes": True, "camions": camions}
-
 
 def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants):
     df_travail = df_sequence_type.copy()
@@ -858,67 +869,74 @@ def ajustement_marginal_dynamique(couloirs):
 
 def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_contenants, matrice_duree):
     """
-    Orchestre la simulation complète avec affichage du suivi pour le débogage.
+    Orchestre la simulation en résolvant chaque sous-problème (type de véhicule) 
+    indépendamment pour obtenir un dimensionnement précis par type.
     """
-    st.info("🚀 Démarrage du traitement des flux récurrents...")
+    st.info("🚀 Démarrage du traitement segmenté par type de véhicule...")
 
     if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
-        # On définit la première colonne comme index
         matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
         
     # 1. Éclater les flux par type de véhicule
     sous_problemes = eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants)
-    st.write(f"✅ Flux éclatés en {len(sous_problemes)} types de véhicules.", sous_problemes.keys())
     
     # Récupération des paramètres
     params = st.session_state["params_logistique"]
     h_start = params["rh"]["h_prise_min"]
     h_end = params["rh"]["h_fin_max"]
 
-    tous_les_couloirs_fusionnes = {}
+    tous_les_postes_finaux = []
+    dimensionnement_total = {}
 
-    # 2. Boucle de traitement par type de véhicule
+    # 2. Boucle de traitement INDÉPENDANTE par type de véhicule
     for v_type, df_v in sous_problemes.items():
-        with st.expander(f"🔍 Détails débogage - {v_type}", expanded=False):
+        v_type_str = str(v_type).upper()
+        
+        with st.status(f"🚛 Calcul du segment : {v_type_str}...", expanded=False) as status:
             # A. Fragmentation
             jobs_c, jobs_i = fragmenter_flux_en_jobs(df_v, h_start, h_end)
-            st.write(f"📦 Fragmentation : {len(jobs_c)} jobs complets, {len(jobs_i)} jobs incomplets.")
             
             # B. Appairage
             super_jobs_i = appairer_tous_les_jobs_incomplets(jobs_i, df_vehicules, df_contenants, matrice_duree)
-            st.write(f"🤝 Appairage : {len(super_jobs_i)} Super Jobs créés à partir des incomplets.")
-            if super_jobs_i:
-                st.write("Exemple 1er Super Job (Incomplet) :", super_jobs_i[0])
             
             # C. Fusion
             liste_sj_v = preparer_liste_tous_super_jobs(jobs_c, super_jobs_i, matrice_duree)
-            st.write(f"📊 Total Super Jobs pour {v_type} : {len(liste_sj_v)}")
             
-            # D. Cartographie
+            # D. Cartographie (spécifique au type en cours)
             couloirs_v = cartographier_couloirs(liste_sj_v)
-            st.write(f"🗺️ Nombre de couloirs géographiques : {len(couloirs_v)}")
             
             # E. Lissage temporel
             couloirs_v = etaler_uniformément_par_couloir(couloirs_v)
             couloirs_v = ajustement_marginal_dynamique(couloirs_v)
-            st.write("⏳ Lissage et ajustement marginal terminés.")
             
-            tous_les_couloirs_fusionnes.update(couloirs_v)
+            # --- ÉTAPE CLÉ : ORDONNANCEMENT DU SOUS-PROBLÈME ---
+            # On ne passe que les couloirs de CE véhicule à l'ordonnanceur
+            res_segment = ordonnancer_flotte_optimale(couloirs_v, matrice_duree, v_type_str)
+            
+            if res_segment and res_segment["succes"]:
+                n_camions = res_segment["n_camions"]
+                postes_v = res_segment["postes"]
+                
+                # On stocke les résultats
+                dimensionnement_total[v_type_str] = n_camions
+                tous_les_postes_finaux.extend(postes_v)
+                
+                st.write(f"✅ **{v_type_str}** : {n_camions} véhicules, {len(postes_v)} chauffeurs.")
+                status.update(label=f"✅ {v_type_str} : {n_camions} camions", state="complete")
+            else:
+                st.error(f"❌ Échec de l'ordonnancement pour le type {v_type_str}")
+                status.update(label=f"❌ Erreur sur {v_type_str}", state="error")
 
-    # 3. Ordonnancement final
-    st.write("🔃 Lancement de l'ordonnancement de la flotte (calcul des tournées)...")
-    resultat_final = ordonnancer_flotte_optimale(tous_les_couloirs_fusionnes, matrice_duree)
-
-    if resultat_final and resultat_final["succes"]:
-        postes = resultat_final["postes"]
-        st.success(f"🎯 Ordonnancement réussi ! {len(postes)} chauffeurs mobilisés.")
+    # 3. Synthèse finale
+    if tous_les_postes_finaux:
+        st.write("---")
+        st.subheader("🏁 Résumé du dimensionnement")
+        cols = st.columns(len(dimensionnement_total))
+        for i, (name, count) in enumerate(dimensionnement_total.items()):
+            cols[i].metric(name, f"{count} Camions")
         
-        # Visualisation rapide du premier poste pour vérification
-        if len(postes) > 0:
-            with st.expander("👀 Visualiser le planning du Chauffeur 01 (Débogage)", expanded=False):
-                st.write(postes[0])
-        
-        return postes
+        st.success(f"🎯 Simulation terminée. Total : {len(tous_les_postes_finaux)} postes chauffeurs créés.")
+        return tous_les_postes_finaux
     else:
-        st.error("❌ L'ordonnancement a échoué. Vérifiez les contraintes de temps ou le nombre de véhicules.")
+        st.error("❌ Aucun ordonnancement n'a pu être trouvé pour l'ensemble de la flotte.")
         return []
