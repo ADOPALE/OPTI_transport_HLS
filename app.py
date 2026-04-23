@@ -182,24 +182,25 @@ elif selected == "Simul tournées":  # Transport
     st.title("🚀 Simulation Transport Lourd")
     
     if 'data' in st.session_state:
-        # --- ÉTAPE A : SEGMENTATION AUTOMATIQUE ---
-        # On effectue la segmentation dès l'affichage pour séparer Récurrent / Spécifique
-        df_recurrent, df_specifique = segmenter_flux(st.session_state['data']['m_flux'])
+        # 1. Extraction du DataFrame brut
+        df_flux_brut = st.session_state['data']['m_flux']
         
-        col1, col2 = st.columns(2)
-        col1.metric("Flux Récurrents", len(df_recurrent))
-        col2.metric("Flux Spécifiques", len(df_specifique))
+        # 2. Appel de la segmentation (Etape 2.a.i)
+        with st.expander("📊 Détails de la segmentation des flux", expanded=False):
+            df_recurrent, df_specifique = segmenter_flux(df_flux_brut)
+            col1, col2 = st.columns(2)
+            col1.metric("Flux Récurrents (L-V)", len(df_recurrent))
+            col2.metric("Flux Spécifiques", len(df_specifique))
         
         st.divider()
 
-        # --- ÉTAPE B : CALCUL DE LA SÉQUENCE TYPE ---
+        # 3. Calcul de la Séquence Type (Etape 2.a.ii)
         st.subheader("📌 Génération de la Séquence Type (Jmax)")
-        st.info("Cette étape identifie le jour le plus chargé et crée une enveloppe de volume sécurisée (marge 10%).")
-
+        
         if st.button("Lancer le calcul du Jmax", type="primary", use_container_width=True):
-            with st.spinner("🧠 Analyse des poids fictifs par jour (Bin Packing + Accessibilité)..."):
+            with st.spinner("🧠 Analyse des poids fictifs (Bin Packing + Accès Sites)..."):
                 try:
-                    # Appel de la fonction choix_Jmax avec toutes les tables nécessaires
+                    # On passe bien les DataFrames stockés dans le session_state
                     df_sequence_type = choix_Jmax(
                         df_recurrent=df_recurrent,
                         df_vehicules=st.session_state['data']['param_vehicules'],
@@ -208,23 +209,19 @@ elif selected == "Simul tournées":  # Transport
                         df_sites=st.session_state['data']['param_sites']
                     )
                     
-                    # On stocke le tableau de la séquence type dans le session_state
                     st.session_state['df_sequence_type'] = df_sequence_type
-                    st.success("✅ Séquence type générée ! Le jour retenu a été affiché dans votre console.")
-                    
+                    st.success("✅ Séquence type générée ! Vérifiez le jour retenu dans votre console.")
                 except Exception as e:
                     st.error(f"Erreur lors du calcul : {e}")
+                    # Optionnel pour débugger : st.exception(e)
 
-        # Affichage du tableau résultant pour vérification
+        # 4. Affichage du résultat
         if 'df_sequence_type' in st.session_state:
-            st.write("### 📋 Aperçu de la Séquence Type")
+            st.write("### 📋 Tableau de la Séquence Type")
             st.dataframe(st.session_state['df_sequence_type'], use_container_width=True)
-            
-            # Optionnel : bouton pour passer à la suite (Lissage/VRP)
-            st.button("Passer à l'optimisation des tournées ➡️")
                 
     else: 
-        st.error("⚠️ Importez des données d'abord dans l'onglet 'Importer Données'.")
+        st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
         
 elif selected == "Synthèse transport":
     if 'planning_detaille' in st.session_state:
