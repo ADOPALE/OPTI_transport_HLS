@@ -374,3 +374,32 @@ def appairer_tous_les_jobs_incomplets(liste_incomplets, df_vehicules, df_contena
         pool_restant = [j for j in pool_restant if j.job_id not in id_elus]
         
     return liste_super_jobs_finale
+
+
+
+"""
+Fusionne les jobs complets et les super-jobs d'incomplets dans une liste unique.
+Chaque job complet devient un Super Job à part entière pour uniformiser le traitement.
+"""
+def preparer_liste_tous_super_jobs(jobs_complets, super_jobs_incomplets, matrice_duree):
+    liste_globale = []
+    
+    # 1. On transforme les jobs complets en Super Jobs
+    for j in jobs_complets:
+        poids = matrice_duree.loc[j.origin, j.destination] + 10 # Trajet + manoeuvre
+        liste_globale.append({
+            'id_super_job': f"SJ_C_{j.job_id}",
+            'jobs': [j],
+            'poids_total': poids,
+            'type_combinaison': 'COMPLET',
+            'h_dispo_max': j.h_dispo,
+            'h_deadline_min': j.h_deadline
+        })
+        
+    # 2. On ajoute les super jobs issus des incomplets
+    liste_globale.extend(super_jobs_incomplets)
+    
+    # 3. Tri chronologique global
+    liste_globale.sort(key=lambda x: x['h_dispo_max'])
+    
+    return liste_globale
