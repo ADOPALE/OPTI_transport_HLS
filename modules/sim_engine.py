@@ -11,7 +11,6 @@ from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes, i
 # =================================================================
 # CLASSE DE BASE
 # =================================================================
-
 class Job:
     def __init__(self, job_id, flux_id, type_job, origin, destination, 
                  h_dispo, h_deadline, quantite, contenant, 
@@ -19,13 +18,19 @@ class Job:
         
         self.job_id = job_id          
         self.flux_id = flux_id        
-        self.type_job = type_job      # 'COMPLET' ou 'INCOMPLET'
+        self.type_job = type_job      
         
-        self.origin = origin
-        self.destination = destination
-        self.h_dispo = h_dispo        # Heure de mise à dispo (en min)
-        self.h_deadline = h_deadline  # Heure max à destination (en min)
+        # NOMS EXACTS (Pour la recherche dans la matrice durée/distance)
+        self.origin = str(origin).strip().upper()
+        self.destination = str(destination).upper()
         
+        # SITES DE REGROUPEMENT (Pour l'appairage/fusion des camions)
+        # On considère que tous les sites HSJ sont au même point géographique
+        self.origin_group = "HUB_HSJ" if "HSJ" in self.origin else self.origin
+        self.dest_group = "HUB_HSJ" if "HSJ" in self.destination else self.destination
+        
+        self.h_dispo = h_dispo        
+        self.h_deadline = h_deadline  
         self.quantite = quantite
         self.contenant = contenant
         self.vehicule_type = vehicule_type
@@ -33,7 +38,7 @@ class Job:
         self.aller_retour = aller_retour 
         
         self.est_planifie = False
-        self.poids_temps = 0          
+        self.poids_temps = 0       
 
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
@@ -392,46 +397,32 @@ Cherche les partenaires idéaux pour un job pivot vers une destination commune.
 Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
 """
 def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    # --- PRÉPARATION DE LA MATRICE (Sécurité Index) ---
-    # Si la première colonne contient les noms mais n'est pas l'index
-    if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
-        # On suppose que la colonne 0 contient les noms de sites
-        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
-
     v_type = str(job_pivot.vehicule_type).strip().upper()
-    mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
-    if not mask_v.any():
-        return [], 9999 
-        
-    vehicule = df_vehicules[mask_v].iloc[0]
+    vehicule = df_vehicules[df_vehicules['Types'].str.strip().upper() == v_type].iloc[0]
     
-    dest_pivot = str(job_pivot.destination).upper()
-    orig_pivot = str(job_pivot.origin).upper()
-    
-    # Filtrage des candidats
+    # On regroupe par SITE GEOGRAPHIQUE (dest_group)
     candidats = [j for j in pool_candidats if 
-                 str(j.destination).upper() == dest_pivot and 
+                 j.dest_group == job_pivot.dest_group and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
-                 str(j.vehicule_type).strip().upper() == v_type]
+                 str(j.vehicule_type).upper() == v_type]
     
     meilleure_comb = []
-    # Accès direct .loc maintenant que l'index est forcé
-    poids_min = matrice_duree.loc[orig_pivot, dest_pivot]
+    # Recherche avec le NOM EXACT dans la matrice
+    poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
     
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
-        
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test.append(c)
-            points_dep = list(set([str(j.origin).upper() for j in comb_test]))
-            
+            # Calcul du trajet multi-points avec noms exacts
+            points_dep = list(set([j.origin for j in comb_test]))
             poids_test = 0
             curr = points_dep[0]
             for next_pt in points_dep[1:]:
                 poids_test += matrice_duree.loc[curr, next_pt] + 10 
                 curr = next_pt
-            poids_test += matrice_duree.loc[curr, dest_pivot]
+            poids_test += matrice_duree.loc[curr, job_pivot.destination]
             
             meilleure_comb = comb_test[1:] 
             poids_min = poids_test
@@ -440,46 +431,34 @@ def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_cont
 
 
 
+
 """
 Cherche à grouper des jobs partant du même quai vers des destinations différentes (Tournée).
 Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
 """
 def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    # --- PRÉPARATION DE LA MATRICE (Sécurité Index) ---
-    if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
-        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
-
     v_type = str(job_pivot.vehicule_type).strip().upper()
-    mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
-    if not mask_v.any():
-        return [], 9999
-
-    vehicule = df_vehicules[mask_v].iloc[0]
-    orig_pivot = str(job_pivot.origin).upper()
+    vehicule = df_vehicules[df_vehicules['Types'].str.strip().upper() == v_type].iloc[0]
     
+    # On regroupe par SITE GEOGRAPHIQUE (origin_group)
     candidats = [j for j in pool_candidats if 
-                 str(j.origin).upper() == orig_pivot and 
+                 j.origin_group == job_pivot.origin_group and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
-                 str(j.vehicule_type).strip().upper() == v_type]
+                 str(j.vehicule_type).upper() == v_type]
     
     meilleure_comb = []
-    poids_min = 9999 
-    
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
-        
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test.append(c)
             
-            dests_uniques = list(set([str(j.destination).upper() for j in comb_test]))
-            
+            dests_uniques = list(set([j.destination for j in comb_test]))
             poids_test = 0
-            curr = orig_pivot
+            curr = job_pivot.origin
             temp_dests = dests_uniques.copy()
-            
             while temp_dests:
-                # Utilisation de .loc sur la matrice indexée
+                # Recherche avec NOM EXACT
                 proche = min(temp_dests, key=lambda d: matrice_duree.loc[curr, d])
                 poids_test += matrice_duree.loc[curr, proche] + 10 
                 curr = proche
@@ -489,7 +468,7 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
             poids_min = poids_test
             
     if not meilleure_comb:
-        poids_min = matrice_duree.loc[orig_pivot, str(job_pivot.destination).upper()]
+        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
         
     return meilleure_comb, poids_min
 
