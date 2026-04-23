@@ -403,3 +403,46 @@ def preparer_liste_tous_super_jobs(jobs_complets, super_jobs_incomplets, matrice
     liste_globale.sort(key=lambda x: x['h_dispo_max'])
     
     return liste_globale
+
+
+
+
+"""
+Regroupe les Super Jobs par couloirs géographiques bidirectionnels.
+Normalise tous les sites contenant 'HSJ' en un hub unique pour faciliter l'appairage.
+"""
+def cartographier_couloirs(liste_tous_super_jobs):
+    couloirs = {} # Clé : frozenset({SiteA, SiteB}), Valeur : {'A_vers_B': [], 'B_vers_A': []}
+
+    for sj in liste_tous_super_jobs:
+        # 1. Normalisation HSJ
+        # On transforme "HSJ_PUI" ou "HSJ_STERIL" en "HUB_HSJ"
+        orig_raw = sj['jobs'][0].origin
+        dest_raw = sj['jobs'][0].destination
+        
+        orig = "HUB_HSJ" if "HSJ_" in orig_raw.upper() else orig_raw
+        dest = "HUB_HSJ" if "HSJ_" in dest_raw.upper() else dest_raw
+        
+        # On ignore les mouvements internes au HUB HSJ (si existants)
+        if orig == dest:
+            continue
+
+        # 2. Création de la clé du couloir (non-ordonnée pour grouper A->B et B->A)
+        # Un frozenset({A, B}) est identique à frozenset({B, A})
+        nom_couloir = frozenset([orig, dest])
+        
+        if nom_couloir not in couloirs:
+            # On initialise le couloir avec les deux sens possibles
+            # On utilise un tuple ordonné pour les clés internes pour savoir qui est qui
+            site_liste = list(nom_couloir)
+            s1, s2 = site_liste[0], site_liste[1]
+            couloirs[nom_couloir] = {
+                f"{s1}_vers_{s2}": [],
+                f"{s2}_vers_{s1}": []
+            }
+        
+        # 3. Rangement du Super Job dans le bon sens
+        sens = f"{orig}_vers_{dest}"
+        couloirs[nom_couloir][sens].append(sj)
+
+    return couloirs
