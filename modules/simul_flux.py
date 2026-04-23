@@ -453,31 +453,33 @@ def simuler_lissage_flotte(df_sequence_type, df_vehicules, df_contenants, matric
 FONCTION - afficher_graphique_charge_contenants
 Affiche un graphique à barres montrant le nombre de contenants à livrer par créneau horaire.
 """
-def afficher_graphique_charge_filtree(df_sequence_type, df_vehicules, df_contenants, df_sites, vehicule_filtre, h_fin_param, h_deb_param):
+def afficher_graphique_charge_empilee(df_sequence_type, df_vehicules, df_contenants, df_sites, h_fin_param, h_deb_param):
     """
-    Affiche la charge de contenants par heure pour un type de véhicule spécifique.
+    Affiche un graphique unique avec les charges empilées par type de véhicule.
     """
-    charge_contenants = np.zeros(1440)
-    
-    # Nettoyage pour les accès
+    # 1. Préparation des données
     df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
     col_libelle = next((c for c in df_sites.columns if "LIBEL" in c or "SITE" in c), None)
     
     fin_poste_defaut = (h_fin_param.hour * 60 + h_fin_param.minute) - 60
     debut_poste_defaut = (h_deb_param.hour * 60 + h_deb_param.minute)
+    
+    # On crée un dictionnaire de vecteurs (un par type de véhicule)
+    types_v = df_vehicules[df_vehicules.columns[0]].unique()
+    charges_par_type = {t: np.zeros(1440) for t in types_v}
 
+    # 2. Attribution des flux
     for _, flux in df_sequence_type.iterrows():
         site_dep = str(flux['Point de départ']).strip().upper()
         site_arr = str(flux['Point de destination']).strip().upper()
         type_cont = str(flux['Nature de contenant']).strip().upper()
         
-        # 1. On identifie quel véhicule "prendrait" ce flux (Logique identique à la flotte)
         v_elu, _ = identifier_meilleur_vehicule(
             site_dep, site_arr, type_cont, df_vehicules, df_contenants, df_sites, col_libelle
         )
         
-        # 2. Si le véhicule élu correspond au filtre (ou si on veut "TOUS")
-        if v_elu is not None and (vehicule_filtre == "TOUS" or v_elu['Types'] == vehicule_filtre):
+        if v_elu is not None:
+            type_v_nom = v_elu[df_vehicules.columns[0]]
             qte = flux['Quantité_Séquence_Type']
             
             val_h_dep = flux.get("Heure de mise à disposition min départ")
@@ -488,18 +490,34 @@ def afficher_graphique_charge_filtree(df_sequence_type, df_vehicules, df_contena
             if h_end <= h_start: h_end = h_start + 60
             
             intensite_cont = qte / (h_end - h_start)
-            charge_contenants[int(h_start):int(h_end)] += intensite_cont
+            charges_par_type[type_v_nom][int(h_start):int(h_end)] += intensite_cont
 
-    # Agrégation et Plotly
+    # 3. Construction du graphique Plotly
+    fig = go.Figure()
     heures = [f"{h}h" for h in range(24)]
-    volume_par_heure = [np.sum(charge_contenants[h*60 : (h+1)*60]) for h in range(24)]
 
-    fig = go.Figure(go.Bar(x=heures, y=volume_par_heure, marker_color='#2ca02c'))
+    for t_v in types_v:
+        # Agrégation par heure pour ce véhicule
+        vol_heure = [np.sum(charges_par_type[t_v][h*60 : (h+1)*60]) for h in range(24)]
+        
+        # On n'ajoute la trace que s'il y a du volume
+        if sum(vol_heure) > 0:
+            fig.add_trace(go.Bar(
+                name=t_v,
+                x=heures,
+                y=vol_heure
+            ))
+
+    # 4. Mise en forme "Stacked"
     fig.update_layout(
-        title=f"<b>📦 Charge Horaire : {vehicule_filtre}</b>",
-        xaxis_title="Heure", yaxis_title="Contenants",
-        template="plotly_white", height=350
+        title="<b>📦 Répartition Horaire des Contenants par Type de Véhicule</b>",
+        xaxis_title="Heure de la journée",
+        yaxis_title="Volume (Contenants)",
+        barmode='stack', # C'est ici qu'on définit l'empilement
+        template="plotly_white",
+        legend_title="Flotte",
+        height=450,
+        hovermode="x unified"
     )
+
     st.plotly_chart(fig, use_container_width=True)
-
-
