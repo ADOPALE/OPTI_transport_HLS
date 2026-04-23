@@ -162,11 +162,15 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
     # Test itératif de N camions à 1 camion pour trouver le minimum viable
     # On descend pour voir jusqu'où on peut réduire la flotte
     for n_test in range(n_max, 0, -1):
+        for j in tous_les_jobs:
+        # On vérifie si un trajet direct dépasse l'amplitude
+        if j['poids_total'] > duree_poste_max:
+            st.error(f"🚨 JOB IMPOSSIBLE : Le trajet pour {j['jobs'][0].origin} dure {j['poids_total']}min, ce qui dépasse l'amplitude de {duree_poste_max}min.")
+        
         res = tenter_sequencage(
             n_test, tous_les_jobs, depot, matrice_duree, 
             h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste
         )
-        
         if res["succes"]:
             solution_optimale = res
         else:
