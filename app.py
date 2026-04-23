@@ -304,13 +304,22 @@ elif selected == "Synthèse transport":
                     try:
                         # IMPORT DU MOTEUR (Assurez-vous que sim_engine est bien importé en haut du fichier)
                         from modules.sim_engine import traitement_flux_recurrents
+
+
+                        # Préparation des véhicules autorisés
+                        vehicules_autorises = st.session_state["params_logistique"]["vehicules_selectionnes"]
+                        col_nom_v = st.session_state['data']['param_vehicules'].columns[0]
+                        df_v_actifs = st.session_state['data']['param_vehicules'][
+                            st.session_state['data']['param_vehicules'][col_nom_v].isin(vehicules_autorises)
+                        ].copy()
                         
+                       
                         # 1. EXECUTION DU MOTEUR
                         with st.spinner("Fragmentation, Appairage et Séquençage en cours..."):
                             postes_chauffeurs = traitement_flux_recurrents(
                                 st.session_state['df_sequence_type'],
                                 st.session_state['data']['param_sites'],
-                                st.session_state['data']['param_vehicules'],
+                                df_v_actifs,
                                 st.session_state['data']['param_contenants'],
                                 matrice_duree
                             )
