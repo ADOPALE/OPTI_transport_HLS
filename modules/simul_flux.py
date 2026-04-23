@@ -45,33 +45,60 @@ def segmenter_flux(df):
 
 def calculer_capacite_max(vehicule, contenant):
     """
-    Calcule le nombre max de contenants dans un véhicule (Bin Packing 2D simple).
+    Calcule le nombre maximum absolu de contenants dans un véhicule 
+    en testant des agencements complexes (orientations mixtes).
     """
-    # 1. Vérification de compatibilité (on cherche le nom du contenant dans les colonnes du véhicule)
+    # 1. Vérification de compatibilité
     nom_cont = contenant['libellé']
+    # On vérifie dans le tableau véhicule si la colonne du contenant est à "OUI"
     if nom_cont not in vehicule or vehicule[nom_cont] != "OUI":
         return 0
 
-    # 2. Récupération des dimensions
+    # 2. Récupération des dimensions et contraintes
     L_v = vehicule['dim longueur interne (m)']
     l_v = vehicule['dim largeur interne (m)']
     P_max_v = vehicule['Poids max chargement']
     
     L_c = contenant['dim longueur (m)']
-    l_c = contenant['dim largeur (m) '] # Attention à l'espace possible dans le nom de colonne
+    l_c = contenant['dim largeur (m) '] # Note: respect de l'espace dans ton Excel
     poids_c = contenant['Poids plein (T)']
 
-    # 3. Calcul du nombre au sol (en testant les deux orientations)
-    # Sens A : Longueur contenant sur Longueur véhicule
-    nb_sens_A = (L_v // L_c) * (l_v // l_c)
-    
-    # Sens B : Longueur contenant sur Largeur véhicule (pivotement 90°)
-    nb_sens_B = (L_v // l_c) * (l_v // L_c)
-    
-    nb_max_sol = max(nb_sens_A, nb_sens_B)
+    # 3. Moteur de calcul récursif pour le remplissage optimal (Guillotine Cut)
+    def solve_max(L, l, w, h, memo):
+        # On ne peut pas placer le contenant si l'espace est trop petit
+        if (L < w and L < h) or (l < w and l < h):
+            return 0
+        
+        # Utilisation de la mémoïsation pour accélérer le calcul
+        state = (L, l)
+        if state in memo:
+            return memo[state]
+        
+        res = 0
+        # Option 1 : On place le contenant dans le sens normal (w x h)
+        if L >= w and l >= h:
+            # On découpe l'espace restant soit horizontalement soit verticalement
+            # Découpe A : un rectangle à côté (L-w x l) et un devant (w x l-h)
+            optA = 1 + solve_max(L - w, l, w, h, memo) + solve_max(w, l - h, w, h, memo)
+            # Découpe B : un rectangle devant (L x l-h) et un à côté (L-w x h)
+            optB = 1 + solve_max(L, l - h, w, h, memo) + solve_max(L - w, h, w, h, memo)
+            res = max(res, optA, optB)
+            
+        # Option 2 : On place le contenant pivoté à 90° (h x w)
+        if L >= h and l >= w:
+            optA_rot = 1 + solve_max(L - h, l, w, h, memo) + solve_max(h, l - w, w, h, memo)
+            optB_rot = 1 + solve_max(L, l - w, w, h, memo) + solve_max(L - h, w, h, h, memo)
+            res = max(res, optA_rot, optB_rot)
+            
+        memo[state] = res
+        return res
+
+    # Calcul du nombre max au sol
+    nb_max_sol = solve_max(L_v, l_v, L_c, l_c, {})
 
     # 4. Vérification de la contrainte de poids
     if poids_c > 0:
+        # Le poids max chargement est en Tonnes, tout comme le poids plein du contenant
         nb_max_poids = P_max_v // poids_c
         capacite_finale = min(nb_max_sol, nb_max_poids)
     else:
