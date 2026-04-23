@@ -20,6 +20,7 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
+from modules.simul_flux import segmenter_flux, choix_Jmax
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
@@ -177,69 +178,54 @@ elif selected == "Détail tournées BIO":
 elif selected == "Véhicules et paramètres":
     afficher_parametres_logistique()
 
-elif selected == "Simul tournées": # Transport
-    st.title("🚀 Simulation Transport Lourd (Flotte Homogène)")
+elif selected == "Simul tournées":  # Transport
+    st.title("🚀 Simulation Transport Lourd")
     
     if 'data' in st.session_state:
-        # Bouton pour lancer la simulation exhaustive (100 itérations de la semaine)
-        if st.button("Lancer l'optimisation Hebdo Homogène", type="primary"):
-            with st.spinner("🧠 Analyse de 100 scénarios de semaines complètes pour optimiser la flotte..."):
-                try:
-                    # Appel du nouveau moteur (simul_flux_2)
-                    # La fonction retourne le meilleur score (pic de flotte minimal + km optimisés)
-                    #resultats_hebdo = lancer_simulation(st.session_state['data'])
-                    
-                    # On stocke les résultats dans le session_state
-                    st.session_state['planning_detaille'] = resultats_hebdo
-                    st.success(f"✅ Analyse terminée. Flotte fixe requise : {resultats_hebdo['kpis']['nb_chauffeurs_max_jour']} camions.")
-                except Exception as e:
-                    st.error(f"Erreur lors de la simulation : {e}")
+        # --- ÉTAPE A : SEGMENTATION AUTOMATIQUE ---
+        # On effectue la segmentation dès l'affichage pour séparer Récurrent / Spécifique
+        df_recurrent, df_specifique = segmenter_flux(st.session_state['data']['m_flux'])
+        
+        col1, col2 = st.columns(2)
+        col1.metric("Flux Récurrents", len(df_recurrent))
+        col2.metric("Flux Spécifiques", len(df_specifique))
+        
+        st.divider()
 
-        # --- AFFICHAGE DES RÉSULTATS SI DISPONIBLES ---
-        if 'planning_detaille' in st.session_state:
-            res = st.session_state['planning_detaille']
-            k = res["kpis"]
+        # --- ÉTAPE B : CALCUL DE LA SÉQUENCE TYPE ---
+        st.subheader("📌 Génération de la Séquence Type (Jmax)")
+        st.info("Cette étape identifie le jour le plus chargé et crée une enveloppe de volume sécurisée (marge 10%).")
+
+        if st.button("Lancer le calcul du Jmax", type="primary", use_container_width=True):
+            with st.spinner("🧠 Analyse des poids fictifs par jour (Bin Packing + Accessibilité)..."):
+                try:
+                    # Appel de la fonction choix_Jmax avec toutes les tables nécessaires
+                    df_sequence_type = choix_Jmax(
+                        df_recurrent=df_recurrent,
+                        df_vehicules=st.session_state['data']['param_vehicules'],
+                        df_contenants=st.session_state['data']['param_contenants'],
+                        matrice_duree=st.session_state['data']['matrice_duree'],
+                        df_sites=st.session_state['data']['param_sites']
+                    )
+                    
+                    # On stocke le tableau de la séquence type dans le session_state
+                    st.session_state['df_sequence_type'] = df_sequence_type
+                    st.success("✅ Séquence type générée ! Le jour retenu a été affiché dans votre console.")
+                    
+                except Exception as e:
+                    st.error(f"Erreur lors du calcul : {e}")
+
+        # Affichage du tableau résultant pour vérification
+        if 'df_sequence_type' in st.session_state:
+            st.write("### 📋 Aperçu de la Séquence Type")
+            st.dataframe(st.session_state['df_sequence_type'], use_container_width=True)
             
-            # 1. Affichage des KPIs Globaux (Hebdo)
-            st.divider()
-            st.subheader("📊 Indicateurs Clés de la Semaine (Meilleur scénario)")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Flotte Fixe (Pic)", f"{k['nb_chauffeurs_max_jour']} Véhicules")
-            col2.metric("Distance Totale", f"{k['distance_totale']:,.0f} km")
-            col3.metric("Remplissage Moyen", f"{k['remplissage_moyen']:.1f}%")
-            col4.metric("Total Tournées", k["nb_tournees"])
-            
-            # 2. Aperçu rapide du Lundi (Jour de référence souvent chargé)
-            st.subheader("🔍 Aperçu : Planning du Lundi")
-            
-            # On récupère les données du lundi dans le détail des jours
-            lundi_data = res["detail_jours"].get("Lundi", {})
-            
-            if lundi_data:
-                col_a, col_b = st.columns(2)
-                col_a.info(f"Nombre de chauffeurs mobilisés : {len(lundi_data['chauffeurs'])}")
-                col_b.info(f"Nombre de tournées : {len(lundi_data['tournees'])}")
-                
-                # Petit tableau récapitulatif des tournées du lundi
-                liste_t = []
-                for t in lundi_data["tournees"]:
-                    liste_t.append({
-                        "ID": t.id,
-                        "Départ HSJ": f"{int(t.h_debut_hsj//60):02d}h{int(t.h_debut_hsj%60):02d}",
-                        "Fin HSJ": f"{int(t.h_fin_hsj//60):02d}h{int(t.h_fin_hsj%60):02d}",
-                        "KM": f"{t.km_totaux:.1f}",
-                        "Type": "Sale" if t.is_sale_tournee else "Propre",
-                        "Remplissage": f"{(t.remplissage_L / 7.5)*100:.1f}%" # 7.5m par défaut pour PL 19T
-                    })
-                
-                st.table(pd.DataFrame(liste_t).head(10)) # Affiche les 10 premières tournées
-                st.caption("Allez dans l'onglet 'Synthèse transport' ou 'Détail tournées' pour voir le reste de la semaine.")
-            else:
-                st.warning("Aucune donnée disponible pour le Lundi dans ce scénario.")
+            # Optionnel : bouton pour passer à la suite (Lissage/VRP)
+            st.button("Passer à l'optimisation des tournées ➡️")
                 
     else: 
         st.error("⚠️ Importez des données d'abord dans l'onglet 'Importer Données'.")
+        
 elif selected == "Synthèse transport":
     if 'planning_detaille' in st.session_state:
         # Utilise la clé 'param_contenants' conforme à ta note technique
