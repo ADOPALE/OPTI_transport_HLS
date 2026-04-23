@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import copy 
 
 # Imports de tes modules existants
-from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes
+from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes, identifier_meilleur_vehicule
 
 # =================================================================
 # CLASSE DE BASE
