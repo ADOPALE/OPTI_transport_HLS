@@ -10,9 +10,8 @@ FONCTION - SEGMENTER_FLUX
 Sépare les flux 'Volume' en Récurrents (Lundi au Vendredi) et Spécifiques.
 """
 def segmenter_flux(df):
-    # 1. Nom exact de la colonne de nature du flux
+    # 1. Nom exact de la colonne de nature du flux (pour distinguer volumes et fréquences)
     col_nature = "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)"
-    
     # Filtrage initial sur le type "Volume"
     df_volume = df[df[col_nature] == "Volume"].copy()
     
@@ -43,15 +42,14 @@ FONCTION - CHOIX_JMAX
 cette fonction permet de stabiliser le besoin de transport récurrent en intégrant une marge pour être sur qu'avec les flux du JMax on sera bien capable de transporter tous les autres jours. 
 """
 def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_sites):
-    """
-    Identifie le jour le plus chargé (Jmax) sans utiliser set_index.
-    Cherche manuellement le site de départ dans la colonne 0 des matrices.
-    """
     # --- PRÉPARATION DES COLONNES ---
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
                   "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
-    
+
+    #6 min de mise à quai (manoeuvre (temps arbitraire) 
     t_mise_quai = 6.0  
+
+    # ---INITIALISATION---- 
     poids_totaux_par_jour = {j: 0.0 for j in jours_cols}
     
     # --- NETTOYAGE DES RÉFÉRENTIELS (SÉCURISÉ) ---
@@ -134,8 +132,16 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
         st.warning("⚠️ Poids calculés à 0.0. Vérifiez la correspondance des noms de sites.")
     else:
         j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
+   
     
-    st.info(f"📊 **Jmax identifié** : {j_max_nom}")
+    # Construction du texte de détail (ex: Lun: 120min | Mar: 150min...)
+    # On enlève "Quantité " du nom pour que ce soit plus court à l'affichage
+    detail_jours = " | ".join([f"{k.replace('Quantité ', '')}: {round(v, 1)} min" for k, v in poids_totaux_par_jour.items()])
+    
+    # Affichage complet
+    st.info(f"📊 **Jmax identifié** : {j_max_nom.replace('Quantité ', '')}")
+    st.caption(f"⚖️ **Détail des charges calculées :**\n\n{detail_jours}")
+
 
     def appliquer_regle_marge(row):
         val_j_max = row[j_max_nom]
