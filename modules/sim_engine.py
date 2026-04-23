@@ -761,6 +761,10 @@ def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_cont
     """
     st.info("🚀 Démarrage du traitement des flux récurrents...")
 
+    if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
+        # On définit la première colonne comme index
+        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
+        
     # 1. Éclater les flux par type de véhicule
     sous_problemes = eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants)
     st.write(f"✅ Flux éclatés en {len(sous_problemes)} types de véhicules.", sous_problemes.keys())
