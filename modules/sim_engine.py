@@ -1,1 +1,376 @@
+import pandas as pd
+import numpy as np
+import math
+import streamlit as st # Pour les alertes st.error
+from datetime import datetime, timedelta
+import copy # Utile pour cloner des objets Camion ou Job lors des tests de combinaisons
 
+
+from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes
+
+
+
+class Job:
+    def __init__(self, job_id, flux_id, type_job, origin, destination, 
+                 h_dispo, h_deadline, quantite, contenant, 
+                 vehicule_type, type_propre_sale, aller_retour):
+        
+        self.job_id = job_id          # Identifiant unique (ex: JOB_001)
+        self.flux_id = flux_id        # Lien vers la ligne d'origine du flux
+        self.type_job = type_job      # 'COMPLET' ou 'INCOMPLET'
+        
+        # Données de routage
+        self.origin = origin
+        self.destination = destination
+        self.h_dispo = h_dispo        # Heure de mise à dispo (en min)
+        self.h_deadline = h_deadline  # Heure max à destination (en min)
+        
+        # Caractéristiques chargement
+        self.quantite = quantite
+        self.contenant = contenant
+        self.vehicule_type = vehicule_type
+        self.type_propre_sale = type_propre_sale
+        self.aller_retour = aller_retour # 'Aller' ou 'Retour'
+        
+        # Métadonnées pour le séquençage futur
+        self.est_planifie = False
+        self.poids_temps = 0          # Sera calculé lors de l'assemblage
+
+
+
+def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants):
+    """
+    Etape 1 : Pour chaque flux, identifie le véhicule optimal qui peut entrer 
+    sur les deux sites et qui maximise l'emport.
+    """
+    df_travail = df_sequence_type.copy()
+    col_site = df_sites.columns[0] # Le nom de la colonne des sites
+    
+    # Listes pour stocker les résultats de l'analyse
+    vehicules_cibles = []
+    capacites_max = []
+
+    for _, flux in df_travail.iterrows():
+        site_dep = str(flux['Point de départ']).strip()
+        site_arr = str(flux['Point de destination']).strip()
+        type_cont = str(flux['Nature de contenant']).strip()
+        
+        # UTILISATION DE TA FONCTION : identifier_meilleur_vehicule
+        # Elle vérifie l'accès (OUI/NON) et lance le bin-packing
+        v_elu, capa = identifier_meilleur_vehicule(
+            site_dep, 
+            site_arr, 
+            type_cont, 
+            df_vehicules, 
+            df_contenants, 
+            df_sites, 
+            col_site
+        )
+        
+        if v_elu is not None:
+            vehicules_cibles.append(str(v_elu['Types']).strip().upper())
+            capacites_max.append(capa)
+        else:
+            vehicules_cibles.append("INCONNU")
+            capacites_max.append(0)
+
+    df_travail['vehicule_cible'] = vehicules_cibles
+    df_travail['capa_max_vehicule'] = capacites_max
+    
+    # On éclate en sous-tableaux par type de véhicule
+    # On ignore les flux "INCONNU" (ceux qui ne rentrent nulle part ou sites inaccessibles)
+    sous_problemes = {
+        v_type: df_travail[df_travail['vehicule_cible'] == v_type].copy()
+        for v_type in df_travail['vehicule_cible'].unique() if v_type != "INCONNU"
+    }
+    
+    return sous_problemes
+
+
+
+
+
+"""
+Transforme chaque ligne de flux en N jobs complets et au max 1 job incomplet.
+"""
+
+def fragmenter_flux_en_jobs(df_sous_probleme, h_prise_min, h_fin_max):
+    """
+    Transforme chaque ligne de flux en N jobs complets et au max 1 job incomplet.
+    """
+    jobs_complets = []
+    jobs_incomplets = []
+    
+    start_global = to_decimal_minutes(h_prise_min)
+    end_global = to_decimal_minutes(h_fin_max)
+    
+    job_counter = 0
+
+    for index, flux in df_sous_probleme.iterrows():
+        # Extraction des données de base
+        qte_totale = int(flux['Quantité_Séquence_Type'])
+        capa_v = int(flux['capa_max_vehicule'])
+        
+        # Si capa_max est 0, on ne peut rien faire (sécurité)
+        if capa_v <= 0:
+            continue
+            
+        # Calcul des horaires
+        h_dispo = to_decimal_minutes(flux.get("Heure de mise à disposition min départ")) if pd.notna(flux.get("Heure de mise à disposition min départ")) else start_global
+        h_deadline = to_decimal_minutes(flux.get("Heure max de livraison à la destination")) if pd.notna(flux.get("Heure max de livraison à la destination")) else end_global
+        
+        # --- A. Création des jobs COMPLETDS ---
+        nb_complets = qte_totale // capa_v
+        for _ in range(nb_complets):
+            job_counter += 1
+            new_job = Job(
+                job_id=f"JOB_C_{job_counter}",
+                flux_id=index,
+                type_job='COMPLET',
+                origin=str(flux['Point de départ']).strip(),
+                destination=str(flux['Point de destination']).strip(),
+                h_dispo=h_dispo,
+                h_deadline=h_deadline,
+                quantite=capa_v,
+                contenant=str(flux['Nature de contenant']).strip(),
+                vehicule_type=str(flux['vehicule_cible']).strip(),
+                type_propre_sale=str(flux.get('Type (propre/sale)', 'Inconnu')).strip(),
+                aller_retour=str(flux.get('Aller/Retour', 'Aller')).strip()
+            )
+            jobs_complets.append(new_job)
+            
+        # --- B. Création du job INCOMPLET (le reste) ---
+        reste = qte_totale % capa_v
+        if reste > 0:
+            job_counter += 1
+            new_job = Job(
+                job_id=f"JOB_I_{job_counter}",
+                flux_id=index,
+                type_job='INCOMPLET',
+                origin=str(flux['Point de départ']).strip(),
+                destination=str(flux['Point de destination']).strip(),
+                h_dispo=h_dispo,
+                h_deadline=h_deadline,
+                quantite=reste,
+                contenant=str(flux['Nature de contenant']).strip(),
+                vehicule_type=str(flux['vehicule_cible']).strip(),
+                type_propre_sale=str(flux.get('Type (propre/sale)', 'Inconnu')).strip(),
+                aller_retour=str(flux.get('Aller/Retour', 'Aller')).strip()
+            )
+            jobs_incomplets.append(new_job)
+            
+    return jobs_complets, jobs_incomplets
+
+
+
+
+"""
+Vérifie si une liste de jobs (mix de contenants) rentre physiquement dans un véhicule.
+Limite le test à la surface au sol et aux dimensions, en mode "First Fit" simple.
+"""
+def verifier_bin_packing_mixte(vehicule, liste_jobs, df_contenants):
+    # 1. Extraction des dimensions du véhicule
+    L_v = vehicule['dim longueur interne (m)']
+    l_v = vehicule['dim largeur interne (m)']
+    poids_max = vehicule['Poids max chargement']
+    
+    poids_total = 0
+    surfaces_objets = []
+    
+    # 2. Préparation des dimensions de chaque unité de chaque job
+    for job in liste_jobs:
+        try:
+            cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == job.contenant.upper()].iloc[0]
+            L_c = cont_info['dim longueur (m)']
+            l_c = cont_info['dim largeur (m)']
+            poids_c = cont_info['Poids plein (T)']
+            
+            for _ in range(job.quantite):
+                surfaces_objets.append((L_c, l_c))
+                poids_total += poids_c
+        except:
+            return False # Contenant inconnu
+
+    # 3. Vérification immédiate du poids
+    if poids_total > poids_max:
+        return False
+
+    # 4. Vérification simplifiée par surface au sol (Filtre 1)
+    surf_totale_objets = sum(item[0] * item[1] for item in surfaces_objets)
+    if surf_totale_objets > (L_v * l_v):
+        return False
+
+    # 5. Algorithme de placement "Next Fit Decreasing Height" (NFDH)
+    # On trie les objets par hauteur décroissante pour optimiser le rangement en rangées
+    surfaces_objets.sort(key=lambda x: max(x), reverse=True)
+    
+    x_curr, y_curr, h_ligne_max = 0, 0, 0
+    for w, h in surfaces_objets:
+        # On teste l'objet dans le sens qui prend le moins de largeur
+        obj_w, obj_h = (min(w, h), max(w, h))
+        
+        if x_curr + obj_w > l_v: # On passe à la ligne suivante
+            x_curr = 0
+            y_curr += h_ligne_max
+            h_ligne_max = 0
+            
+        if y_curr + obj_h > L_v: # Ça ne rentre plus
+            return False
+            
+        x_curr += obj_w
+        h_ligne_max = max(h_ligne_max, obj_h)
+        
+    return True
+
+
+
+
+"""
+Cherche les partenaires idéaux pour un job pivot vers une destination commune.
+Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
+"""
+def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
+    v_type = job_pivot.vehicule_type
+    vehicule = df_vehicules[df_vehicules['Types'].str.strip().upper() == v_type.upper()].iloc[0]
+    
+    # 1. Filtre strict : Même destination + Même type (Propre/Sale) + Même véhicule
+    candidats = [j for j in pool_candidats if 
+                 j.destination == job_pivot.destination and 
+                 j.type_propre_sale == job_pivot.type_propre_sale and
+                 j.vehicule_type == v_type]
+    
+    meilleure_comb = []
+    # Poids initial : Aller simple du point de départ du pivot à la destination
+    poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
+    
+    # On teste les combinaisons (max 3 jobs)
+    comb_test = [job_pivot]
+    for c in candidats:
+        if len(comb_test) >= 3: break
+        
+        if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
+            comb_test.append(c)
+            # On recalcule le poids : le camion doit passer par tous les points de départ
+            points_dep = list(set([j.origin for j in comb_test]))
+            
+            # Calcul du trajet entre les points de départ + trajet final
+            poids_test = 0
+            curr = points_dep[0]
+            for next_pt in points_dep[1:]:
+                poids_test += matrice_duree.loc[curr, next_pt] + 10 # 10min manoeuvre
+                curr = next_pt
+            poids_test += matrice_duree.loc[curr, job_pivot.destination]
+            
+            meilleure_comb = comb_test[1:] # On ne renvoie que les partenaires
+            poids_min = poids_test
+            
+    return meilleure_comb, poids_min
+
+
+
+
+"""
+Cherche à grouper des jobs partant du même quai vers des destinations différentes (Tournée).
+Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
+"""
+def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
+    v_type = job_pivot.vehicule_type
+    vehicule = df_vehicules[df_vehicules['Types'].str.strip().upper() == v_type.upper()].iloc[0]
+    
+    # 1. Filtre strict : Même origine + Même type (Propre/Sale) + Même véhicule
+    candidats = [j for j in pool_candidats if 
+                 j.origin == job_pivot.origin and 
+                 j.type_propre_sale == job_pivot.type_propre_sale and
+                 j.vehicule_type == v_type]
+    
+    meilleure_comb = []
+    poids_min = 9999 # Infini pour l'init
+    
+    comb_test = [job_pivot]
+    for c in candidats:
+        if len(comb_test) >= 3: break
+        
+        if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
+            comb_test.append(c)
+            
+            # --- TRI PAR PROXIMITÉ (Le "Tetris" Géographique) ---
+            # On ordonne les destinations pour faire la boucle la plus courte
+            dests_uniques = list(set([j.destination for j in comb_test]))
+            
+            # Logique : on va toujours vers la destination la plus proche du point actuel
+            poids_test = 0
+            curr = job_pivot.origin
+            temp_dests = dests_uniques.copy()
+            
+            while temp_dests:
+                # Trouve la destination la plus proche parmi celles restantes
+                proche = min(temp_dests, key=lambda d: matrice_duree.loc[curr, d])
+                poids_test += matrice_duree.loc[curr, proche] + 10 # Manoeuvre
+                curr = proche
+                temp_dests.remove(proche)
+            
+            meilleure_comb = comb_test[1:]
+            poids_min = poids_test
+            
+    # Si aucune combi trouvée, le poids est juste le trajet direct du pivot
+    if not meilleure_comb:
+        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
+        
+    return meilleure_comb, poids_min
+
+
+
+"""
+Orchestre l'appairage global de tous les jobs incomplets. 
+Pour chaque job, teste les deux logiques de combinaison et retient la plus performante 
+en termes de temps de mobilisation (poids).
+"""
+def appairer_tous_les_jobs_incomplets(liste_incomplets, df_vehicules, df_contenants, matrice_duree):
+    pool_restant = liste_incomplets.copy()
+    liste_super_jobs_finale = []
+    
+    # On trie par h_dispo pour traiter les flux chronologiquement (priorité au premier prêt)
+    pool_restant.sort(key=lambda x: x.h_dispo)
+    
+    while len(pool_restant) > 0:
+        # On extrait le premier job de la liste (le pivot)
+        job_pivot = pool_restant.pop(0)
+        
+        # 1. On cherche la meilleure combinaison par DESTINATION (même point d'arrivée)
+        partenaires_dest, poids_dest = trouver_meilleure_comb_dest(
+            job_pivot, pool_restant, df_vehicules, df_contenants, matrice_duree
+        )
+        
+        # 2. On cherche la meilleure combinaison par DEPART (même point d'origine)
+        partenaires_dep, poids_dep = trouver_meilleure_comb_dep(
+            job_pivot, pool_restant, df_vehicules, df_contenants, matrice_duree
+        )
+        
+        # 3. Arbitrage : Quelle logique est la plus "légère" en temps ?
+        # Si poids_dest <= poids_dep, on choisit le groupage destination
+        if poids_dest <= poids_dep:
+            elus = [job_pivot] + partenaires_dest
+            poids_final = poids_dest
+            type_comb = "DESTINATION"
+        else:
+            elus = [job_pivot] + partenaires_dep
+            poids_final = poids_dep
+            type_comb = "DEPART"
+            
+        # 4. Création du Super Job (Dictionnaire pour faciliter le lissage ensuite)
+        super_job = {
+            'id_super_job': f"SJ_{elus[0].job_id}",
+            'jobs': elus,                      # Liste des 1, 2 ou 3 objets Job
+            'poids_total': poids_final,        # Temps camion mobilisé
+            'type_combinaison': type_comb,
+            'h_dispo_max': max(j.h_dispo for j in elus), # Le camion ne peut partir que quand TOUT est prêt
+            'h_deadline_min': min(j.h_deadline for j in elus) # Le camion doit arriver pour le plus urgent
+        }
+        
+        liste_super_jobs_finale.append(super_job)
+        
+        # 5. Mise à jour du pool : on retire les jobs qui ont été appairés
+        id_elus = [j.job_id for j in elus[1:]] # On ignore le pivot car il est déjà pop()
+        pool_restant = [j for j in pool_restant if j.job_id not in id_elus]
+        
+    return liste_super_jobs_finale
