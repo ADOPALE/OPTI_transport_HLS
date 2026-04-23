@@ -44,58 +44,83 @@ cette fonction permet de stabiliser le besoin de transport récurrent en intégr
 """
 
 def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_sites):
+    # 1. Préparation et Nettoyage
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
                   "Quantité Jeudi", "Quantité Vendredi", "Quantité Samedi", "Quantité Dimanche"]
     
-    t_mise_quai = 6.0  # 6 min par trajet
+    t_mise_quai = 6.0  # 6 minutes par trajet
     poids_totaux_par_jour = {j: 0.0 for j in jours_cols}
     
-    # ÉTAPE 1 : Calcul des poids fictifs pour identifier le jour le plus chargé
-    for _, flux in df_recurrent.iterrows():
-        site_dep = flux['Point de départ']
-        site_arr = flux['Point de destination']
-        type_cont = flux['Nature de contenant']
-        cont_info = df_contenants[df_contenants['libellé'] == type_cont].iloc[0]
+    # Nettoyage des noms de sites et colonnes pour éviter les KeyError
+    df_sites['Libellé'] = df_sites['Libellé'].astype(str).str.strip()
+    # On nettoie aussi les noms de colonnes (véhicules) dans df_sites
+    df_sites.columns = [str(c).strip() for c in df_sites.columns]
 
-        # Trouver le véhicule le plus capacitaire autorisé sur les deux sites
+    # ÉTAPE 1 : Calcul des poids fictifs
+    for _, flux in df_recurrent.iterrows():
+        site_dep = str(flux['Point de départ']).strip()
+        site_arr = str(flux['Point de destination']).strip()
+        type_cont = str(flux['Nature de contenant']).strip()
+        
+        # Récupération des infos contenant (avec gestion d'erreur)
+        try:
+            cont_info = df_contenants[df_contenants['libellé'].str.strip() == type_cont].iloc[0]
+        except IndexError:
+            continue
+
         meilleure_capa = 0
         v_elu = None
+
+        # Recherche du meilleur véhicule autorisé
         for _, v in df_vehicules.iterrows():
-            # Vérification accessibilité (Image param_sites)
-            if df_sites.loc[df_sites['Libellé'] == site_dep, v['Types']].values[0] == "OUI" and \
-               df_sites.loc[df_sites['Libellé'] == site_arr, v['Types']].values[0] == "OUI":
-                
-                capa = calculer_capacite_max(v, cont_info) # Utilise le bin packing optimisé
-                if capa > meilleure_capa:
-                    meilleure_capa = capa
-                    v_elu = v
-
-        if v_elu is not None and meilleure_capa > 0:
-            duree = matrice_duree.loc[site_dep, site_arr]
-            a_quai = df_sites.loc[df_sites['Libellé'] == site_arr, 'Présence de quai'].values[0] == "OUI"
+            type_vehicule = str(v['Types']).strip()
             
-            t_manut = to_decimal_minutes(v_elu['Manutention avec quai (minutes / contenants)']) if a_quai \
-                      else to_decimal_minutes(v_elu['Manutention sans quai (minutes / contenants)'])
+            try:
+                # On vérifie l'accessibilité dans param_sites
+                # On cherche la valeur (OUI/NON) à l'intersection de la ligne 'Site' et la colonne 'Type Véhicule'
+                acc_dep = df_sites.loc[df_sites['Libellé'] == site_dep, type_vehicule].values[0]
+                acc_arr = df_sites.loc[df_sites['Libellé'] == site_arr, type_vehicule].values[0]
+                
+                if acc_dep == "OUI" and acc_arr == "OUI":
+                    capa = calculer_capacite_max(v, cont_info)
+                    if capa > meilleure_capa:
+                        meilleure_capa = capa
+                        v_elu = v
+            except (KeyError, IndexError):
+                continue
 
-            for j in jours_cols:
-                qte = flux[j]
-                if qte > 0:
-                    nb_trajets = math.ceil(qte / meilleure_capa)
-                    # Formule du poids fictif
-                    poids = (duree + (meilleure_capa * t_manut) + t_mise_quai) * nb_trajets
-                    poids_totaux_par_jour[j] += poids
+        # Si un véhicule est trouvé, on calcule le poids pour chaque jour
+        if v_elu is not None and meilleure_capa > 0:
+            try:
+                duree = matrice_duree.loc[site_dep, site_arr]
+                # Vérification présence de quai à la destination
+                a_quai = df_sites.loc[df_sites['Libellé'] == site_arr, 'Présence de quai'].values[0] == "OUI"
+                
+                # Sélection du temps de manutention (conversion minutes décimales)
+                if a_quai:
+                    t_manut_unit = to_decimal_minutes(v_elu['Manutention avec quai (minutes / contenants)'])
+                else:
+                    t_manut_unit = to_decimal_minutes(v_elu['Manutention sans quai (minutes / contenants)'])
 
-    # Identifier le nom de la colonne du jour le plus chargé (ex: "Quantité Lundi")
+                for j in jours_cols:
+                    qte = flux[j]
+                    if qte > 0:
+                        nb_trajets = math.ceil(qte / meilleure_capa)
+                        # Poids = (Durée + (Capa * T_manut) + Mise_à_quai) * Nb_trajets
+                        poids = (duree + (meilleure_capa * t_manut_unit) + t_mise_quai) * nb_trajets
+                        poids_totaux_par_jour[j] += poids
+            except KeyError:
+                continue
+
+    # ÉTAPE 2 : Identification du jour le plus chargé
     j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
-
-    print("-" * 30)
-    print(f"ANALYSE DE CHARGE TERMINÉE")
-    print(f"Jour le plus chargé identifié : {j_max_nom}")
-    print(f"Poids total calculé : {round(poids_totaux_par_jour[j_max_nom], 2)} minutes")
-    print("-" * 30)
-
     
-    # ÉTAPE 2 : Construction de la séquence type avec la règle des 10%
+    print("-" * 30)
+    print(f"ANALYSE JMAX : Le jour retenu est {j_max_nom}")
+    print(f"Charge totale : {round(poids_totaux_par_jour[j_max_nom], 2)} min")
+    print("-" * 30)
+    
+    # ÉTAPE 3 : Construction du tableau final avec la règle des 10%
     def appliquer_regle_marge(row):
         val_j_max = row[j_max_nom]
         val_max_semaine = max([row[j] for j in jours_cols])
@@ -108,9 +133,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
     df_sequence_type = df_recurrent.copy()
     df_sequence_type['Quantité_Séquence_Type'] = df_sequence_type.apply(appliquer_regle_marge, axis=1)
     
-    # On ne renvoie que le tableau final pour la suite de l'algorithme
     return df_sequence_type
-
 
 
 
