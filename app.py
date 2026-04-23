@@ -20,7 +20,7 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
-from modules.simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte
+from modules.simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_filtree
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
@@ -254,6 +254,30 @@ elif selected == "Simul tournées":  # Transport
                                 st.session_state['flotte_theorique'] = flotte_theorique
                                 
                                 st.info("💡 *Ce nombre représente le pic de véhicules nécessaires en simultané pour respecter vos fenêtres horaires sans optimisation de tournées.*")
+                            # ... (Après l'affichage des metrics de la flotte)
+                            if flotte_theorique:
+                                st.divider()
+                                st.subheader("📈 Analyse détaillée de la charge")
+                            
+                                # Création de la liste des filtres (Tous + les types de véhicules qui ont un besoin)
+                                liste_filtres = ["TOUS"] + list(flotte_theorique.keys())
+                                
+                                choix_v = st.selectbox("Filtrer le graphique par type de véhicule :", liste_filtres)
+                            
+                                # Récupération des horaires RH
+                                h_fin_rh = st.session_state["params_logistique"]["rh"]["h_fin_max"]
+                                h_deb_rh = st.session_state["params_logistique"]["rh"]["h_prise_min"]
+                            
+                                # Appel de la fonction de graphique filtré
+                                afficher_graphique_charge_filtree(
+                                    st.session_state['df_sequence_type'],
+                                    st.session_state['data']['param_vehicules'],
+                                    st.session_state['data']['param_contenants'],
+                                    st.session_state['data']['param_sites'],
+                                    choix_v,
+                                    h_fin_rh,
+                                    h_deb_rh
+                                )
                             else:
                                 st.warning("Aucun besoin de véhicule détecté. Vérifiez vos quantités et horaires.")
                                 
