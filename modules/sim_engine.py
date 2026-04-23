@@ -717,3 +717,68 @@ def ajustement_marginal_dynamique(couloirs):
                         poids_occupe -= 15 
 
     return couloirs
+
+
+
+def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_contenants, matrice_duree):
+    """
+    Orchestre la simulation complète avec affichage du suivi pour le débogage.
+    """
+    st.info("🚀 Démarrage du traitement des flux récurrents...")
+
+    # 1. Éclater les flux par type de véhicule
+    sous_problemes = eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants)
+    st.write(f"✅ Flux éclatés en {len(sous_problemes)} types de véhicules.", sous_problemes.keys())
+    
+    # Récupération des paramètres
+    params = st.session_state["params_logistique"]
+    h_start = params["rh"]["h_prise_min"]
+    h_end = params["rh"]["h_fin_max"]
+
+    tous_les_couloirs_fusionnes = {}
+
+    # 2. Boucle de traitement par type de véhicule
+    for v_type, df_v in sous_problemes.items():
+        with st.expander(f"🔍 Détails débogage - {v_type}", expanded=False):
+            # A. Fragmentation
+            jobs_c, jobs_i = fragmenter_flux_en_jobs(df_v, h_start, h_end)
+            st.write(f"📦 Fragmentation : {len(jobs_c)} jobs complets, {len(jobs_i)} jobs incomplets.")
+            
+            # B. Appairage
+            super_jobs_i = appairer_tous_les_jobs_incomplets(jobs_i, df_vehicules, df_contenants, matrice_duree)
+            st.write(f"🤝 Appairage : {len(super_jobs_i)} Super Jobs créés à partir des incomplets.")
+            if super_jobs_i:
+                st.write("Exemple 1er Super Job (Incomplet) :", super_jobs_i[0])
+            
+            # C. Fusion
+            liste_sj_v = preparer_liste_tous_super_jobs(jobs_c, super_jobs_i, matrice_duree)
+            st.write(f"📊 Total Super Jobs pour {v_type} : {len(liste_sj_v)}")
+            
+            # D. Cartographie
+            couloirs_v = cartographier_couloirs(liste_sj_v)
+            st.write(f"🗺️ Nombre de couloirs géographiques : {len(couloirs_v)}")
+            
+            # E. Lissage temporel
+            couloirs_v = etaler_uniformément_par_couloir(couloirs_v)
+            couloirs_v = ajustement_marginal_dynamique(couloirs_v)
+            st.write("⏳ Lissage et ajustement marginal terminés.")
+            
+            tous_les_couloirs_fusionnes.update(couloirs_v)
+
+    # 3. Ordonnancement final
+    st.write("🔃 Lancement de l'ordonnancement de la flotte (calcul des tournées)...")
+    resultat_final = ordonnancer_flotte_optimale(tous_les_couloirs_fusionnes, matrice_duree)
+
+    if resultat_final and resultat_final["succes"]:
+        postes = resultat_final["postes"]
+        st.success(f"🎯 Ordonnancement réussi ! {len(postes)} chauffeurs mobilisés.")
+        
+        # Visualisation rapide du premier poste pour vérification
+        if len(postes) > 0:
+            with st.expander("👀 Visualiser le planning du Chauffeur 01 (Débogage)", expanded=False):
+                st.write(postes[0])
+        
+        return postes
+    else:
+        st.error("❌ L'ordonnancement a échoué. Vérifiez les contraintes de temps ou le nombre de véhicules.")
+        return []
