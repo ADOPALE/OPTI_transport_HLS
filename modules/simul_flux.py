@@ -112,8 +112,9 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
             except KeyError:
                 st.error("on ne rentre jamais dans la boucle try")
                 continue
-            """
-            if v_elu is not None and meilleure_capa > 0:
+        """
+        # Si un véhicule est trouvé, on calcule le poids pour chaque jour
+        if v_elu is not None and meilleure_capa > 0:
             try:
                 # --- NETTOYAGE DE LA MATRICE ---
                 # On s'assure que les index/colonnes de la matrice sont propres pour le test
@@ -123,7 +124,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
 
                 if site_dep not in matrice_duree.index or site_arr not in matrice_duree.columns:
                     # C'est ici que ça coince !
-                    st.warning(f"Couple absent de la matrice : {site_dep} -> {site_arr}")
+                    # st.warning(f"Couple absent de la matrice : {site_dep} -> {site_arr}")
                     continue
 
                 duree = matrice_duree.loc[site_dep, site_arr]
@@ -149,6 +150,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
                 # On affiche la vraie erreur technique pour comprendre
                 st.error(f"Erreur technique sur le flux {site_dep} -> {site_arr} : {e}")
                 continue
+ 
 
     # ÉTAPE 2 : Identification du jour le plus chargé
     j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
