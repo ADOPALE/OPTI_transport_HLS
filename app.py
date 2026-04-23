@@ -259,22 +259,17 @@ elif selected == "Simul tournées":  # Transport
                                 st.divider()
                                 st.subheader("📈 Analyse détaillée de la charge")
                             
-                                # Création de la liste des filtres (Tous + les types de véhicules qui ont un besoin)
-                                liste_filtres = ["TOUS"] + list(flotte_theorique.keys())
-                                
-                                choix_v = st.selectbox("Filtrer le graphique par type de véhicule :", liste_filtres)
                             
                                 # Récupération des horaires RH
                                 h_fin_rh = st.session_state["params_logistique"]["rh"]["h_fin_max"]
                                 h_deb_rh = st.session_state["params_logistique"]["rh"]["h_prise_min"]
                             
                                 # Appel de la fonction de graphique filtré
-                                afficher_graphique_charge_empilee(
+                               afficher_graphique_charge_empilee(
                                     st.session_state['df_sequence_type'],
                                     st.session_state['data']['param_vehicules'],
                                     st.session_state['data']['param_contenants'],
                                     st.session_state['data']['param_sites'],
-                                    choix_v,
                                     h_fin_rh,
                                     h_deb_rh
                                 )
