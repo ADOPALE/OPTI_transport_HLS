@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from Import import extraction_donnees
+from modules.Import import extraction_donnees
 import math
 
 
