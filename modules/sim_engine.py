@@ -446,3 +446,45 @@ def cartographier_couloirs(liste_tous_super_jobs):
         couloirs[nom_couloir][sens].append(sj)
 
     return couloirs
+
+
+
+
+"""
+Répartit les jobs par couloir selon leur représentativité :
+- Groupes (fenêtres identiques) : Étalement uniforme sur la fenêtre.
+- Solitaires : Positionnement strict au plus tôt (h_dispo_max).
+"""
+def etaler_uniformément_par_couloir(couloirs):
+    for nom_couloir, sens_dict in couloirs.items():
+        for sens, liste_sj in sens_dict.items():
+            # 1. Groupement par fenêtre identique (h_min, h_max)
+            groupes_fenetres = {}
+            for sj in liste_sj:
+                h_max_depart = sj['h_deadline_min'] - sj['poids_total']
+                cle = (sj['h_dispo_max'], h_max_depart)
+                if cle not in groupes_fenetres:
+                    groupes_fenetres[cle] = []
+                groupes_fenetres[cle].append(sj)
+            
+            # 2. Application des deux régimes de positionnement
+            for (h_min, h_max), jobs in groupes_fenetres.items():
+                nb_jobs = len(jobs)
+                
+                if nb_jobs == 1:
+                    # OPTION 3 : Job solitaire -> Au plus tôt
+                    jobs[0]['h_depart_actuelle'] = h_min
+                
+                else:
+                    # ÉTALEMENT : Répartition uniforme sur la fenêtre disponible
+                    # On utilise toute l'amplitude de h_min à h_max
+                    if h_max > h_min:
+                        intervalle = (h_max - h_min) / (nb_jobs - 1)
+                        for idx, sj in enumerate(jobs):
+                            sj['h_depart_actuelle'] = h_min + (idx * intervalle)
+                    else:
+                        # Si h_min == h_max, pas de choix, tout au même moment
+                        for sj in jobs:
+                            sj['h_depart_actuelle'] = h_min
+                            
+    return couloirs
