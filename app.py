@@ -21,6 +21,7 @@ from modules.resultats_bio import (
 )
 from modules.param_flux import afficher_parametres_logistique
 from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
+from modules.sim_engine import traitement_flux_recurrents, ordonnancer_flotte_optimale
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
@@ -283,6 +284,60 @@ elif selected == "Simul tournées":  # Transport
         st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
         
 elif selected == "Synthèse transport":
+    if 'df_sequence_type' in st.session_state:
+        st.title("🚚 Simulation du Séquençage & Tournées")
+        
+        # On récupère la matrice de distance (déjà calculée ou importée)
+        # On suppose qu'elle est dans st.session_state['matrix'] ou chargée via GeoMatrix
+        matrice_duree = st.session_state.get('matrix_lat_lon') # Ajustez selon votre nom de clé
+        
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            st.subheader("Paramètres")
+            lancer_simul = st.button("🚀 Lancer le séquençage", use_container_width=True)
+            
+        with col2:
+            if lancer_simul:
+                if matrice_duree is None:
+                    st.error("⚠️ Matrice de temps introuvable. Calculez-la dans 'Matrice de distance'.")
+                else:
+                    try:
+                        # IMPORT DU MOTEUR (Assurez-vous que sim_engine est bien importé en haut du fichier)
+                        from modules.sim_engine import traitement_flux_recurrents
+                        
+                        # 1. EXECUTION DU MOTEUR
+                        with st.spinner("Fragmentation, Appairage et Séquençage en cours..."):
+                            postes_chauffeurs = traitement_flux_recurrents(
+                                st.session_state['df_sequence_type'],
+                                st.session_state['data']['param_sites'],
+                                st.session_state['data']['param_vehicules'],
+                                st.session_state['data']['param_contenants'],
+                                matrice_duree
+                            )
+                        
+                        # 2. STOCKAGE DU RESULTAT
+                        if postes_chauffeurs:
+                            st.session_state['planning_detaille'] = postes_chauffeurs
+                            st.success(f"✅ Simulation terminée : {len(postes_chauffeurs)} chauffeurs planifiés.")
+                            
+                            # Petit aperçu rapide sous forme de métriques
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric("Chauffeurs", len(postes_chauffeurs))
+                            amp_moy = sum(p['amplitude'] for p in postes_chauffeurs) / len(postes_chauffeurs)
+                            m2.metric("Amplitude Moy.", f"{int(amp_moy)} min")
+                            total_nettoyages = sum(p['total_nettoyages'] for p in postes_chauffeurs)
+                            m3.metric("Désinfections (HSJ)", total_nettoyages)
+                            
+                    except Exception as e:
+                        st.error(f"Erreur lors de la simulation : {e}")
+                        st.exception(e) # Pour voir la trace complète en débug
+
+    else:
+        st.warning("⚠️ Veuillez générer la 'Séquence Type' dans l'onglet précédent avant de lancer le séquençage.")
+
+
+    
     if 'planning_detaille' in st.session_state:
         # Utilise la clé 'param_contenants' conforme à ta note technique
         afficher_resultats_complets(
