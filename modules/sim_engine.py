@@ -231,84 +231,72 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
 
     for sj in jobs_copy:
         attribue = False
+        raison_echec = "Aucun camion disponible" # Par défaut
         
         for c in camions:
-            # --- ÉTAPE A : ANALYSE DU CHAUFFEUR ACTUEL ---
             besoin_nouveau_chauffeur = False
             if not c['postes'] or c['postes'][-1]['fini']:
                 besoin_nouveau_chauffeur = True
             else:
                 p_actuel = c['postes'][-1]
-                # On teste si le chauffeur actuel peut faire le job
                 score, h_dep, net = calculer_score_opportuniste(p_actuel, sj, matrice_duree, t_fin)
                 h_fin_m = h_dep + sj['poids_total']
                 h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
-                
                 debut_service = p_actuel['h_debut_service'] if p_actuel['h_debut_service'] is not None else (h_dep - t_prepa)
+                
                 if (h_ret - debut_service > max_poste) or (h_ret > h_limite):
-                    p_actuel['fini'] = True # On clôture son service
+                    p_actuel['fini'] = True
                     besoin_nouveau_chauffeur = True
             
-            # --- ÉTAPE B : TENTATIVE AVEC NOUVEAU CHAUFFEUR (RELÈVE) ---
             if besoin_nouveau_chauffeur:
-                # Le camion est dispo au plus tôt à h_dispo_vehicule ou h_start
                 h_dispo_v = max(c['h_dispo_vehicule'], h_start)
-                
-                # Simulation d'un nouveau poste
                 p_neuf = {
                     'id_chauffeur': f"{c['id_camion']}_CH_{len(c['postes'])+1}",
-                    'h_debut_service': None,
-                    'h_dispo': h_dispo_v + t_prepa,
-                    'pos': c['pos_actuelle'],
-                    'missions': [],
-                    'amplitude': 0,
-                    'fini': False,
-                    'dernier_type_sanitaire': None,
-                    'total_nettoyages': 0
+                    'h_debut_service': None, 'h_dispo': h_dispo_v + t_prepa,
+                    'pos': c['pos_actuelle'], 'missions': [], 'amplitude': 0,
+                    'fini': False, 'dernier_type_sanitaire': None, 'total_nettoyages': 0
                 }
                 
                 score, h_dep, net = calculer_score_opportuniste(p_neuf, sj, matrice_duree, t_fin)
                 h_fin_m = h_dep + sj['poids_total']
                 h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
                 
-                # Vérification sur le nouveau chauffeur
-                if (h_fin_m <= sj['h_deadline_min']) and \
-                   (h_ret - (h_dep - t_prepa) <= max_poste) and \
-                   (h_ret <= h_limite):
-                    
-                    p_neuf['h_debut_service'] = h_dep - t_prepa
-                    c['postes'].append(p_neuf)
-                    p_cible = c['postes'][-1]
-                else:
-                    continue # Ce camion ne peut pas, même avec un chauffeur frais
+                # --- DIAGNOSTIC PRECIS ---
+                if h_fin_m > sj['h_deadline_min']:
+                    raison_echec = f"Deadline dépassée ({h_fin_m:.1f} > {sj['h_deadline_min']})"
+                    continue
+                if (h_ret - (h_dep - t_prepa)) > max_poste:
+                    raison_echec = f"Amplitude trop longue ({(h_ret - (h_dep - t_prepa)):.1f} > {max_poste})"
+                    continue
+                if h_ret > h_limite:
+                    raison_echec = f"Retour dépôt trop tard ({h_ret:.1f} > {h_limite})"
+                    continue
+                
+                p_neuf['h_debut_service'] = h_dep - t_prepa
+                c['postes'].append(p_neuf)
+                p_cible = c['postes'][-1]
             else:
-                # On utilise le chauffeur actuel qui était OK
                 p_cible = c['postes'][-1]
 
-            # --- ÉTAPE C : VALIDATION FINALE DE L'ATTRIBUTION ---
-            # On recalcule les temps sur p_cible pour être sûr
+            # Si on arrive ici, c'est que p_cible est valide
             score, h_dep, net = calculer_score_opportuniste(p_cible, sj, matrice_duree, t_fin)
             h_fin_m = h_dep + sj['poids_total']
-            
             p_cible['missions'].append({'sj': sj, 'h_dep': h_dep, 'h_fin': h_fin_m, 'nettoyage_effectue': net})
             p_cible['pos'] = sj['jobs'][-1].destination.upper()
             p_cible['h_dispo'] = h_fin_m
             p_cible['dernier_type_sanitaire'] = sj['jobs'][0].type_propre_sale
             if net: p_cible['total_nettoyages'] += 1
-            
             c['pos_actuelle'] = p_cible['pos']
             c['h_dispo_vehicule'] = h_fin_m
-            
-            # Mise à jour amplitude
             h_ret_final = h_fin_m + matrice_duree.loc[p_cible['pos'], depot] + t_fin
             p_cible['amplitude'] = h_ret_final - p_cible['h_debut_service']
-            
             attribue = True
             break
             
         if not attribue:
-            # DEBUG : Pourquoi ce job a échoué ?
-            st.write(f"❌ Échec critique sur {sj['id_super_job']} (Deadline: {sj['h_deadline_min']})")
+            # On n'affiche le message que pour la dernière tentative (quand n_camions est max)
+            if n_camions >= 100:
+                st.error(f"❌ Échec sur {sj['id_super_job']} : {raison_echec}")
             return {"succes": False}
 
     return {"succes": True, "camions": camions}
