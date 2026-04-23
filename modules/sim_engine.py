@@ -579,29 +579,31 @@ Fusionne les jobs complets et les super-jobs d'incomplets dans une liste unique.
 Chaque job complet devient un Super Job à part entière pour uniformiser le traitement.
 """
 def preparer_liste_tous_super_jobs(jobs_complets, super_jobs_incomplets, matrice_duree):
-    liste_globale = []
+    liste_finale = []
     
-    # 1. On transforme les jobs complets en Super Jobs
+    # 1. Traitement des jobs complets (déjà optimaux)
     for j in jobs_complets:
-        poids = matrice_duree.loc[j.origin, j.destination] + 10 # Trajet + manoeuvre
-        liste_globale.append({
-            'id_super_job': f"SJ_C_{j.job_id}",
-            'jobs': [j],
-            'poids_total': poids,
-            'type_combinaison': 'COMPLET',
-            'h_dispo_max': j.h_dispo,
-            'h_deadline_min': j.h_deadline
-        })
+        try:
+            poids = matrice_duree.loc[j.origin, j.destination] + 10
+        except KeyError:
+            # Si le site est manquant, on affiche l'erreur et on met un poids par défaut
+            st.error(f"❌ Site manquant dans la matrice : {j.origin} ou {j.destination}")
+            poids = 30 
+            
+        sj = {
+            "id_super_job": f"SJ_C_{j.job_id}",
+            "jobs": [j],
+            "poids_total": poids,
+            "type_combinaison": "DIRECT_COMPLET",
+            "h_dispo_max": j.h_dispo,
+            "h_deadline_min": j.h_deadline
+        }
+        liste_finale.append(sj)
         
-    # 2. On ajoute les super jobs issus des incomplets
-    liste_globale.extend(super_jobs_incomplets)
+    # 2. Ajout des super jobs issus des incomplets
+    liste_finale.extend(super_jobs_incomplets)
     
-    # 3. Tri chronologique global
-    liste_globale.sort(key=lambda x: x['h_dispo_max'])
-    
-    return liste_globale
-
-
+    return liste_finale
 
 
 """
