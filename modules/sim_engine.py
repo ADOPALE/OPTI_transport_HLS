@@ -206,14 +206,9 @@ def tenter_sequencage(n_vehicules, jobs_a_faire, depot, matrice_duree, h_start, 
 
 
 def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants):
-    """
-    Etape 1 : Pour chaque flux, identifie le véhicule optimal qui peut entrer 
-    sur les deux sites et qui maximise l'emport.
-    """
     df_travail = df_sequence_type.copy()
-    col_site = df_sites.columns[0] # Le nom de la colonne des sites
+    col_site = df_sites.columns[0] 
     
-    # Listes pour stocker les résultats de l'analyse
     vehicules_cibles = []
     capacites_max = []
 
@@ -222,20 +217,24 @@ def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_conte
         site_arr = str(flux['Point de destination']).strip()
         type_cont = str(flux['Nature de contenant']).strip()
         
-        # UTILISATION DE TA FONCTION : identifier_meilleur_vehicule
-        # Elle vérifie l'accès (OUI/NON) et lance le bin-packing
         v_elu, capa = identifier_meilleur_vehicule(
-            site_dep, 
-            site_arr, 
-            type_cont, 
-            df_vehicules, 
-            df_contenants, 
-            df_sites, 
-            col_site
+            site_dep, site_arr, type_cont, 
+            df_vehicules, df_contenants, df_sites, col_site
         )
         
         if v_elu is not None:
-            vehicules_cibles.append(str(v_elu['Types']).strip().upper())
+            # --- CORRECTION ICI ---
+            # On vérifie si v_elu est une Series (ligne de DF) et on extrait la valeur
+            if hasattr(v_elu, 'Types'):
+                # Si c'est une Series Pandas, on prend la valeur brute
+                nom_v = v_elu['Types']
+                if hasattr(nom_v, 'values'): # Cas où c'est encore une Series
+                    nom_v = nom_v.values[0]
+                
+                vehicules_cibles.append(str(nom_v).strip().upper())
+            else:
+                vehicules_cibles.append(str(v_elu).strip().upper())
+                
             capacites_max.append(capa)
         else:
             vehicules_cibles.append("INCONNU")
@@ -244,8 +243,9 @@ def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_conte
     df_travail['vehicule_cible'] = vehicules_cibles
     df_travail['capa_max_vehicule'] = capacites_max
     
-    # On éclate en sous-tableaux par type de véhicule
-    # On ignore les flux "INCONNU" (ceux qui ne rentrent nulle part ou sites inaccessibles)
+    # Nettoyage final pour s'assurer qu'aucune Series n'a survécu
+    df_travail['vehicule_cible'] = df_travail['vehicule_cible'].astype(str)
+    
     sous_problemes = {
         v_type: df_travail[df_travail['vehicule_cible'] == v_type].copy()
         for v_type in df_travail['vehicule_cible'].unique() if v_type != "INCONNU"
