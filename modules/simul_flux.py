@@ -140,7 +140,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
     
     # Affichage complet
     st.info(f"📊 **Jmax identifié** : {j_max_nom.replace('Quantité ', '')}")
-    st.caption(f"⚖️ **Détail des charges calculées :**\n\n{detail_jours}")
+    st.write(f"⚖️ **Détail des charges calculées :**\n\n{detail_jours}")
 
 
     def appliquer_regle_marge(row):
