@@ -468,14 +468,12 @@ Cherche les partenaires idéaux pour un job pivot vers une destination commune.
 Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
 """
 def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    """Groupe par destination (Collecte multi-points)"""
+    """Groupe par destination (Collecte multi-points) avec vérification temporelle"""
     v_type = str(job_pivot.vehicule_type).strip().upper()
     col_nom_v = df_vehicules.columns[0]
     
-    # On cherche le véhicule dans le DF (qui est déjà filtré par tes soins)
     mask_v = df_vehicules[col_nom_v].str.strip().str.upper() == v_type
     if not mask_v.any():
-        # Si le véhicule n'est pas dans le DF, c'est qu'il est exclu ou introuvable
         return [], 9999
     vehicule = df_vehicules[mask_v].iloc[0]
     
@@ -486,16 +484,19 @@ def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_cont
     
     meilleure_comb = []
     try:
-        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
+        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination] + 10
     except KeyError:
-        st.error(f"❌ Site {job_pivot.origin} ou {job_pivot.destination} absent de la matrice.")
         return [], 9999
 
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
+        
+        # 1. Vérification physique (Bin Packing)
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test_temp = comb_test + [c]
+            
+            # 2. Calcul du nouveau temps de trajet (poids)
             points_dep = list(set([j.origin for j in comb_test_temp]))
             try:
                 poids_test = 0
@@ -503,16 +504,21 @@ def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_cont
                 for next_pt in points_dep[1:]:
                     poids_test += matrice_duree.loc[curr, next_pt] + 10 
                     curr = next_pt
-                poids_test += matrice_duree.loc[curr, job_pivot.destination]
+                poids_test += matrice_duree.loc[curr, job_pivot.destination] + 10
                 
-                comb_test = comb_test_temp
-                meilleure_comb = comb_test[1:] 
-                poids_min = poids_test
-            except KeyError as e:
-                st.warning(f"⚠️ Groupage impossible : site {e} absent de la matrice.")
+                # 3. VERIFICATION TEMPORELLE CRITIQUE
+                h_dispo_groupe = max(j.h_dispo for j in comb_test_temp)
+                h_deadline_groupe = min(j.h_deadline for j in comb_test_temp)
+                
+                if h_dispo_groupe + poids_test <= h_deadline_groupe:
+                    comb_test = comb_test_temp
+                    meilleure_comb = comb_test[1:] 
+                    poids_min = poids_test
+                else:
+                    continue # Trop long pour la deadline
+            except KeyError:
                 continue
     return meilleure_comb, poids_min
-
 
 
 
@@ -523,7 +529,7 @@ Cherche à grouper des jobs partant du même quai vers des destinations différe
 Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
 """
 def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    """Groupe par départ (Tournée de distribution)"""
+    """Groupe par départ (Tournée de distribution) avec vérification temporelle"""
     v_type = str(job_pivot.vehicule_type).strip().upper()
     col_nom_v = df_vehicules.columns[0]
     
@@ -539,12 +545,22 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
     
     meilleure_comb = []
     poids_min = 9999
+    
+    # Init poids par défaut
+    try:
+        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination] + 10
+    except:
+        pass
+
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
+        
+        # 1. Vérification physique
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test_temp = comb_test + [c]
             dests_uniques = list(set([j.destination for j in comb_test_temp]))
+            
             try:
                 poids_test = 0
                 curr = job_pivot.origin
@@ -554,18 +570,20 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
                     poids_test += matrice_duree.loc[curr, proche] + 10 
                     curr = proche
                     temp_dests.remove(proche)
-                comb_test = comb_test_temp
-                meilleure_comb = comb_test[1:]
-                poids_min = poids_test
-            except KeyError as e:
-                st.warning(f"⚠️ Groupage impossible : site {e} absent de la matrice.")
+                
+                # 2. VERIFICATION TEMPORELLE CRITIQUE
+                h_dispo_groupe = max(j.h_dispo for j in comb_test_temp)
+                h_deadline_groupe = min(j.h_deadline for j in comb_test_temp)
+                
+                if h_dispo_groupe + poids_test <= h_deadline_groupe:
+                    comb_test = comb_test_temp
+                    meilleure_comb = comb_test[1:]
+                    poids_min = poids_test
+                else:
+                    continue
+            except KeyError:
                 continue
             
-    if not meilleure_comb:
-        try:
-            poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
-        except KeyError:
-            poids_min = 9999
     return meilleure_comb, poids_min
 
 
@@ -633,16 +651,22 @@ Fusionne les jobs complets et les super-jobs d'incomplets dans une liste unique.
 Chaque job complet devient un Super Job à part entière pour uniformiser le traitement.
 """
 def preparer_liste_tous_super_jobs(jobs_complets, super_jobs_incomplets, matrice_duree):
+    """Fusionne et sécurise les jobs complets et groupés"""
     liste_finale = []
     
-    # 1. Traitement des jobs complets (déjà optimaux)
+    # 1. Traitement des jobs complets
     for j in jobs_complets:
         try:
             poids = matrice_duree.loc[j.origin, j.destination] + 10
         except KeyError:
-            # Si le site est manquant, on affiche l'erreur et on met un poids par défaut
             st.error(f"❌ Site manquant dans la matrice : {j.origin} ou {j.destination}")
             poids = 30 
+        
+        # SÉCURITÉ : Vérifier si le job complet est réalisable en direct
+        if j.h_dispo + poids > j.h_deadline:
+            st.warning(f"⚠️ JOB IMPOSSIBLE (Excel) : {j.job_id} ({j.origin}->{j.destination}). "
+                       f"Prêt à {j.h_dispo} min, trajet {poids} min, mais deadline à {j.h_deadline} min. Ignoré.")
+            continue
             
         sj = {
             "id_super_job": f"SJ_C_{j.job_id}",
@@ -654,7 +678,7 @@ def preparer_liste_tous_super_jobs(jobs_complets, super_jobs_incomplets, matrice
         }
         liste_finale.append(sj)
         
-    # 2. Ajout des super jobs issus des incomplets
+    # 2. Ajout des super jobs issus des incomplets (déjà filtrés par les fonctions précédentes)
     liste_finale.extend(super_jobs_incomplets)
     
     return liste_finale
