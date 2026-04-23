@@ -20,7 +20,7 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
-from modules.simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_filtree
+from modules.simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
@@ -269,7 +269,7 @@ elif selected == "Simul tournées":  # Transport
                                 h_deb_rh = st.session_state["params_logistique"]["rh"]["h_prise_min"]
                             
                                 # Appel de la fonction de graphique filtré
-                                afficher_graphique_charge_filtree(
+                                afficher_graphique_charge_empilee(
                                     st.session_state['df_sequence_type'],
                                     st.session_state['data']['param_vehicules'],
                                     st.session_state['data']['param_contenants'],
