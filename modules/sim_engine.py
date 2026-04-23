@@ -741,7 +741,7 @@ def etaler_uniformément_par_couloir(couloirs):
 Lissage marginal dynamique (on ajuste la charge pour le véhicule au cours de la journée. 
 """
 def ajustement_marginal_dynamique(couloirs):
-    # 1. Récupération des capacités et des bornes temporelles
+
     if "params_logistique" not in st.session_state:
         st.error("Configuration logistique manquante.")
         return couloirs
@@ -749,14 +749,10 @@ def ajustement_marginal_dynamique(couloirs):
     params = st.session_state["params_logistique"]
     capacites_flotte = st.session_state.get("resultat_lissage_flotte", {})
     
-    # Extraction dynamique des bornes (conversion en minutes)
     h_debut_explo = to_decimal_minutes(params["rh"]["h_prise_min"])
     h_fin_explo = to_decimal_minutes(params["rh"]["h_fin_max"])
     
-    # 2. Création de la liste des créneaux de 30 min entre ces deux bornes
-    creneaux = list(range(int(h_debut_explo), int(h_fin_explo), 30))
-    
-    # 3. Mise à plat et filtrage par véhicule
+    # 1. Mise à plat de tous les jobs pour analyser la charge globale par type de véhicule
     tous_les_jobs = []
     for sens_dict in couloirs.values():
         for liste_sj in sens_dict.values():
@@ -765,14 +761,17 @@ def ajustement_marginal_dynamique(couloirs):
     types_v = set(j['jobs'][0].vehicule_type for j in tous_les_jobs)
     
     for v_type in types_v:
-        # On récupère la capacité spécifique calculée pour ce type
         capa_camions = capacites_flotte.get(v_type.upper(), 1)
+        # Capacité en minutes-camion pour un créneau de 30 min
         CAPA_TEMPS_CRENEAU = capa_camions * 30 
         
         jobs_v = [j for j in tous_les_jobs if j['jobs'][0].vehicule_type == v_type]
         
+        # On définit des créneaux de 30 min
+        creneaux = list(range(int(h_debut_explo), int(h_fin_explo), 30))
+        
         for c in creneaux:
-            # Calcul du poids total sur le créneau [c, c + 30]
+            # Identifier les jobs qui occupent ce créneau
             jobs_actifs = []
             poids_occupe = 0
             
@@ -780,24 +779,36 @@ def ajustement_marginal_dynamique(couloirs):
                 h_dep = j['h_depart_actuelle']
                 h_fin = h_dep + j['poids_total']
                 
+                # Si le job chevauche le créneau [c, c + 30]
                 if h_dep < c + 30 and h_fin > c:
-                    occ = min(h_fin, c + 30) - max(h_dep, c)
-                    poids_occupe += occ
+                    intersection = min(h_fin, c + 30) - max(h_dep, c)
+                    poids_occupe += intersection
                     jobs_actifs.append(j)
 
-            # 4. Lissage si dépassement de la capacité temps
+            # 2. Si surcharge, on tente de décaler
             if poids_occupe > CAPA_TEMPS_CRENEAU:
-                # Tri par marge de manoeuvre décroissante
+                # On trie : ceux qui ont le plus de marge (slack) en premier
+                # Marge = Deadline - (Heure Fin Actuelle)
                 jobs_actifs.sort(key=lambda x: (x['h_deadline_min'] - (x['h_depart_actuelle'] + x['poids_total'])), reverse=True)
                 
                 for sj in jobs_actifs:
-                    if poids_occupe <= CAPA_TEMPS_CRENEAU: break
+                    if poids_occupe <= CAPA_TEMPS_CRENEAU: 
+                        break
                     
                     nouveau_dep = sj['h_depart_actuelle'] + 15
-                    # On vérifie que le décalage ne dépasse pas la deadline ET la fin d'exploitation
+                    
+                    # --- CONDITION DE SÉCURITÉ CRITIQUE ---
+                    # Le nouveau départ est autorisé SI ET SEULEMENT SI :
+                    # 1. Il finit avant sa deadline
+                    # 2. Il finit avant la fin de l'exploitation globale
                     if nouveau_dep + sj['poids_total'] <= min(sj['h_deadline_min'], h_fin_explo):
                         sj['h_depart_actuelle'] = nouveau_dep
                         poids_occupe -= 15 
+                    else:
+                        # Si on ne peut pas décaler ce job sans briser la deadline, 
+                        # on le laisse là. L'ordonnancement devra gérer la surcharge 
+                        # en ajoutant un camion si nécessaire.
+                        pass
 
     return couloirs
 
