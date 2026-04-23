@@ -265,7 +265,7 @@ elif selected == "Simul tournées":  # Transport
                                 h_deb_rh = st.session_state["params_logistique"]["rh"]["h_prise_min"]
                             
                                 # Appel de la fonction de graphique filtré
-                               afficher_graphique_charge_empilee(
+                                afficher_graphique_charge_empilee(
                                     st.session_state['df_sequence_type'],
                                     st.session_state['data']['param_vehicules'],
                                     st.session_state['data']['param_contenants'],
