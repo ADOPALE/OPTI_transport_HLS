@@ -154,11 +154,32 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
     # Estimation N_max (base de départ pour la boucle de test)
     # On commence par tester avec un nombre de camions égal au nombre de jobs si besoin
     n_max = len(tous_les_jobs)
+    
     if n_max == 0:
         return None
     
     solution_optimale = None
 
+    ############ --- STATISTIQUES AVANT SÉQUENÇAGE ---
+    df_debug = pd.DataFrame([
+        {
+            "ID": sj['id_super_job'],
+            "Type Véhicule": sj['jobs'][0].vehicule_type,
+            "Poids (min)": sj['poids_total'],
+            "Dispo": sj['h_dispo_max']
+        } for sj in tous_les_jobs
+    ])
+    
+    st.write("### 📊 Récapitulatif des Super Jobs à ordonnancer")
+    st.dataframe(df_debug.groupby("Type Véhicule").size().reset_index(name='Nombre de Jobs'))
+    
+    # Estimation N_max (base de départ)
+    n_max = len(tous_les_jobs)
+    st.info(f"🔄 Tentative de séquençage avec un plafond de {n_max} chauffeurs...")
+    #########@
+
+
+    
     # Test itératif de N camions à 1 camion pour trouver le minimum viable
     # On descend pour voir jusqu'où on peut réduire la flotte
     for n_test in range(n_max, 0, -1):
