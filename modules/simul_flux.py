@@ -123,44 +123,55 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
 Calcule le nombre maximum absolu de contenants dans un véhicule 
 en testant des agencements complexes (orientations mixtes).
 """
+import math
+
 def calculer_capacite_max(vehicule, contenant):
-    # 1. Vérification de compatibilité
-    nom_cont = contenant['libellé']
-    # On vérifie dans le tableau véhicule si la colonne du contenant est à "OUI"
-    if nom_cont not in vehicule or vehicule[nom_cont] != "OUI":
+    """
+    Calcule le nombre maximum absolu de contenants dans un véhicule.
+    Nettoie les noms de colonnes et utilise un bin-packing 2D optimisé.
+    """
+    # 1. Nettoyage des noms de colonnes (enlève les espaces invisibles)
+    # On transforme les Series en dictionnaires avec clés "propres"
+    v = {str(k).strip(): val for k, val in vehicule.items()}
+    c = {str(k).strip(): val for k, val in contenant.items()}
+
+    # 2. Vérification de compatibilité
+    nom_cont = c.get('libellé')
+    # On vérifie si le véhicule accepte ce contenant (colonne à "OUI")
+    if not nom_cont or v.get(nom_cont) != "OUI":
         return 0
 
-    # 2. Récupération des dimensions et contraintes
-    L_v = vehicule['dim longueur interne (m)']
-    l_v = vehicule['dim largeur interne (m)']
-    P_max_v = vehicule['Poids max chargement']
-    
-    L_c = contenant['dim longueur (m)']
-    l_c = contenant['dim largeur (m) '] # Note: respect de l'espace dans ton Excel
-    poids_c = contenant['Poids plein (T)']
+    # 3. Récupération des dimensions et contraintes
+    try:
+        L_v = v['dim longueur interne (m)']
+        l_v = v['dim largeur interne (m)']
+        P_max_v = v['Poids max chargement']
+        
+        L_c = c['dim longueur (m)']
+        l_c = c['dim largeur (m)']
+        poids_c = c['Poids plein (T)']
+    except KeyError as e:
+        # En cas de colonne vraiment manquante, on lève une erreur explicite
+        raise KeyError(f"Erreur : La colonne {e} est introuvable dans les paramètres.")
 
-    # 3. Moteur de calcul récursif pour le remplissage optimal (Guillotine Cut)
+    # 4. Moteur de calcul récursif (Guillotine Cut) pour maximiser le remplissage au sol
     def solve_max(L, l, w, h, memo):
-        # On ne peut pas placer le contenant si l'espace est trop petit
+        # Si l'espace est trop petit pour le contenant (dans les deux sens)
         if (L < w and L < h) or (l < w and l < h):
             return 0
         
-        # Utilisation de la mémoïsation pour accélérer le calcul
-        state = (L, l)
+        state = (round(L, 3), round(l, 3))
         if state in memo:
             return memo[state]
         
         res = 0
-        # Option 1 : On place le contenant dans le sens normal (w x h)
+        # Test orientation A (Normal)
         if L >= w and l >= h:
-            # On découpe l'espace restant soit horizontalement soit verticalement
-            # Découpe A : un rectangle à côté (L-w x l) et un devant (w x l-h)
             optA = 1 + solve_max(L - w, l, w, h, memo) + solve_max(w, l - h, w, h, memo)
-            # Découpe B : un rectangle devant (L x l-h) et un à côté (L-w x h)
             optB = 1 + solve_max(L, l - h, w, h, memo) + solve_max(L - w, h, w, h, memo)
             res = max(res, optA, optB)
             
-        # Option 2 : On place le contenant pivoté à 90° (h x w)
+        # Test orientation B (Pivoté 90°)
         if L >= h and l >= w:
             optA_rot = 1 + solve_max(L - h, l, w, h, memo) + solve_max(h, l - w, w, h, memo)
             optB_rot = 1 + solve_max(L, l - w, w, h, memo) + solve_max(L - h, w, h, h, memo)
@@ -169,13 +180,12 @@ def calculer_capacite_max(vehicule, contenant):
         memo[state] = res
         return res
 
-    # Calcul du nombre max au sol
+    # Calcul du maximum au sol
     nb_max_sol = solve_max(L_v, l_v, L_c, l_c, {})
 
-    # 4. Vérification de la contrainte de poids
+    # 5. Limitation par le poids maximum autorisé
     if poids_c > 0:
-        # Le poids max chargement est en Tonnes, tout comme le poids plein du contenant
-        nb_max_poids = P_max_v // poids_c
+        nb_max_poids = int(P_max_v // poids_c)
         capacite_finale = min(nb_max_sol, nb_max_poids)
     else:
         capacite_finale = nb_max_sol
