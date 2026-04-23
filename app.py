@@ -289,8 +289,7 @@ elif selected == "Synthèse transport":
         
         # On récupère la matrice de distance (déjà calculée ou importée)
         # On suppose qu'elle est dans st.session_state['matrix'] ou chargée via GeoMatrix
-        matrice_duree = st.session_state.get('matrix_lat_lon') # Ajustez selon votre nom de clé
-        
+        matrice_duree=st.session_state['data']['matrice_duree']
         col1, col2 = st.columns([1, 3])
         
         with col1:
