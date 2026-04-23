@@ -219,6 +219,46 @@ elif selected == "Simul tournées":  # Transport
         if 'df_sequence_type' in st.session_state:
             st.write("### 📋 Tableau de la Séquence Type")
             st.dataframe(st.session_state['df_sequence_type'], use_container_width=True)
+
+        # 5. Calcul de la Flotte Théorique (Etape 2.b)
+        if 'df_sequence_type' in st.session_state:
+            st.divider()
+            st.subheader("🚛 Estimation de la Flotte Théorique (Cible)")
+            
+            # On vérifie si les paramètres logistiques sont bien configurés
+            if "params_logistique" not in st.session_state:
+                st.warning("⚠️ Pour calculer la flotte, veuillez d'abord configurer vos véhicules et le taux de remplissage dans l'onglet 'Paramètres'.")
+            else:
+                if st.button("Calculer le besoin en véhicules", type="secondary", use_container_width=True):
+                    with st.spinner("⏳ Lissage des flux sur les fenêtres horaires..."):
+                        try:
+                            # Appel de ta fonction de lissage
+                            flotte_theorique = simuler_lissage_flotte(
+                                df_sequence_type=st.session_state['df_sequence_type'],
+                                df_vehicules=st.session_state['data']['param_vehicules'],
+                                df_contenants=st.session_state['data']['param_contenants'],
+                                matrice_duree=st.session_state['data']['matrice_duree'],
+                                df_sites=st.session_state['data']['param_sites']
+                            )
+                            
+                            if flotte_theorique:
+                                # Affichage des résultats sous forme de colonnes
+                                st.write("### 📊 Besoin maximum par type de véhicule")
+                                cols = st.columns(len(flotte_theorique))
+                                
+                                for i, (v_type, nb) in enumerate(flotte_theorique.items()):
+                                    with cols[i]:
+                                        st.metric(label=f"🚚 {v_type}", value=f"{nb} unités")
+                                
+                                # Stockage pour la suite (optimisation)
+                                st.session_state['flotte_theorique'] = flotte_theorique
+                                
+                                st.info("💡 *Ce nombre représente le pic de véhicules nécessaires en simultané pour respecter vos fenêtres horaires sans optimisation de tournées.*")
+                            else:
+                                st.warning("Aucun besoin de véhicule détecté. Vérifiez vos quantités et horaires.")
+                                
+                        except Exception as e:
+                            st.error(f"Erreur lors du calcul de la flotte : {e}")
                 
     else: 
         st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
