@@ -116,7 +116,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
     j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
 
     # --- REMPLACE LE PRINT PAR DES MESSAGES STREAMLIT ---
-    st.toast(f"Jour Max détecté : {j_max_nom} avec {poids_totaux_par_jour[j_max_nom]} min")
+    st.write(f"Jour Max détecté : {j_max_nom} avec {poids_totaux_par_jour[j_max_nom]} min")
     
     
     # ÉTAPE 3 : Construction du tableau final avec la règle des 10%
