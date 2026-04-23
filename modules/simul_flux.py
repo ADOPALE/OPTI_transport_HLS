@@ -165,91 +165,129 @@ cette fonction permet de stabiliser le besoin de transport récurrent en intégr
 """
 
 def simuler_lissage_flotte(df_sequence_type, df_vehicules, df_contenants, matrice_duree, df_sites):
-    # 1. Récupération des paramètres (Flotte active + Taux remplissage)
+    """
+    Simule la charge minute par minute sur la journée pour déterminer le besoin max en camions.
+    Gère les horaires manquants en utilisant la fin de poste paramétrée.
+    """
+    
+    # --- 1. RÉCUPÉRATION DES PARAMÈTRES LOGISTIQUES ---
     if "params_logistique" not in st.session_state:
-        st.error("❌ Configuration logistique manquante.")
+        st.error("❌ Configuration logistique manquante. Veuillez valider l'onglet Paramètres.")
         return {}
     
     params = st.session_state["params_logistique"]
     vehicules_autorises = params["vehicules_selectionnes"]
     taux_remplissage = params.get("securite_remplissage", 1.0)
+    
+    # Calcul de l'heure de fin par défaut (Fin de poste - 60 min)
+    h_fin_param = params["rh"]["h_fin_max"] # Objet datetime.time
+    fin_poste_defaut = (h_fin_param.hour * 60 + h_fin_param.minute) - 60
+    
+    # Calcul de l'heure de début par défaut (Prise de poste)
+    h_deb_param = params["rh"]["h_prise_min"]
+    debut_poste_defaut = (h_deb_param.hour * 60 + h_deb_param.minute)
 
-    # Filtrage de la flotte active
+    # --- 2. PRÉPARATION DES DONNÉES ---
+    # Filtrage flotte active
     col_nom_v = df_vehicules.columns[0]
     df_v_actifs = df_vehicules[df_vehicules[col_nom_v].isin(vehicules_autorises)].copy()
 
-    # 2. Préparation des vecteurs de charge
-    charge_temporelle = {v: np.zeros(1440) for v in vehicules_autorises}
-    
-    # Nettoyage des référentiels (pour les accès)
+    # Nettoyage des colonnes du flux (pour éviter l'erreur sur les noms de colonnes)
+    df_sequence_type.columns = [str(c).strip() for c in df_sequence_type.columns]
+    col_h_dep = "Heure de mise à disposition min départ"
+    col_h_arr = "Heure max de livraison à la destination"
+
+    # Nettoyage Sites & Matrice
     df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
     col_libelle = next((c for c in df_sites.columns if "LIBEL" in c or "SITE" in c), None)
     col_quai = next((c for c in df_sites.columns if "QUAI" in c), "PRÉSENCE DE QUAI")
+    
     matrice_duree.columns = [str(c).strip().upper() for c in matrice_duree.columns]
     col_sites_depart = matrice_duree.columns[0]
 
-    # 3. Boucle sur les flux
+    # Initialisation des vecteurs de charge (1440 minutes)
+    charge_temporelle = {v: np.zeros(1440) for v in vehicules_autorises}
+
+    # --- 3. BOUCLE SUR CHAQUE FLUX ---
     for _, flux in df_sequence_type.iterrows():
         qte_totale = flux['Quantité_Séquence_Type']
-        if qte_totale <= 0: continue
+        if qte_totale <= 0:
+            continue
         
         site_dep = str(flux['Point de départ']).strip().upper()
         site_arr = str(flux['Point de destination']).strip().upper()
         type_cont = str(flux['Nature de contenant']).strip().upper()
         
-        # Horaires
-        h_dep_min = to_decimal_minutes(flux['Heure de mise à disposition min départ'])
-        h_arr_max = to_decimal_minutes(flux['Heure max de livraison à la destination'])
+        # --- Gestion Robuste des Horaires ---
+        val_h_dep = flux.get(col_h_dep)
+        val_h_arr = flux.get(col_h_arr)
+
+        h_dep_min = to_decimal_minutes(val_h_dep) if pd.notna(val_h_dep) else debut_poste_defaut
+        h_arr_max = to_decimal_minutes(val_h_arr) if pd.notna(val_h_arr) else fin_poste_defaut
         
-        # Recherche du meilleur véhicule parmi les ACTIFS
+        # Sécurité : si h_arr <= h_dep (erreur saisie), on donne 1h de fenêtre
+        if h_arr_max <= h_dep_min:
+            h_arr_max = h_dep_min + 60
+
+        # --- Recherche du véhicule et capacité ---
         v_elu = None
         capa_max_retenue = 0
         
         try:
             cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == type_cont].iloc[0]
-        except: continue
+        except:
+            continue
 
         for _, v in df_v_actifs.iterrows():
             type_v_nom = str(v['Types']).strip().upper()
             try:
-                # Vérif accessibilité
                 acc_dep = df_sites.loc[df_sites[col_libelle] == site_dep, type_v_nom].values[0]
                 acc_arr = df_sites.loc[df_sites[col_libelle] == site_arr, type_v_nom].values[0]
                 
                 if acc_dep == "OUI" and acc_arr == "OUI":
-                    # UTILISATION DE TA FONCTION ICI
+                    # Appel de ta fonction Bin-Packing
                     capa_v = calculer_capacite_max(v, cont_info)
-                    
                     if capa_v > capa_max_retenue:
                         capa_max_retenue = capa_v
                         v_elu = v
-            except: continue
+            except:
+                continue
 
-        # 4. Calcul de l'impact si un véhicule est trouvé
+        # --- Calcul de l'impact temporel ---
         if v_elu is not None and capa_max_retenue > 0:
-            # On applique ton taux de remplissage (ex: 85%) à la capacité max calculée
+            # Application du taux de remplissage cible
             capa_utile = max(1, math.floor(capa_max_retenue * taux_remplissage))
             
-            # Temps de trajet + manutention
+            # Temps de trajet (Matrice)
             ligne_matrice = matrice_duree[matrice_duree[col_sites_depart] == site_dep]
             duree_trajet = ligne_matrice[site_arr].values[0] if not ligne_matrice.empty else 0
             
+            # Temps de manutention (Quai ?)
             a_quai = df_sites.loc[df_sites[col_libelle] == site_arr, col_quai].values[0] == "OUI"
             col_m = 'Manutention avec quai (minutes / contenants)' if a_quai else 'Manutention sans quai (minutes / contenants)'
             t_manut_unit = to_decimal_minutes(v_elu[col_m])
             
-            # Calcul des Jobs
+            # Calcul des Jobs (Nombre de trajets)
             nb_trajets = math.ceil(qte_totale / capa_utile)
-            duree_job = duree_trajet + (capa_utile * t_manut_unit) + 6.0 # 6 min mise à quai
+            duree_un_job = duree_trajet + (capa_utile * t_manut_unit) + 6.0 # 6min fixe mise à quai
             
-            # Lissage
-            if h_arr_max > h_dep_min:
-                intensite = (nb_trajets * duree_job) / (h_arr_max - h_dep_min)
-                charge_temporelle[v_elu[col_nom_v]][int(h_dep_min):int(h_arr_max)] += intensite
+            # Lissage de la charge sur la fenêtre
+            charge_totale_flux = nb_trajets * duree_un_job
+            intensite = charge_totale_flux / (h_arr_max - h_dep_min)
+            
+            # On remplit le vecteur minute par minute
+            start_m = int(max(0, h_dep_min))
+            end_m = int(min(1439, h_arr_max))
+            charge_temporelle[v_elu[col_nom_v]][start_m:end_m] += intensite
 
-    # 5. Résultat final
-    return {v: math.ceil(np.max(vect)) for v, vect in charge_temporelle.items() if np.max(vect) > 0}
+    # --- 4. CALCUL DU BESOIN FINAL ---
+    resultat = {}
+    for v_type, vecteur in charge_temporelle.items():
+        pic_max = np.max(vecteur)
+        if pic_max > 0:
+            resultat[v_type] = math.ceil(pic_max)
 
+    return resultat
 
 
 
