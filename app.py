@@ -20,8 +20,7 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
-from modules.simul_flux_2 import lancer_simulation
-#from modules.simul_flux import MoteurSimulation
+from modules.simul_flux import MoteurSimulation
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
@@ -189,7 +188,7 @@ elif selected == "Simul tournées": # Transport
                 try:
                     # Appel du nouveau moteur (simul_flux_2)
                     # La fonction retourne le meilleur score (pic de flotte minimal + km optimisés)
-                    resultats_hebdo = lancer_simulation(st.session_state['data'])
+                    #resultats_hebdo = lancer_simulation(st.session_state['data'])
                     
                     # On stocke les résultats dans le session_state
                     st.session_state['planning_detaille'] = resultats_hebdo
