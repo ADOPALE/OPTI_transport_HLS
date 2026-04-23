@@ -20,7 +20,7 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
-from modules.simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
+from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
