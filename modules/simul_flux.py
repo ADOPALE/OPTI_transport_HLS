@@ -32,29 +32,3 @@ def segmenter_flux(df):
     df_specifique = df_volume[~masque_recurrent].copy()
     
     return df_recurrent, df_specifique
-
-# --- Exécution dans l'interface Streamlit ---
-
-st.title("🚚 Simulation des Flux Lourds")
-
-if "data" not in st.session_state:
-    st.warning("⚠️ Veuillez charger les données dans l'onglet Importation avant de continuer.")
-else:
-    # On récupère le DataFrame m_flux extrait dans le premier fichier
-    m_flux = st.session_state["data"]["m_flux"]
-    
-    # Appel de la fonction de segmentation
-    flux_rec, flux_spec = segmenter_flux(m_flux)
-    
-    # Affichage des résultats
-    st.subheader("Résultats de la segmentation")
-    
-    c1, c2 = st.columns(2)
-    c1.metric("Flux Récurrents (7j/7)", len(flux_rec))
-    c2.metric("Flux Spécifiques", len(flux_spec))
-    
-    with st.expander("Consulter les flux récurrents"):
-        st.dataframe(flux_rec)
-        
-    with st.expander("Consulter les flux spécifiques"):
-        st.dataframe(flux_spec)
