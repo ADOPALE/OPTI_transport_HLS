@@ -123,7 +123,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
 
                 if site_dep not in matrice_duree.index or site_arr not in matrice_duree.columns:
                     # C'est ici que ça coince !
-                    # st.warning(f"Couple absent de la matrice : {site_dep} -> {site_arr}")
+                    st.warning(f"Couple absent de la matrice : {site_dep} -> {site_arr}")
                     continue
 
                 duree = matrice_duree.loc[site_dep, site_arr]
