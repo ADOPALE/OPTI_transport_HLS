@@ -392,42 +392,48 @@ Cherche les partenaires idéaux pour un job pivot vers une destination commune.
 Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
 """
 def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    v_type = job_pivot.vehicule_type
-    vehicule = df_vehicules[df_vehicules['Types'].str.strip().upper() == v_type.upper()].iloc[0]
+    # 1. On force v_type en chaîne de caractères propre
+    v_type = str(job_pivot.vehicule_type).strip().upper()
     
-    # 1. Filtre strict : Même destination + Même type (Propre/Sale) + Même véhicule
+    # On cherche le véhicule dans le référentiel avec un masque robuste
+    mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
+    if not mask_v.any():
+        return [], 9999 
+        
+    vehicule = df_vehicules[mask_v].iloc[0]
+    
+    # 2. Filtre strict : Même destination + Même type (Propre/Sale) + Même véhicule
+    # On compare des strings (str.upper()) pour éviter le crash 'Series'
+    dest_pivot = str(job_pivot.destination).upper()
+    
     candidats = [j for j in pool_candidats if 
-                 j.destination == job_pivot.destination and 
+                 str(j.destination).upper() == dest_pivot and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
-                 j.vehicule_type == v_type]
+                 str(j.vehicule_type).strip().upper() == v_type]
     
     meilleure_comb = []
-    # Poids initial : Aller simple du point de départ du pivot à la destination
-    poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
+    poids_min = matrice_duree.loc[str(job_pivot.origin).upper(), dest_pivot]
     
-    # On teste les combinaisons (max 3 jobs)
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
         
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test.append(c)
-            # On recalcule le poids : le camion doit passer par tous les points de départ
-            points_dep = list(set([j.origin for j in comb_test]))
+            # Recalcul du trajet multi-points de départ vers destination unique
+            points_dep = list(set([str(j.origin).upper() for j in comb_test]))
             
-            # Calcul du trajet entre les points de départ + trajet final
             poids_test = 0
             curr = points_dep[0]
             for next_pt in points_dep[1:]:
-                poids_test += matrice_duree.loc[curr, next_pt] + 10 # 10min manoeuvre
+                poids_test += matrice_duree.loc[curr, next_pt] + 10 
                 curr = next_pt
-            poids_test += matrice_duree.loc[curr, job_pivot.destination]
+            poids_test += matrice_duree.loc[curr, dest_pivot]
             
-            meilleure_comb = comb_test[1:] # On ne renvoie que les partenaires
+            meilleure_comb = comb_test[1:] 
             poids_min = poids_test
             
     return meilleure_comb, poids_min
-
 
 
 
@@ -436,17 +442,25 @@ Cherche à grouper des jobs partant du même quai vers des destinations différe
 Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
 """
 def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    v_type = job_pivot.vehicule_type
-    vehicule = df_vehicules[df_vehicules['Types'].str.strip().upper() == v_type.upper()].iloc[0]
+    # 1. On force v_type en chaîne de caractères propre
+    v_type = str(job_pivot.vehicule_type).strip().upper()
     
-    # 1. Filtre strict : Même origine + Même type (Propre/Sale) + Même véhicule
+    mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
+    if not mask_v.any():
+        return [], 9999
+
+    vehicule = df_vehicules[mask_v].iloc[0]
+    
+    # 2. Filtre strict : Même origine + Même type (Propre/Sale) + Même véhicule
+    orig_pivot = str(job_pivot.origin).upper()
+    
     candidats = [j for j in pool_candidats if 
-                 j.origin == job_pivot.origin and 
+                 str(j.origin).upper() == orig_pivot and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
-                 j.vehicule_type == v_type]
+                 str(j.vehicule_type).strip().upper() == v_type]
     
     meilleure_comb = []
-    poids_min = 9999 # Infini pour l'init
+    poids_min = 9999 
     
     comb_test = [job_pivot]
     for c in candidats:
@@ -455,28 +469,24 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test.append(c)
             
-            # --- TRI PAR PROXIMITÉ (Le "Tetris" Géographique) ---
-            # On ordonne les destinations pour faire la boucle la plus courte
-            dests_uniques = list(set([j.destination for j in comb_test]))
+            # --- TRI PAR PROXIMITÉ (Logique de tournée) ---
+            dests_uniques = list(set([str(j.destination).upper() for j in comb_test]))
             
-            # Logique : on va toujours vers la destination la plus proche du point actuel
             poids_test = 0
-            curr = job_pivot.origin
+            curr = orig_pivot
             temp_dests = dests_uniques.copy()
             
             while temp_dests:
-                # Trouve la destination la plus proche parmi celles restantes
                 proche = min(temp_dests, key=lambda d: matrice_duree.loc[curr, d])
-                poids_test += matrice_duree.loc[curr, proche] + 10 # Manoeuvre
+                poids_test += matrice_duree.loc[curr, proche] + 10 
                 curr = proche
                 temp_dests.remove(proche)
             
             meilleure_comb = comb_test[1:]
             poids_min = poids_test
             
-    # Si aucune combi trouvée, le poids est juste le trajet direct du pivot
     if not meilleure_comb:
-        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
+        poids_min = matrice_duree.loc[orig_pivot, str(job_pivot.destination).upper()]
         
     return meilleure_comb, poids_min
 
