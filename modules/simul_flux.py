@@ -42,7 +42,6 @@ def segmenter_flux(df):
 FONCTION - CHOIX_JMAX
 cette fonction permet de stabiliser le besoin de transport récurrent en intégrant une marge pour être sur qu'avec les flux du JMax on sera bien capable de transporter tous les autres jours. 
 """
-
 def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_sites):
     # 1. Préparation et Nettoyage
     jours_cols = ["Quantité Lundi", "Quantité Mardi", "Quantité Mercredi", 
@@ -110,6 +109,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
                         poids = (duree + (meilleure_capa * t_manut_unit) + t_mise_quai) * nb_trajets
                         poids_totaux_par_jour[j] += poids
             except KeyError:
+                st.error("on ne rentre jamais dans la boucle try")
                 continue
 
     # ÉTAPE 2 : Identification du jour le plus chargé
