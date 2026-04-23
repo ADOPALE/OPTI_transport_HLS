@@ -90,7 +90,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
 
         # Si un véhicule est trouvé, on calcule le poids pour chaque jour
         if v_elu is not None and meilleure_capa > 0:
-            st.write(v_elu;flux;meilleure_capa) 
+            st.write("Détails flux :", v_elu['Types'], site_dep, site_arr, "Capa:", meilleure_capa)
             try:
                 # --- NETTOYAGE DE LA MATRICE ---
                 # On s'assure que les index/colonnes de la matrice sont propres pour le test
