@@ -176,6 +176,28 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
     # Estimation N_max (base de départ)
     n_max = len(tous_les_jobs)
     st.info(f"🔄 Tentative de séquençage avec un plafond de {n_max} chauffeurs...")
+
+
+    # --- ANALYSE DE FAISABILITÉ ---
+    impossibles = []
+    for sj in tous_les_jobs:
+        # 1. Vérification Amplitude
+        if sj['poids_total'] > duree_poste_max:
+            impossibles.append(f"❌ {sj['id_super_job']} : Trop long ({sj['poids_total']} min > {duree_poste_max} min)")
+        
+        # 2. Vérification Fenêtre Temporelle (Trajet direct)
+        h_fin_theorique = sj['h_dispo_max'] + sj['poids_total']
+        if h_fin_theorique > sj['h_deadline_min']:
+            impossibles.append(f"❌ {sj['id_super_job']} : Deadline impossible (Finit à {h_fin_theorique} min, Max {sj['h_deadline_min']} min)")
+    
+    if impossibles:
+        st.error("### 🚨 Jobs impossibles détectés !")
+        for msg in impossibles:
+            st.write(msg)
+        return None # On arrête tout ici pour éviter la boucle inutile
+
+
+    
     #########@
 
 
