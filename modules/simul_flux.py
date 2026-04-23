@@ -6,6 +6,162 @@ import math
 import plotly.graph_objects as go
 
 
+""" __________________________________________________________________________________SOUS FONCTIONS UTILES __________________________________________________________________________________"""
+
+"""
+Calcule le nombre maximum absolu de contenants dans un véhicule 
+en testant des agencements complexes (orientations mixtes).
+"""
+import math
+
+def calculer_capacite_max(vehicule, contenant):
+    """
+    Calcule le nombre maximum absolu de contenants dans un véhicule.
+    Nettoie les noms de colonnes et utilise un bin-packing 2D optimisé.
+    """
+    # 1. Nettoyage des noms de colonnes (enlève les espaces invisibles)
+    # On transforme les Series en dictionnaires avec clés "propres"
+    v = {str(k).strip(): val for k, val in vehicule.items()}
+    c = {str(k).strip(): val for k, val in contenant.items()}
+
+    # 2. Vérification de compatibilité
+    nom_cont = c.get('libellé')
+    # On vérifie si le véhicule accepte ce contenant (colonne à "OUI")
+    if not nom_cont or v.get(nom_cont) != "OUI":
+        return 0
+
+    # 3. Récupération des dimensions et contraintes
+    try:
+        L_v = v['dim longueur interne (m)']
+        l_v = v['dim largeur interne (m)']
+        P_max_v = v['Poids max chargement']
+        
+        L_c = c['dim longueur (m)']
+        l_c = c['dim largeur (m)']
+        poids_c = c['Poids plein (T)']
+    except KeyError as e:
+        # En cas de colonne vraiment manquante, on lève une erreur explicite
+        raise KeyError(f"Erreur : La colonne {e} est introuvable dans les paramètres.")
+
+    # 4. Moteur de calcul récursif (Guillotine Cut) pour maximiser le remplissage au sol
+    def solve_max(L, l, w, h, memo):
+        # Si l'espace est trop petit pour le contenant (dans les deux sens)
+        if (L < w and L < h) or (l < w and l < h):
+            return 0
+        
+        state = (round(L, 3), round(l, 3))
+        if state in memo:
+            return memo[state]
+        
+        res = 0
+        # Test orientation A (Normal)
+        if L >= w and l >= h:
+            optA = 1 + solve_max(L - w, l, w, h, memo) + solve_max(w, l - h, w, h, memo)
+            optB = 1 + solve_max(L, l - h, w, h, memo) + solve_max(L - w, h, w, h, memo)
+            res = max(res, optA, optB)
+            
+        # Test orientation B (Pivoté 90°)
+        if L >= h and l >= w:
+            optA_rot = 1 + solve_max(L - h, l, w, h, memo) + solve_max(h, l - w, w, h, memo)
+            optB_rot = 1 + solve_max(L, l - w, w, h, memo) + solve_max(L - h, w, h, h, memo)
+            res = max(res, optA_rot, optB_rot)
+            
+        memo[state] = res
+        return res
+
+    # Calcul du maximum au sol
+    nb_max_sol = solve_max(L_v, l_v, L_c, l_c, {})
+
+    # 5. Limitation par le poids maximum autorisé
+    if poids_c > 0:
+        nb_max_poids = int(P_max_v // poids_c)
+        capacite_finale = min(nb_max_sol, nb_max_poids)
+    else:
+        capacite_finale = nb_max_sol
+
+    return int(capacite_finale)
+
+
+"""
+Fonction outil pour trouver le véhicule le plus performant pour un flux donné.
+Utilisée par le lissage de flotte et par le graphique de charge.
+"""
+def identifier_meilleur_vehicule(site_dep, site_arr, type_cont, df_vehicules, df_contenants, df_sites, col_libelle):
+    
+    meilleure_capa = 0
+    v_elu = None
+    
+    # 1. Récupération des infos du contenant
+    try:
+        cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == type_cont.upper()].iloc[0]
+    except:
+        return None, 0
+    
+    # 2. On boucle sur les véhicules pour trouver le meilleur compromis
+    for _, v in df_vehicules.iterrows():
+        type_v_nom = str(v['Types']).strip().upper()
+        try:
+            # On vérifie si le camion peut entrer sur les sites
+            acc_dep = df_sites.loc[df_sites[col_libelle] == site_dep, type_v_nom].values[0]
+            acc_arr = df_sites.loc[df_sites[col_libelle] == site_arr, type_v_nom].values[0]
+            
+            if acc_dep == "OUI" and acc_arr == "OUI":
+                # On appelle ta fonction de Bin-Packing
+                capa = calculer_capacite_max(v, cont_info)
+                
+                # On garde le véhicule qui transporte le plus de marchandise
+                if capa > meilleure_capa:
+                    meilleure_capa = capa
+                    v_elu = v
+        except:
+            continue
+            
+    return v_elu, meilleure_capa
+
+
+
+
+
+"""Convertit un objet time ou une chaîne HH:MM:SS en minutes décimales."""
+def to_decimal_minutes(time_val):
+    if isinstance(time_val, str):
+        h, m, s = map(int, time_val.split(':'))
+        return h * 60 + m + s / 60
+    elif hasattr(time_val, 'hour'):
+        return time_val.hour * 60 + time_val.minute + time_val.second / 60
+    return float(time_val)
+
+
+
+"""Vérifie si le véhicule peut circuler sur les deux sites."""
+def est_accessible(vehicule_nom, site_depart, site_arrivee, df_sites):
+    try:
+        # Récupération des lignes des sites
+        acc_dep = df_sites.loc[df_sites['Libellé'] == site_depart, vehicule_nom].values[0]
+        acc_arr = df_sites.loc[df_sites['Libellé'] == site_arrivee, vehicule_nom].values[0]
+        return acc_dep == "OUI" and acc_arr == "OUI"
+    except:
+        return False
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+""" __________________________________________________________________________________SOUS FONCTIONS métiers __________________________________________________________________________________"""
+
+
+
 """
 FONCTION - SEGMENTER_FLUX
 Sépare les flux 'Volume' en Récurrents (Lundi au Vendredi) et Spécifiques.
@@ -347,139 +503,3 @@ def afficher_graphique_charge_filtree(df_sequence_type, df_vehicules, df_contena
     st.plotly_chart(fig, use_container_width=True)
 
 
-""" _________________________________________SOUS FONCTIONS UTILES _________________________________________"""
-
-"""
-Calcule le nombre maximum absolu de contenants dans un véhicule 
-en testant des agencements complexes (orientations mixtes).
-"""
-import math
-
-def calculer_capacite_max(vehicule, contenant):
-    """
-    Calcule le nombre maximum absolu de contenants dans un véhicule.
-    Nettoie les noms de colonnes et utilise un bin-packing 2D optimisé.
-    """
-    # 1. Nettoyage des noms de colonnes (enlève les espaces invisibles)
-    # On transforme les Series en dictionnaires avec clés "propres"
-    v = {str(k).strip(): val for k, val in vehicule.items()}
-    c = {str(k).strip(): val for k, val in contenant.items()}
-
-    # 2. Vérification de compatibilité
-    nom_cont = c.get('libellé')
-    # On vérifie si le véhicule accepte ce contenant (colonne à "OUI")
-    if not nom_cont or v.get(nom_cont) != "OUI":
-        return 0
-
-    # 3. Récupération des dimensions et contraintes
-    try:
-        L_v = v['dim longueur interne (m)']
-        l_v = v['dim largeur interne (m)']
-        P_max_v = v['Poids max chargement']
-        
-        L_c = c['dim longueur (m)']
-        l_c = c['dim largeur (m)']
-        poids_c = c['Poids plein (T)']
-    except KeyError as e:
-        # En cas de colonne vraiment manquante, on lève une erreur explicite
-        raise KeyError(f"Erreur : La colonne {e} est introuvable dans les paramètres.")
-
-    # 4. Moteur de calcul récursif (Guillotine Cut) pour maximiser le remplissage au sol
-    def solve_max(L, l, w, h, memo):
-        # Si l'espace est trop petit pour le contenant (dans les deux sens)
-        if (L < w and L < h) or (l < w and l < h):
-            return 0
-        
-        state = (round(L, 3), round(l, 3))
-        if state in memo:
-            return memo[state]
-        
-        res = 0
-        # Test orientation A (Normal)
-        if L >= w and l >= h:
-            optA = 1 + solve_max(L - w, l, w, h, memo) + solve_max(w, l - h, w, h, memo)
-            optB = 1 + solve_max(L, l - h, w, h, memo) + solve_max(L - w, h, w, h, memo)
-            res = max(res, optA, optB)
-            
-        # Test orientation B (Pivoté 90°)
-        if L >= h and l >= w:
-            optA_rot = 1 + solve_max(L - h, l, w, h, memo) + solve_max(h, l - w, w, h, memo)
-            optB_rot = 1 + solve_max(L, l - w, w, h, memo) + solve_max(L - h, w, h, h, memo)
-            res = max(res, optA_rot, optB_rot)
-            
-        memo[state] = res
-        return res
-
-    # Calcul du maximum au sol
-    nb_max_sol = solve_max(L_v, l_v, L_c, l_c, {})
-
-    # 5. Limitation par le poids maximum autorisé
-    if poids_c > 0:
-        nb_max_poids = int(P_max_v // poids_c)
-        capacite_finale = min(nb_max_sol, nb_max_poids)
-    else:
-        capacite_finale = nb_max_sol
-
-    return int(capacite_finale)
-
-
-"""
-Fonction outil pour trouver le véhicule le plus performant pour un flux donné.
-Utilisée par le lissage de flotte et par le graphique de charge.
-"""
-def identifier_meilleur_vehicule(site_dep, site_arr, type_cont, df_vehicules, df_contenants, df_sites, col_libelle):
-    
-    meilleure_capa = 0
-    v_elu = None
-    
-    # 1. Récupération des infos du contenant
-    try:
-        cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == type_cont.upper()].iloc[0]
-    except:
-        return None, 0
-    
-    # 2. On boucle sur les véhicules pour trouver le meilleur compromis
-    for _, v in df_vehicules.iterrows():
-        type_v_nom = str(v['Types']).strip().upper()
-        try:
-            # On vérifie si le camion peut entrer sur les sites
-            acc_dep = df_sites.loc[df_sites[col_libelle] == site_dep, type_v_nom].values[0]
-            acc_arr = df_sites.loc[df_sites[col_libelle] == site_arr, type_v_nom].values[0]
-            
-            if acc_dep == "OUI" and acc_arr == "OUI":
-                # On appelle ta fonction de Bin-Packing
-                capa = calculer_capacite_max(v, cont_info)
-                
-                # On garde le véhicule qui transporte le plus de marchandise
-                if capa > meilleure_capa:
-                    meilleure_capa = capa
-                    v_elu = v
-        except:
-            continue
-            
-    return v_elu, meilleure_capa
-
-
-
-
-
-"""Convertit un objet time ou une chaîne HH:MM:SS en minutes décimales."""
-def to_decimal_minutes(time_val):
-    if isinstance(time_val, str):
-        h, m, s = map(int, time_val.split(':'))
-        return h * 60 + m + s / 60
-    elif hasattr(time_val, 'hour'):
-        return time_val.hour * 60 + time_val.minute + time_val.second / 60
-    return float(time_val)
-
-
-
-"""Vérifie si le véhicule peut circuler sur les deux sites."""
-def est_accessible(vehicule_nom, site_depart, site_arrivee, df_sites):
-    try:
-        # Récupération des lignes des sites
-        acc_dep = df_sites.loc[df_sites['Libellé'] == site_depart, vehicule_nom].values[0]
-        acc_arr = df_sites.loc[df_sites['Libellé'] == site_arrivee, vehicule_nom].values[0]
-        return acc_dep == "OUI" and acc_arr == "OUI"
-    except:
-        return False
