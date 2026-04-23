@@ -88,6 +88,7 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
             except (KeyError, IndexError):
                 continue
 
+        """
         # Si un véhicule est trouvé, on calcule le poids pour chaque jour
         if v_elu is not None and meilleure_capa > 0:
             try:
@@ -110,6 +111,43 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
                         poids_totaux_par_jour[j] += poids
             except KeyError:
                 st.error("on ne rentre jamais dans la boucle try")
+                continue
+            """
+            if v_elu is not None and meilleure_capa > 0:
+            try:
+                # --- NETTOYAGE DE LA MATRICE ---
+                # On s'assure que les index/colonnes de la matrice sont propres pour le test
+                # (À ne faire qu'une fois idéalement, mais ici pour le debug)
+                matrice_duree.index = matrice_duree.index.astype(str).str.strip()
+                matrice_duree.columns = matrice_duree.columns.astype(str).str.strip()
+
+                if site_dep not in matrice_duree.index or site_arr not in matrice_duree.columns:
+                    # C'est ici que ça coince !
+                    # st.warning(f"Couple absent de la matrice : {site_dep} -> {site_arr}")
+                    continue
+
+                duree = matrice_duree.loc[site_dep, site_arr]
+                
+                # Vérification présence de quai à la destination
+                # Attention : 'Présence de quai' doit être écrit exactement pareil dans Excel
+                a_quai = df_sites.loc[df_sites['Libellé'] == site_arr, 'Présence de quai'].values[0] == "OUI"
+                
+                # Sélection du temps de manutention
+                if a_quai:
+                    t_manut_unit = to_decimal_minutes(v_elu['Manutention avec quai (minutes / contenants)'])
+                else:
+                    t_manut_unit = to_decimal_minutes(v_elu['Manutention sans quai (minutes / contenants)'])
+
+                for j in jours_cols:
+                    qte = flux[j]
+                    if qte > 0:
+                        nb_trajets = math.ceil(qte / meilleure_capa)
+                        poids = (duree + (meilleure_capa * t_manut_unit) + t_mise_quai) * nb_trajets
+                        poids_totaux_par_jour[j] += poids
+
+            except Exception as e:
+                # On affiche la vraie erreur technique pour comprendre
+                st.error(f"Erreur technique sur le flux {site_dep} -> {site_arr} : {e}")
                 continue
 
     # ÉTAPE 2 : Identification du jour le plus chargé
