@@ -43,11 +43,11 @@ def segmenter_flux(df):
 
 """ _________________________________________SOUS FONCTIONS UTILES _________________________________________"""
 
+"""
+Calcule le nombre maximum absolu de contenants dans un véhicule 
+en testant des agencements complexes (orientations mixtes).
+"""
 def calculer_capacite_max(vehicule, contenant):
-    """
-    Calcule le nombre maximum absolu de contenants dans un véhicule 
-    en testant des agencements complexes (orientations mixtes).
-    """
     # 1. Vérification de compatibilité
     nom_cont = contenant['libellé']
     # On vérifie dans le tableau véhicule si la colonne du contenant est à "OUI"
@@ -105,3 +105,25 @@ def calculer_capacite_max(vehicule, contenant):
         capacite_finale = nb_max_sol
 
     return int(capacite_finale)
+
+
+"""Convertit un objet time ou une chaîne HH:MM:SS en minutes décimales."""
+def to_decimal_minutes(time_val):
+    if isinstance(time_val, str):
+        h, m, s = map(int, time_val.split(':'))
+        return h * 60 + m + s / 60
+    elif hasattr(time_val, 'hour'):
+        return time_val.hour * 60 + time_val.minute + time_val.second / 60
+    return float(time_val)
+
+
+
+"""Vérifie si le véhicule peut circuler sur les deux sites."""
+def est_accessible(vehicule_nom, site_depart, site_arrivee, df_sites):
+    try:
+        # Récupération des lignes des sites
+        acc_dep = df_sites.loc[df_sites['Libellé'] == site_depart, vehicule_nom].values[0]
+        acc_arr = df_sites.loc[df_sites['Libellé'] == site_arrivee, vehicule_nom].values[0]
+        return acc_dep == "OUI" and acc_arr == "OUI"
+    except:
+        return False
