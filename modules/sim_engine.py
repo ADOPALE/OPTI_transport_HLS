@@ -393,43 +393,35 @@ Cherche les partenaires idéaux pour un job pivot vers une destination commune.
 Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
 """
 def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    """
-    Groupe des jobs ayant la même destination géographique (Collecte multi-points).
-    """
-    # 1. Sécurisation du type de véhicule (v_type doit être un string propre)
+    """Groupe par destination (Collecte multi-points)"""
     v_type = str(job_pivot.vehicule_type).strip().upper()
+    col_nom_v = df_vehicules.columns[0]
     
-    # 2. Extraction propre du véhicule dans le référentiel
-    mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
+    # On cherche le véhicule dans le DF (qui est déjà filtré par tes soins)
+    mask_v = df_vehicules[col_nom_v].str.strip().str.upper() == v_type
     if not mask_v.any():
-        st.error(f"⚠️ Type de véhicule '{v_type}' introuvable dans le référentiel.")
+        # Si le véhicule n'est pas dans le DF, c'est qu'il est exclu ou introuvable
         return [], 9999
     vehicule = df_vehicules[mask_v].iloc[0]
     
-    # 3. Filtrage des candidats sur les sites de REGROUPEMENT (dest_group)
     candidats = [j for j in pool_candidats if 
                  j.dest_group == job_pivot.dest_group and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
                  str(j.vehicule_type).strip().upper() == v_type]
     
     meilleure_comb = []
-    
-    # 4. Calcul initial avec le NOM EXACT
     try:
         poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
     except KeyError:
-        st.error(f"❌ Couple [ {job_pivot.origin} -> {job_pivot.destination} ] introuvable dans la matrice.")
+        st.error(f"❌ Site {job_pivot.origin} ou {job_pivot.destination} absent de la matrice.")
         return [], 9999
 
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
-        
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test_temp = comb_test + [c]
-            # Calcul du trajet multi-points (Origines variées -> Destination unique)
             points_dep = list(set([j.origin for j in comb_test_temp]))
-            
             try:
                 poids_test = 0
                 curr = points_dep[0]
@@ -442,9 +434,8 @@ def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_cont
                 meilleure_comb = comb_test[1:] 
                 poids_min = poids_test
             except KeyError as e:
-                st.warning(f"⚠️ Impossible de grouper : le site {e} est absent de la matrice.")
+                st.warning(f"⚠️ Groupage impossible : site {e} absent de la matrice.")
                 continue
-                
     return meilleure_comb, poids_min
 
 
@@ -457,19 +448,15 @@ Cherche à grouper des jobs partant du même quai vers des destinations différe
 Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
 """
 def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    """
-    Groupe des jobs partant du même quai vers des destinations différentes (Tournée).
-    """
-    # 1. Sécurisation du type de véhicule
+    """Groupe par départ (Tournée de distribution)"""
     v_type = str(job_pivot.vehicule_type).strip().upper()
+    col_nom_v = df_vehicules.columns[0]
     
-    # 2. Extraction propre du véhicule
-    mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
+    mask_v = df_vehicules[col_nom_v].str.strip().str.upper() == v_type
     if not mask_v.any():
         return [], 9999
     vehicule = df_vehicules[mask_v].iloc[0]
     
-    # 3. Filtrage sur les sites de REGROUPEMENT (origin_group)
     candidats = [j for j in pool_candidats if 
                  j.origin_group == job_pivot.origin_group and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
@@ -477,43 +464,35 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
     
     meilleure_comb = []
     poids_min = 9999
-    
     comb_test = [job_pivot]
     for c in candidats:
         if len(comb_test) >= 3: break
-        
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test_temp = comb_test + [c]
             dests_uniques = list(set([j.destination for j in comb_test_temp]))
-            
             try:
                 poids_test = 0
                 curr = job_pivot.origin
                 temp_dests = dests_uniques.copy()
-                
                 while temp_dests:
-                    # Recherche du point le plus proche avec NOM EXACT
                     proche = min(temp_dests, key=lambda d: matrice_duree.loc[curr, d])
                     poids_test += matrice_duree.loc[curr, proche] + 10 
                     curr = proche
                     temp_dests.remove(proche)
-                
                 comb_test = comb_test_temp
                 meilleure_comb = comb_test[1:]
                 poids_min = poids_test
             except KeyError as e:
-                st.warning(f"⚠️ Erreur matrice sur le site {e} lors d'un essai de groupage.")
+                st.warning(f"⚠️ Groupage impossible : site {e} absent de la matrice.")
                 continue
             
-    # Si aucun groupage n'a fonctionné, on renvoie le trajet direct simple
     if not meilleure_comb:
         try:
             poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination]
         except KeyError:
-            st.error(f"❌ Site {job_pivot.origin} ou {job_pivot.destination} introuvable pour trajet direct.")
             poids_min = 9999
-        
     return meilleure_comb, poids_min
+
 
 
 
