@@ -114,11 +114,10 @@ def choix_Jmax(df_recurrent, df_vehicules, df_contenants, matrice_duree, df_site
 
     # ÉTAPE 2 : Identification du jour le plus chargé
     j_max_nom = max(poids_totaux_par_jour, key=poids_totaux_par_jour.get)
+
+    # --- REMPLACE LE PRINT PAR DES MESSAGES STREAMLIT ---
+    st.toast(f"Jour Max détecté : {j_max_nom} avec {poids_totaux_par_jour[j_max_nom]} min")
     
-    print("-" * 30)
-    print(f"ANALYSE JMAX : Le jour retenu est {j_max_nom}")
-    print(f"Charge totale : {round(poids_totaux_par_jour[j_max_nom], 2)} min")
-    print("-" * 30)
     
     # ÉTAPE 3 : Construction du tableau final avec la règle des 10%
     def appliquer_regle_marge(row):
