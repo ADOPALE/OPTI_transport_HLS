@@ -164,7 +164,7 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
     for n_test in range(n_max, 0, -1):
         for j in tous_les_jobs:
         # On vérifie si un trajet direct dépasse l'amplitude
-        if j['poids_total'] > duree_poste_max:
+            if j['poids_total'] > duree_poste_max:
             st.error(f"🚨 JOB IMPOSSIBLE : Le trajet pour {j['jobs'][0].origin} dure {j['poids_total']}min, ce qui dépasse l'amplitude de {duree_poste_max}min.")
         
         res = tenter_sequencage(
