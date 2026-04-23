@@ -20,7 +20,6 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
-from modules.simul_flux import MoteurSimulation
 from modules.Resultats_simul_flux import afficher_resultats_complets
 
 # --------- FONCTIONS UI ------------
