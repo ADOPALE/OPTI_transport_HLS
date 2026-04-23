@@ -1,40 +1,202 @@
 import pandas as pd
 import numpy as np
 import math
-import streamlit as st # Pour les alertes st.error
+import streamlit as st 
 from datetime import datetime, timedelta
-import copy # Utile pour cloner des objets Camion ou Job lors des tests de combinaisons
+import copy 
 
-
+# Imports de tes modules existants
 from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes
 
-
+# =================================================================
+# CLASSE DE BASE
+# =================================================================
 
 class Job:
     def __init__(self, job_id, flux_id, type_job, origin, destination, 
                  h_dispo, h_deadline, quantite, contenant, 
                  vehicule_type, type_propre_sale, aller_retour):
         
-        self.job_id = job_id          # Identifiant unique (ex: JOB_001)
-        self.flux_id = flux_id        # Lien vers la ligne d'origine du flux
+        self.job_id = job_id          
+        self.flux_id = flux_id        
         self.type_job = type_job      # 'COMPLET' ou 'INCOMPLET'
         
-        # Données de routage
         self.origin = origin
         self.destination = destination
         self.h_dispo = h_dispo        # Heure de mise à dispo (en min)
         self.h_deadline = h_deadline  # Heure max à destination (en min)
         
-        # Caractéristiques chargement
         self.quantite = quantite
         self.contenant = contenant
         self.vehicule_type = vehicule_type
         self.type_propre_sale = type_propre_sale
-        self.aller_retour = aller_retour # 'Aller' ou 'Retour'
+        self.aller_retour = aller_retour 
         
-        # Métadonnées pour le séquençage futur
         self.est_planifie = False
-        self.poids_temps = 0          # Sera calculé lors de l'assemblage
+        self.poids_temps = 0          
+
+# =================================================================
+# FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
+# =================================================================
+
+def calculer_delta_temps_mission(p, sj, matrice_duree, t_nettoyage):
+    """
+    Calcule le trajet d'approche en intégrant le détour par HUB_HSJ 
+    si un nettoyage (Sale -> Propre) est nécessaire.
+    """
+    site_dep_sj = sj['jobs'][0].origin.upper()
+    
+    # Trajet d'approche standard (direct)
+    t_approche = matrice_duree.loc[p['pos'], site_dep_sj]
+    besoin_nettoyage = False
+    
+    # Règle Sanitaire : Un camion SALE doit passer par HSJ pour devenir PROPRE
+    if p['dernier_type_sanitaire'] == "SALE" and sj['jobs'][0].type_propre_sale == "PROPRE":
+        besoin_nettoyage = True
+        t_vers_hsj = matrice_duree.loc[p['pos'], "HUB_HSJ"]
+        t_hsj_vers_dep = matrice_duree.loc["HUB_HSJ", site_dep_sj]
+        # Nouveau trajet : Pos actuelle -> HSJ -> Nettoyage -> Départ Job
+        t_approche = t_vers_hsj + t_nettoyage + t_hsj_vers_dep
+
+    return t_approche, besoin_nettoyage
+
+def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avance=30):
+    """
+    Arbitre entre :
+    1. Attendre sur place (Temps mort)
+    2. Avancer le job (max 30min avant l'heure lissée)
+    3. Trajet à vide vers un autre site
+    """
+    t_approche, nettoyage = calculer_delta_temps_mission(p, sj, matrice_duree, t_nettoyage)
+    
+    h_arrivee_site = p['h_dispo'] + t_approche
+    h_lissee = sj['h_depart_actuelle']
+    h_prete = sj['h_dispo_max']
+    
+    # Heure de départ autorisée : au plus tôt entre la marchandise prête et (Lissage - 30min)
+    h_dep_autorisee = max(h_prete, h_lissee - h_limite_avance)
+    
+    # Heure réelle de départ pour ce chauffeur
+    h_dep_reel = max(h_arrivee_site, h_dep_autorisee)
+    
+    # Coût de l'attente (temps mort)
+    t_attente = max(0, h_dep_reel - h_arrivee_site)
+    
+    # Pénalité si on dévie du lissage (on préfère rester proche de l'heure cible)
+    penalite_avance = max(0, h_lissee - h_dep_reel) * 0.5
+    
+    # Score final : plus il est bas, plus l'affectation est rentable
+    score = t_approche + t_attente + penalite_avance + (2000 if nettoyage else 0)
+    
+    return score, h_dep_reel, nettoyage
+
+# =================================================================
+# MOTEUR DE SÉQUENÇAGE ET ORDONNANCEMENT
+# =================================================================
+
+def ordonnancer_flotte_optimale(couloirs, matrice_duree):
+    """
+    Boucle de décrémentation pour trouver le nombre minimal de chauffeurs.
+    """
+    if "params_logistique" not in st.session_state:
+        return None
+
+    params = st.session_state["params_logistique"]
+    h_prise_min = to_decimal_minutes(params["rh"]["h_prise_min"])
+    h_fin_max = to_decimal_minutes(params["rh"]["h_fin_max"])
+    duree_poste_max = params["rh"]["duree_poste_max_minutes"]
+    t_prepa = params["rh"]["temps_prepa_vehicule"]
+    t_fin_poste = params["rh"]["temps_fin_poste"]
+    depot = params["stationnement_initial"].upper()
+
+    # Mise à plat de tous les Super Jobs lissés
+    tous_les_jobs = []
+    for sens_dict in couloirs.values():
+        for liste_sj in sens_dict.values():
+            tous_les_jobs.extend(liste_sj)
+    tous_les_jobs.sort(key=lambda x: x['h_depart_actuelle'])
+
+    # Estimation N_max (base de départ)
+    n_max = sum(st.session_state.get("resultat_lissage_flotte", {"GLOBAL": 10}).values())
+    
+    solution_optimale = None
+
+    # Test itératif de N camions à 1 camion
+    for n_test in range(n_max, 0, -1):
+        res = tenter_sequencage(
+            n_test, tous_les_jobs, depot, matrice_duree, 
+            h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste
+        )
+        
+        if res["succes"]:
+            solution_optimale = res
+        else:
+            break # On a trouvé la limite inférieure
+            
+    return solution_optimale
+
+def tenter_sequencage(n_vehicules, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin):
+    postes = []
+    for i in range(n_vehicules):
+        postes.append({
+            'id_chauffeur': f"CH_{i+1:02d}",
+            'pos': depot,
+            'h_dispo': h_start + t_prepa,
+            'missions': [],
+            'dernier_type_sanitaire': None,
+            'pause_faite': False,
+            'total_nettoyages': 0,
+            'amplitude': 0
+        })
+
+    jobs_copy = copy.deepcopy(jobs_a_faire)
+
+    for sj in jobs_copy:
+        meilleur_candidat = None
+        score_min = float('inf')
+        
+        for p in postes:
+            score, h_dep, net = calculer_score_opportuniste(p, sj, matrice_duree, t_fin) # t_fin sert de t_nettoyage
+            
+            h_fin_m = h_dep + sj['poids_total']
+            site_arr = sj['jobs'][-1].destination.upper()
+            t_retour = matrice_duree.loc[site_arr, depot]
+            h_retour_depot = h_fin_m + t_retour + t_fin
+            
+            # Vérifications strictes
+            if (h_retour_depot - h_start <= max_poste) and \
+               (h_fin_m <= sj['h_deadline_min']) and \
+               (h_retour_depot <= h_limite):
+                
+                if score < score_min:
+                    score_min = score
+                    meilleur_candidat = {
+                        'p': p, 'h_dep': h_dep, 'h_fin': h_fin_m, 
+                        'h_ret': h_retour_depot, 'nettoyage': net
+                    }
+
+        if meilleur_candidat:
+            sel = meilleur_candidat
+            p = sel['p']
+            # Gestion pause (si trou > 45min)
+            if not p['pause_faite'] and (sel['h_dep'] - p['h_dispo'] >= 45):
+                p['pause_faite'] = True
+
+            p['missions'].append({
+                'sj': sj,
+                'h_dep': sel['h_dep'],
+                'h_fin': sel['h_fin'],
+                'nettoyage_effectue': sel['nettoyage']
+            })
+            p['pos'] = sj['jobs'][-1].destination.upper()
+            p['h_dispo'] = sel['h_fin']
+            p['dernier_type_sanitaire'] = sj['jobs'][0].type_propre_sale
+            p['amplitude'] = sel['h_ret'] - h_start
+            if sel['nettoyage']: p['total_nettoyages'] += 1
+        else:
+            return {"succes": False}
+
+    return {"succes": True, "postes": postes}
 
 
 
@@ -487,4 +649,71 @@ def etaler_uniformément_par_couloir(couloirs):
                         for sj in jobs:
                             sj['h_depart_actuelle'] = h_min
                             
+    return couloirs
+
+
+
+
+"""
+Lissage marginal dynamique (on ajuste la charge pour le véhicule au cours de la journée. 
+"""
+def ajustement_marginal_dynamique(couloirs):
+    # 1. Récupération des capacités et des bornes temporelles
+    if "params_logistique" not in st.session_state:
+        st.error("Configuration logistique manquante.")
+        return couloirs
+    
+    params = st.session_state["params_logistique"]
+    capacites_flotte = st.session_state.get("resultat_lissage_flotte", {})
+    
+    # Extraction dynamique des bornes (conversion en minutes)
+    h_debut_explo = to_decimal_minutes(params["rh"]["h_prise_min"])
+    h_fin_explo = to_decimal_minutes(params["rh"]["h_fin_max"])
+    
+    # 2. Création de la liste des créneaux de 30 min entre ces deux bornes
+    creneaux = list(range(int(h_debut_explo), int(h_fin_explo), 30))
+    
+    # 3. Mise à plat et filtrage par véhicule
+    tous_les_jobs = []
+    for sens_dict in couloirs.values():
+        for liste_sj in sens_dict.values():
+            tous_les_jobs.extend(liste_sj)
+    
+    types_v = set(j['jobs'][0].vehicule_type for j in tous_les_jobs)
+    
+    for v_type in types_v:
+        # On récupère la capacité spécifique calculée pour ce type
+        capa_camions = capacites_flotte.get(v_type.upper(), 1)
+        CAPA_TEMPS_CRENEAU = capa_camions * 30 
+        
+        jobs_v = [j for j in tous_les_jobs if j['jobs'][0].vehicule_type == v_type]
+        
+        for c in creneaux:
+            # Calcul du poids total sur le créneau [c, c + 30]
+            jobs_actifs = []
+            poids_occupe = 0
+            
+            for j in jobs_v:
+                h_dep = j['h_depart_actuelle']
+                h_fin = h_dep + j['poids_total']
+                
+                if h_dep < c + 30 and h_fin > c:
+                    occ = min(h_fin, c + 30) - max(h_dep, c)
+                    poids_occupe += occ
+                    jobs_actifs.append(j)
+
+            # 4. Lissage si dépassement de la capacité temps
+            if poids_occupe > CAPA_TEMPS_CRENEAU:
+                # Tri par marge de manoeuvre décroissante
+                jobs_actifs.sort(key=lambda x: (x['h_deadline_min'] - (x['h_depart_actuelle'] + x['poids_total'])), reverse=True)
+                
+                for sj in jobs_actifs:
+                    if poids_occupe <= CAPA_TEMPS_CRENEAU: break
+                    
+                    nouveau_dep = sj['h_depart_actuelle'] + 15
+                    # On vérifie que le décalage ne dépasse pas la deadline ET la fin d'exploitation
+                    if nouveau_dep + sj['poids_total'] <= min(sj['h_deadline_min'], h_fin_explo):
+                        sj['h_depart_actuelle'] = nouveau_dep
+                        poids_occupe -= 15 
+
     return couloirs
