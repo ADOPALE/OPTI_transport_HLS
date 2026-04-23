@@ -209,4 +209,4 @@ class MoteurSimulation:
 # --- FONCTION D'APPEL ---
 def lancer_simulation(data):
     moteur = MoteurSimulation(data)
-    return moteur.simuler_semaine_homogene(nb_iterations=2)
+    return moteur.simuler_semaine_homogene(nb_iterations=1)
