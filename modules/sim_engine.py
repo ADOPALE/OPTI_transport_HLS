@@ -392,27 +392,31 @@ Cherche les partenaires idéaux pour un job pivot vers une destination commune.
 Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
 """
 def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    # 1. On force v_type en chaîne de caractères propre
+    # --- PRÉPARATION DE LA MATRICE (Sécurité Index) ---
+    # Si la première colonne contient les noms mais n'est pas l'index
+    if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
+        # On suppose que la colonne 0 contient les noms de sites
+        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
+
     v_type = str(job_pivot.vehicule_type).strip().upper()
-    
-    # On cherche le véhicule dans le référentiel avec un masque robuste
     mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
     if not mask_v.any():
         return [], 9999 
         
     vehicule = df_vehicules[mask_v].iloc[0]
     
-    # 2. Filtre strict : Même destination + Même type (Propre/Sale) + Même véhicule
-    # On compare des strings (str.upper()) pour éviter le crash 'Series'
     dest_pivot = str(job_pivot.destination).upper()
+    orig_pivot = str(job_pivot.origin).upper()
     
+    # Filtrage des candidats
     candidats = [j for j in pool_candidats if 
                  str(j.destination).upper() == dest_pivot and 
                  j.type_propre_sale == job_pivot.type_propre_sale and
                  str(j.vehicule_type).strip().upper() == v_type]
     
     meilleure_comb = []
-    poids_min = matrice_duree.loc[str(job_pivot.origin).upper(), dest_pivot]
+    # Accès direct .loc maintenant que l'index est forcé
+    poids_min = matrice_duree.loc[orig_pivot, dest_pivot]
     
     comb_test = [job_pivot]
     for c in candidats:
@@ -420,7 +424,6 @@ def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_cont
         
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test.append(c)
-            # Recalcul du trajet multi-points de départ vers destination unique
             points_dep = list(set([str(j.origin).upper() for j in comb_test]))
             
             poids_test = 0
@@ -442,16 +445,16 @@ Cherche à grouper des jobs partant du même quai vers des destinations différe
 Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
 """
 def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    # 1. On force v_type en chaîne de caractères propre
+    # --- PRÉPARATION DE LA MATRICE (Sécurité Index) ---
+    if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
+        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
+
     v_type = str(job_pivot.vehicule_type).strip().upper()
-    
     mask_v = df_vehicules['Types'].str.strip().str.upper() == v_type
     if not mask_v.any():
         return [], 9999
 
     vehicule = df_vehicules[mask_v].iloc[0]
-    
-    # 2. Filtre strict : Même origine + Même type (Propre/Sale) + Même véhicule
     orig_pivot = str(job_pivot.origin).upper()
     
     candidats = [j for j in pool_candidats if 
@@ -469,7 +472,6 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
         if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
             comb_test.append(c)
             
-            # --- TRI PAR PROXIMITÉ (Logique de tournée) ---
             dests_uniques = list(set([str(j.destination).upper() for j in comb_test]))
             
             poids_test = 0
@@ -477,6 +479,7 @@ def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_conte
             temp_dests = dests_uniques.copy()
             
             while temp_dests:
+                # Utilisation de .loc sur la matrice indexée
                 proche = min(temp_dests, key=lambda d: matrice_duree.loc[curr, d])
                 poids_test += matrice_duree.loc[curr, proche] + 10 
                 curr = proche
