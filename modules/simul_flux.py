@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from modules.Import import extraction_donnees
 import math
+import plotly.graph_objects as go
 
 
 """
@@ -291,6 +292,59 @@ def simuler_lissage_flotte(df_sequence_type, df_vehicules, df_contenants, matric
 
 
 
+
+"""
+FONCTION - afficher_graphique_charge_contenants
+Affiche un graphique à barres montrant le nombre de contenants à livrer par créneau horaire.
+"""
+def afficher_graphique_charge_filtree(df_sequence_type, df_vehicules, df_contenants, df_sites, vehicule_filtre, h_fin_param, h_deb_param):
+    """
+    Affiche la charge de contenants par heure pour un type de véhicule spécifique.
+    """
+    charge_contenants = np.zeros(1440)
+    
+    # Nettoyage pour les accès
+    df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
+    col_libelle = next((c for c in df_sites.columns if "LIBEL" in c or "SITE" in c), None)
+    
+    fin_poste_defaut = (h_fin_param.hour * 60 + h_fin_param.minute) - 60
+    debut_poste_defaut = (h_deb_param.hour * 60 + h_deb_param.minute)
+
+    for _, flux in df_sequence_type.iterrows():
+        site_dep = str(flux['Point de départ']).strip().upper()
+        site_arr = str(flux['Point de destination']).strip().upper()
+        type_cont = str(flux['Nature de contenant']).strip().upper()
+        
+        # 1. On identifie quel véhicule "prendrait" ce flux (Logique identique à la flotte)
+        v_elu, _ = identifier_meilleur_vehicule(
+            site_dep, site_arr, type_cont, df_vehicules, df_contenants, df_sites, col_libelle
+        )
+        
+        # 2. Si le véhicule élu correspond au filtre (ou si on veut "TOUS")
+        if v_elu is not None and (vehicule_filtre == "TOUS" or v_elu['Types'] == vehicule_filtre):
+            qte = flux['Quantité_Séquence_Type']
+            
+            val_h_dep = flux.get("Heure de mise à disposition min départ")
+            val_h_arr = flux.get("Heure max de livraison à la destination")
+            
+            h_start = to_decimal_minutes(val_h_dep) if pd.notna(val_h_dep) else debut_poste_defaut
+            h_end = to_decimal_minutes(val_h_arr) if pd.notna(val_h_arr) else fin_poste_defaut
+            if h_end <= h_start: h_end = h_start + 60
+            
+            intensite_cont = qte / (h_end - h_start)
+            charge_contenants[int(h_start):int(h_end)] += intensite_cont
+
+    # Agrégation et Plotly
+    heures = [f"{h}h" for h in range(24)]
+    volume_par_heure = [np.sum(charge_contenants[h*60 : (h+1)*60]) for h in range(24)]
+
+    fig = go.Figure(go.Bar(x=heures, y=volume_par_heure, marker_color='#2ca02c'))
+    fig.update_layout(
+        title=f"<b>📦 Charge Horaire : {vehicule_filtre}</b>",
+        xaxis_title="Heure", yaxis_title="Contenants",
+        template="plotly_white", height=350
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 """ _________________________________________SOUS FONCTIONS UTILES _________________________________________"""
