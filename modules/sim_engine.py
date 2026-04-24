@@ -78,9 +78,7 @@ def preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_nom):
     return df_complet
 
 
-import math
-import pandas as pd
-import streamlit as st
+
 
 def Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites):
     """
@@ -141,7 +139,97 @@ def Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites)
     return pd.DataFrame(resultats)
 
 
+def fragmenter_en_jobs(df_eclate_v, v_type_str, df_vehicules, df_contenants):
+    """
+    Eclate chaque ligne de flux en N jobs complets + 1 job incomplet (résiduel).
+    Calcule le taux d'occupation réel par rapport à la capacité technique max.
+    """
+    jobs_complets = []
+    jobs_incomplets = []
+    
+    # On récupère le nom de la colonne des types dans le référentiel véhicule
+    col_nom_v = df_vehicules.columns[0]
 
+    for index, row in df_eclate_v.iterrows():
+        qte_totale = row['Quantite_du_jour']
+        capa_u = row['Capa_Max_Transport'] # Capacité avec taux de remplissage (ex: 28)
+        
+        # --- GESTION DES ERREURS CRITIQUES ---
+        
+        # Cas 1 : Quantité positive mais capacité nulle (Incompatibilité véhicule/contenant)
+        if qte_totale > 0 and capa_u <= 0:
+            st.error(f"### ❌ Erreur de Capacité : {v_type_str}")
+            st.warning(f"""
+            **Flux impossible à charger :**
+            - **Origine :** {row['Point de départ']}
+            - **Destination :** {row['Point de destination']}
+            - **Contenant :** {row['Nature de contenant']}
+            
+            **Cause probable :** Le véhicule sélectionné ne peut techniquement pas transporter ce contenant.
+            """)
+            st.stop()
+
+        # Cas 2 : Quantité nulle ou négative (Erreur de données source)
+        if qte_totale <= 0:
+            # On ignore les lignes à 0 sans bloquer, 
+            # SAUF si tu considères que c'est une anomalie de ton fichier.
+            # Ici, on continue simplement pour ne pas créer de jobs vides.
+            continue
+
+        # --- CALCUL DU TAUX D'OCCUPATION RÉEL ---
+        # On récupère la capacité max théorique (100%) pour le calcul du taux physique
+        try:
+            v_info = df_vehicules[df_vehicules[col_nom_v] == v_type_str].iloc[0]
+            c_info = df_contenants[df_contenants['libellé'] == row['Nature de contenant']].iloc[0]
+            capa_theorique_100 = calculer_capacite_max(v_info, c_info)
+        except:
+            capa_theorique_100 = capa_u # Backup si erreur de recherche
+
+        # 1. Création des jobs complets (au sens "complet selon taux paramétré")
+        nb_pleins = int(qte_totale // capa_u)
+        for i in range(nb_pleins):
+            job_c = Job(
+                job_id=f"{row['Origine_Flux']}_{index}_C{i}",
+                flux_id=index,
+                type_job='COMPLET',
+                origin=row['Point de départ'],
+                destination=row['Point de destination'],
+                h_dispo=to_decimal_minutes(row['Heure de mise à disposition min départ']),
+                h_deadline=to_decimal_minutes(row['Heure max de livraison à la destination']),
+                quantite=capa_u,
+                contenant=row['Nature de contenant'],
+                vehicule_type=v_type_str,
+                type_propre_sale=row['Type (propre/sale)'],
+                aller_retour=row['Aller/Retour'],
+                tournee_rattachement=row.get('Nom de la tournée mutualisée le cas échéant'),
+                # Taux d'occupation physique réel
+                taux_occupation=capa_u / capa_theorique_100 if capa_theorique_100 > 0 else 1.0
+            )
+            jobs_complets.append(job_c)
+            
+        # 2. Création du job incomplet (le résiduel)
+        reste = qte_totale % capa_u
+        if reste > 0:
+            job_i = Job(
+                job_id=f"{row['Origine_Flux']}_{index}_R",
+                flux_id=index,
+                type_job='INCOMPLET',
+                origin=row['Point de départ'],
+                destination=row['Point de destination'],
+                h_dispo=to_decimal_minutes(row['Heure de mise à disposition min départ']),
+                h_deadline=to_decimal_minutes(row['Heure max de livraison à la destination']),
+                quantite=reste,
+                contenant=row['Nature de contenant'],
+                vehicule_type=v_type_str,
+                type_propre_sale=row['Type (propre/sale)'],
+                aller_retour=row['Aller/Retour'],
+                tournee_rattachement=row.get('Nom de la tournée mutualisée le cas échéant'),
+                # Taux d'occupation physique réel du reste
+                taux_occupation=reste / capa_theorique_100 if capa_theorique_100 > 0 else reste/capa_u
+            )
+            jobs_incomplets.append(job_i)
+            
+    return jobs_complets, jobs_incomplets
 
 
 
