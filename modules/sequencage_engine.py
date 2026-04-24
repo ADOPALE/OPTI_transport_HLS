@@ -66,88 +66,56 @@ class PosteChauffeur:
 # 3. LOGIQUE DE SÉLECTION (MAILLON CRITIQUE)
 # =================================================================
 
-"""
-    Vérifie si on peut :
-    1. Arriver au chargement du 1er job
-    2. ET finir la livraison du 1er job avant sa deadline.
-    """
-"""
 def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
-    
-    candidats_possibles = []
+    """
+    Arbitrage par Score Combiné : Urgence vs Efficacité.
+    """
+    candidats_evalues = []
     
     for j in dispos:
         first_job = j.liste_jobs[0]
         h_deadline_1er = to_min(first_job.h_deadline)
-        
-        # 1. Temps d'approche vers l'origine du 1er Job
         dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
-        
-        # 2. Temps du 1er segment (on prend le premier job du bloc)
-        # Note : poids_total inclus manutention + trajet. On estime le maillon 1.
         duree_maillon_1 = first_job.poids_total if hasattr(first_job, 'poids_total') else (j.poids_total / len(j.liste_jobs))
         
-        # CONDITION CRITIQUE : Heure Actuelle + Approche + Premier Segment <= Deadline du Premier Job
+        # 1. Filtre de faisabilité physique (Incontournable)
         if minute + dist_approche + duree_maillon_1 <= h_deadline_1er:
-            j.stress_temp = calculer_stress_dynamique(j, minute)
-            candidats_possibles.append(j)
-
-    if not candidats_possibles:
-        st.error(f"à **{minute/60}** heure on a aucun candidat possible du fait du stress des jobs")
-        return None
-
-    # Tri par stress, puis priorités métiers
-    candidats_possibles.sort(key=lambda x: x.stress_temp, reverse=True)
-    top_3 = candidats_possibles[:15]
-
-    for j in top_3:
-        if get_couloir_id(j) == p.couloir_actuel and j.points_depart[0] == p.position_actuelle:
-            return j
-    for j in top_3:
-        if j.points_depart[0] == p.position_actuelle:
-            return j
             
-    top_3.sort(key=lambda x: matrice_duree.get(p.position_actuelle, {}).get(x.points_depart[0], 999))
-    return top_3[0]
-"""
+            # --- CALCUL DU SCORE COMBINÉ ---
+            
+            # A. Composante Urgence (Stress) : 0 à +infini
+            # On utilise ton calcul existant
+            stress = calculer_stress_dynamique(j, minute)
+            
+            # B. Composante Proximité (Pénalité de trajet à vide)
+            # On retire du "temps utile" pour chaque minute de trajet à vide
+            # Poids 1.5 : on est assez sévère sur les trajets à vide longs
+            penalite_distance = dist_approche * 1.5
+            
+            # C. Composante Bonus Couloir (Continuité)
+            # Si on est déjà sur place ET dans le bon couloir, gros bonus
+            bonus_strategique = 0
+            if j.points_depart[0] == p.position_actuelle:
+                bonus_strategique += 30 # Équivalent à "gagner" 30 min d'urgence
+                if get_couloir_id(j) == p.couloir_actuel:
+                    bonus_strategique += 20 # Bonus cumulé pour le couloir
+            
+            # SCORE FINAL
+            # On veut maximiser l'urgence tout en minimisant la distance
+            score_final = stress - penalite_distance + bonus_strategique
+            
+            candidats_evalues.append({
+                'job': j,
+                'score': score_final
+            })
 
-
-def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
-    """
-    Sélectionne le job le plus stressé parmi les candidats physiquement réalisables.
-    La priorité est donnée au stress (urgence) avant les optimisations de couloir.
-    """
-    candidats_possibles = []
-    
-    for j in dispos:
-        first_job = j.liste_jobs[0]
-        h_deadline_1er = to_min(first_job.h_deadline)
-        
-        # 1. Temps d'approche vers l'origine du 1er Job
-        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
-        
-        # 2. Temps du 1er segment (on prend le premier job du bloc)
-        # On utilise le poids du premier job s'il existe, sinon on estime
-        duree_maillon_1 = first_job.poids_total if hasattr(first_job, 'poids_total') else (j.poids_total / len(j.liste_jobs))
-        
-        # CONDITION DE FAISABILITÉ PHYSIQUE : 
-        # On ne peut pas prendre un job si le camion arrive APRES la deadline du 1er segment
-        if minute + dist_approche + duree_maillon_1 <= h_deadline_1er:
-            j.stress_temp = calculer_stress_dynamique(j, minute)
-            candidats_possibles.append(j)
-
-    if not candidats_possibles:
-        # Debug : on affiche l'heure en format lisible
-        h_affichage = f"{int(minute//60):02d}h{int(minute%60):02d}"
-        # st.warning(f"🕒 {h_affichage} : Aucun job réalisable pour {p.id_poste} (Deadlines trop serrées)")
+    if not candidats_evalues:
         return None
 
-    # TRI ABSOLU PAR STRESS (le plus élevé en premier)
-    # On ignore les priorités de couloir/position pour forcer le traitement de l'urgence
-    candidats_possibles.sort(key=lambda x: x.stress_temp, reverse=True)
+    # On trie par le score le plus élevé
+    candidats_evalues.sort(key=lambda x: x['score'], reverse=True)
     
-    # On retourne le premier de la liste (le plus stressé)
-    return candidats_possibles[0]
+    return candidats_evalues[0]['job']
 
 # =================================================================
 # 4. MOTEUR DE SIMULATION
@@ -242,7 +210,7 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
     postes_complets = []
     for v_type, val_max in n_max_dict.items():
         # Règle : Max théorique + 20%
-        n_max_calc = math.ceil(max(val_max) * 2) if isinstance(val_max, list) else math.ceil(val_max * 2)
+        n_max_calc = math.ceil(max(val_max) * 10) if isinstance(val_max, list) else math.ceil(val_max * 10)
         st.info(f"Analyse **{v_type}** : Recherche d'optimisation (Max: {n_max_calc} camions)")
         
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
