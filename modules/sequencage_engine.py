@@ -14,10 +14,16 @@ def to_decimal_minutes(t):
     return 0
 
 def sont_dans_le_meme_couloir(sj1, sj2):
+    """
+    Vérifie si deux SuperJobs appartiennent au même axe.
+    Accès via liste_jobs[0].origin et liste_jobs[-1].destination
+    """
     if not sj1 or not sj2 or not sj1.liste_jobs or not sj2.liste_jobs:
         return False
+    
     o1, d1 = sj1.liste_jobs[0].origin, sj1.liste_jobs[-1].destination
     o2, d2 = sj2.liste_jobs[0].origin, sj2.liste_jobs[-1].destination
+    
     return (o1 == o2 and d1 == d2) or (o1 == d2 and d1 == o2)
 
 # =================================================================
@@ -89,13 +95,17 @@ class PosteChauffeur:
 # =================================================================
 
 def calculer_score_stress(sj, temps_actuel):
+    # h_deadline_min est bien l'attribut de SuperJob
     deadline = to_decimal_minutes(sj.h_deadline_min)
     temps_restant = deadline - temps_actuel
     if temps_restant <= 0: return 999999
+    
+    # poids_total est l'attribut de SuperJob
     ratio = sj.poids_total / temps_restant
     return ratio * (1 / max(0.001, (1.1 - ratio)))
 
 def trouver_meilleur_job(poste, jobs_dispos, matrice_duree):
+    # Filtrage par v_type (attribut de SuperJob)
     candidats = [j for j in jobs_dispos if j.v_type == poste.vehicule_type]
     if not candidats: return None
     
@@ -110,6 +120,7 @@ def trouver_meilleur_job(poste, jobs_dispos, matrice_duree):
         orig_j = j.liste_jobs[0].origin
         if orig_j == poste.position_actuelle:
             return j
+            
     scored = []
     for idx, j in enumerate(top_candidats):
         orig_j = j.liste_jobs[0].origin
@@ -132,12 +143,12 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
     postes = []
     for v_type, n_veh in n_max_dict.items():
         if n_veh <= 0: continue
+        # Utilisation de 'Types' avec un s
         df_f = df_vehicules[df_vehicules['Types'] == v_type]
         if df_f.empty: continue
         row_v = df_f.iloc[0]
         
         site_depot = row_v['Stationnement initial']
-        # Conversion forcée en cas de format bizarre dans Excel
         t_man = to_decimal_minutes(row_v[nom_col_man]) if nom_col_man in row_v else 10
         
         for i in range(1, int(n_veh) + 1):
@@ -167,11 +178,13 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 elif p.etat == 'EN_MANOEUVRE_QUAI':
                     if sj and p.position_actuelle == sj.liste_jobs[0].origin:
                         p.etat = 'EN_CHARGEMENT'
-                        p.temps_restant_etat = to_decimal_minutes(sj.temps_chargement)
+                        # ATTRIBUTS CORRIGES : duree_chargement
+                        p.temps_restant_etat = to_decimal_minutes(sj.duree_chargement)
                         p.enregistrer_evenement(heure_actuelle, "EN_CHARGEMENT", sj)
                     else:
                         p.etat = 'EN_DECHARGEMENT'
-                        p.temps_restant_etat = to_decimal_minutes(sj.temps_dechargement)
+                        # ATTRIBUTS CORRIGES : duree_dechargement
+                        p.temps_restant_etat = to_decimal_minutes(sj.duree_dechargement)
                         p.enregistrer_evenement(heure_actuelle, "EN_DECHARGEMENT", sj)
                 
                 elif p.etat == 'EN_CHARGEMENT':
@@ -186,8 +199,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                     p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", sj, "Mise à quai")
                 
                 elif p.etat == 'EN_DECHARGEMENT':
-                    deadline = to_decimal_minutes(sj.h_deadline_min)
-                    if heure_actuelle > deadline:
+                    if heure_actuelle > to_decimal_minutes(sj.h_deadline_min):
                         return {"succes": False, "erreur": f"Retard sur {sj.flux_id}"}
                     p.etat = 'DISPONIBLE'; p.job_precedent = sj; p.job_en_cours = None
                     p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
@@ -195,6 +207,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 elif p.etat == 'EN_PAUSE':
                     p.etat = 'DISPONIBLE'; p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
 
+        # Sélection des jobs dispos
         jobs_dispos = [j for j in jobs_restants if to_decimal_minutes(j.h_dispo_min) <= heure_actuelle]
         for j in jobs_dispos: j.score_stress = calculer_score_stress(j, heure_actuelle)
 
@@ -239,3 +252,4 @@ def trouver_meilleure_configuration_journee(liste_sj, intensite_par_type, df_veh
     else:
         n_max_safe = {v: count + 1 for v, count in n_max_initial.items()}
         return ordonnancer_journee(liste_sj, n_max_safe, df_vehicules, matrice_duree, params_logistique)
+    
