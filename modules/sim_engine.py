@@ -407,9 +407,143 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
 
     return super_jobs_scelles, pile_a_optimiser
 
+def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree):
+    """
+    ÉTAPE 2 : Arbitrage avec PRIORITÉ aux flux directs (Même Origine + Même Destination).
+    """
+    params = st.session_state["params_logistique"]
+    taux_max_cible = params["securite_remplissage"]
+    
+    super_jobs_optimises = []
+    restants = jobs_solitaires.copy()
+
+    # On trie par heure de dispo
+    restants.sort(key=lambda x: x.h_dispo)
+
+    while len(restants) > 0:
+        job_pivot = restants.pop(0)
+        
+        # --- NOUVEAU : PRIORITÉ 1 - COUPLES PARFAITS (Même trajet exact) ---
+        # On cherche si d'autres jobs font EXACTEMENT le même trajet
+        couples_parfaits = [
+            j for j in restants 
+            if j.origin == job_pivot.origin 
+            and j.destination == job_pivot.destination
+            and j.vehicule_type == job_pivot.vehicule_type
+            and j.type_propre_sale == job_pivot.type_propre_sale
+        ]
+        
+        # Si on trouve des partenaires pour un trajet direct, on tente de remplir
+        if couples_parfaits:
+            comb_directe = [job_pivot]
+            occ_directe = job_pivot.taux_occupation
+            for c in couples_parfaits:
+                if occ_directe + c.taux_occupation <= taux_max_cible + 0.0001:
+                    comb_directe.append(c)
+                    occ_directe += c.taux_occupation
+            
+            # Si on a réussi à grouper au moins un partenaire en direct
+            if len(comb_directe) > 1:
+                sj_direct = SuperJob(comb_directe, matrice_duree)
+                super_jobs_optimises.append(sj_direct)
+                
+                # On retire les partenaires du pool
+                ids_elus = [j.job_id for j in comb_directe if j.job_id != job_pivot.job_id]
+                restants = [j for j in restants if j.job_id not in ids_elus]
+                continue # On passe au job suivant sans tester l'arbitrage complexe
+
+        # --- ÉTAPE 2 (si pas de couple parfait) : ARBITRAGE DÉPART VS DESTINATION ---
+        # 1. TEST LOGIQUE DESTINATION
+        sj_dest, poids_dest, membres_dest = evaluer_strategie(
+            job_pivot, restants, "dest_group", taux_max_cible, matrice_duree
+        )
+        
+        # 2. TEST LOGIQUE DÉPART
+        sj_dep, poids_dep, membres_dep = evaluer_strategie(
+            job_pivot, restants, "origin_group", taux_max_cible, matrice_duree
+        )
+
+        # 3. ARBITRAGE
+        if poids_dest <= poids_dep and len(membres_dest) > 1:
+            meilleur_sj = sj_dest
+            elus = membres_dest
+        elif len(membres_dep) > 1:
+            meilleur_sj = sj_dep
+            elus = membres_dep
+        else:
+            meilleur_sj = SuperJob([job_pivot], matrice_duree)
+            elus = [job_pivot]
+
+        super_jobs_optimises.append(meilleur_sj)
+        
+        ids_elus = [j.job_id for j in elus if j.job_id != job_pivot.job_id]
+        restants = [j for j in restants if j.job_id not in ids_elus]
+
+    return super_jobs_optimises
 
 
+def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matrice):
+    """
+    Simule une combinaison basée sur un axe (origine_group ou dest_group).
+    Calcule le SuperJob résultant et son poids de mobilisation total.
+    """
+    # On récupère la valeur de l'axe (ex: 'HUB_HSJ' ou 'SITE_NORD')
+    valeur_groupe = getattr(job_pivot, attribut_groupe)
+    
+    # 1. Filtrage des partenaires potentiels :
+    # - Même groupe sur l'axe choisi
+    # - Même type de véhicule (on ne mélange pas un 19t et un VL)
+    # - Même nature sanitaire (Propre avec Propre, Sale avec Sale)
+    partenaires = [
+        j for j in candidats_pool 
+        if getattr(j, attribut_groupe) == valeur_groupe 
+        and j.vehicule_type == job_pivot.vehicule_type
+        and j.type_propre_sale == job_pivot.type_propre_sale
+    ]
+    
+    # 2. Stratégie de remplissage :
+    # On trie par taux d'occupation décroissant pour maximiser le remplissage de la "boîte"
+    partenaires.sort(key=lambda x: x.taux_occupation, reverse=True)
+    
+    groupe_retenu = [job_pivot]
+    cumul_occ = job_pivot.taux_occupation
+    
+    # 3. Construction du groupe :
+    # On limite souvent à 3 ou 4 jobs max par camion pour rester sur des tournées réalistes
+    # et on respecte strictement le taux_max (taux de sécurité)
+    for p in partenaires:
+        if len(groupe_retenu) < 4 and (cumul_occ + p.taux_occupation <= taux_max + 0.0001):
+            groupe_retenu.append(p)
+            cumul_occ += p.taux_occupation
+            
+    # 4. Création du SuperJob de test :
+    # C'est ici que la classe SuperJob calcule automatiquement :
+    # - L'itinéraire
+    # - Le temps de trajet total
+    # - Les pénalités de changement de quai
+    sj_temp = SuperJob(groupe_retenu, matrice)
+    
+    # On retourne le SuperJob, son poids (score à minimiser) et la liste des membres
+    return sj_temp, sj_temp.calculer_poids_mobilisation(), groupe_retenu
 
+
+def convertir_complets_en_super_jobs(jobs_complets, matrice_duree):
+    """
+    Transforme chaque Job complet en un SuperJob unique.
+    Cela permet d'unifier la suite du traitement (lissage, ordonnancement).
+    """
+    super_jobs_complets = []
+    
+    for j in jobs_complets:
+        # On crée un SuperJob contenant un seul job
+        sj = SuperJob([j], matrice_duree)
+        
+        # On lui donne un tag spécifique pour le suivi dans les logs
+        sj.type_combinaison = "DIRECT_COMPLET"
+        
+        super_jobs_complets.append(sj)
+        
+    return super_jobs_complets
 
 
 
