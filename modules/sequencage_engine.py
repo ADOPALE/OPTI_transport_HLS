@@ -90,7 +90,7 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
             candidats_possibles.append(j)
 
     if not candidats_possibles:
-        st.error(f"à {minute/60} heure on a aucun candidat possible du fait du stress des jobs")
+        st.error(f"à **{minute/60}** heure on a aucun candidat possible du fait du stress des jobs")
         return None
 
     # Tri par stress, puis priorités métiers
