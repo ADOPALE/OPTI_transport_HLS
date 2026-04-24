@@ -687,11 +687,10 @@ Répartit les jobs par couloir selon leur représentativité :
 """
 def etaler_uniformément_par_couloir(couloirs):
     """
-    Répartit les départs sur toute la plage disponible pour chaque couloir.
-    Sécurisé contre les KeyError 'ALLER'/'RETOUR'.
+    Répartit les départs sur toute la plage disponible.
+    Sécurité : Initialise h_depart_actuelle pour éviter les KeyError.
     """
     for key in couloirs:
-        # On boucle sur les sens possibles, mais on vérifie s'ils existent
         for sens in ["ALLER", "RETOUR"]:
             if sens not in couloirs[key]:
                 continue
@@ -700,25 +699,26 @@ def etaler_uniformément_par_couloir(couloirs):
             if not jobs:
                 continue
             
-            # 1. Trier par urgence réelle (deadline)
-            jobs.sort(key=lambda x: x['h_deadline_min'])
+            # --- SÉCURITÉ : Initialisation systématique ---
+            for sj in jobs:
+                if 'h_depart_actuelle' not in sj:
+                    sj['h_depart_actuelle'] = sj['h_dispo_max']
+            
+            # Trier par deadline pour le lissage
+            jobs.sort(key=lambda x: x.get('h_deadline_min', 0))
             
             n = len(jobs)
-            # 2. Définir la fenêtre de tir
             t_start = min(sj['h_dispo_max'] for sj in jobs)
             t_end = max(sj['h_deadline_min'] for sj in jobs)
             
-            # Calcul du pas (on évite la division par zéro si n=1)
             plage = max(30, t_end - t_start)
             pas = plage / n if n > 1 else 0
 
-            curr_t = t_start
             for i, sj in enumerate(jobs):
-                # On place le job de manière homogène
                 cible = t_start + (i * pas)
-                
-                # Respect strict du dispo et de la deadline
                 h_depart = max(cible, sj['h_dispo_max'])
+                
+                # On ne dépasse pas la deadline
                 if h_depart > sj['h_deadline_min']:
                     h_depart = sj['h_deadline_min']
                 
@@ -732,38 +732,44 @@ Lissage marginal dynamique (on ajuste la charge pour le véhicule au cours de la
 """
 def ajustement_marginal_dynamique(couloirs):
     """
-    Évite les collisions de départ par site (saturation de quai).
+    Évite les collisions de départ par site. 
+    Sécurité : utilise .get() pour éviter KeyError lors du tri.
     """
     tous_les_sj = []
     for key in couloirs:
-        for sens in couloirs[key]: # Sécurité : on itère sur les clés existantes
+        for sens in couloirs[key]:
             tous_les_sj.extend(couloirs[key][sens])
             
     if not tous_les_sj:
         return couloirs
             
-    # 1. Tri chronologique de tous les jobs, tous couloirs confondus
-    tous_les_sj.sort(key=lambda x: x['h_depart_actuelle'])
+    # SÉCURITÉ : On s'assure que chaque job a une heure, même si le lissage a échoué
+    for sj in tous_les_sj:
+        if 'h_depart_actuelle' not in sj:
+            sj['h_depart_actuelle'] = sj['h_dispo_max']
+
+    # 1. Tri chronologique sécurisé
+    tous_les_sj.sort(key=lambda x: x.get('h_depart_actuelle', x['h_dispo_max']))
     
-    # 2. Suivi des départs par site
+    # 2. Suivi des départs par site pour le cadencement (10 min)
     dernier_depart_par_site = {}
-    CADENCE_MINUTAGE = 10 # 10 minutes entre deux départs du même site
+    CADENCE_MINUTAGE = 10 
 
     for sj in tous_les_sj:
-        # On récupère le site de départ réel (le premier job du super_job)
+        # On vérifie qu'il y a bien un job dans le super_job pour trouver l'origine
+        if not sj['jobs']: continue
+        
         site_origine = sj['jobs'][0].origin_group
         h_prevue = sj['h_depart_actuelle']
         
         if site_origine in dernier_depart_par_site:
             h_mini_possible = dernier_depart_par_site[site_origine] + CADENCE_MINUTAGE
             
-            # Si collision temporelle sur le site
             if h_prevue < h_mini_possible:
-                # On décale au minimum possible, sans dépasser la deadline
-                nouvelle_h = min(h_mini_possible, sj['h_deadline_min'])
-                sj['h_depart_actuelle'] = nouvelle_h
+                # Décalage sans dépasser la deadline
+                h_limite = sj.get('h_deadline_min', h_prevue + 60)
+                sj['h_depart_actuelle'] = min(h_mini_possible, h_limite)
         
-        # Mise à jour du registre du site
         dernier_depart_par_site[site_origine] = sj['h_depart_actuelle']
 
     return couloirs
