@@ -104,134 +104,73 @@ def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avan
 
 def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
     """
-    Cherche le nombre minimal de CAMIONS nécessaires pour un segment spécifique (v_type)
-    en autorisant la relève de chauffeurs sur un même véhicule.
+    Cherche le nombre minimal de véhicules pour un type spécifique.
     """
     if "params_logistique" not in st.session_state:
-        st.error("❌ Paramètres logistiques introuvables dans la session.")
         return None
 
     params = st.session_state["params_logistique"]
     rh = params["rh"]
 
-    # --- 1. ADAPTATION DES PARAMÈTRES RH & EXPLOITATION ---
-    try:
-        h_prise_min = to_decimal_minutes(rh["h_prise_min"])
-        h_fin_max = to_decimal_minutes(rh["h_fin_max"])
-        duree_poste_max = rh["amplitude_totale"]
-        
-        # Division du temps fixe (prise de service / fin de service)
-        t_prepa = rh["temps_fixes"] / 2  
-        t_fin_poste = rh["temps_fixes"] / 2
-        
-        depot = params.get("stationnement_initial", "HLS").upper()
-    except KeyError as e:
-        st.error(f"❌ Erreur : La clé {e} est absente de params_logistique.")
-        return None
+    h_prise_min = to_decimal_minutes(rh["h_prise_min"])
+    h_fin_max = to_decimal_minutes(rh["h_fin_max"])
+    duree_poste_max = rh["amplitude_totale"]
+    t_prepa = rh["temps_fixes"] / 2  
+    t_fin_poste = rh["temps_fixes"] / 2
+    depot = params.get("stationnement_initial", "HLS").upper()
 
-    # --- 2. MISE À PLAT DES JOBS DU SEGMENT ---
+    # Mise à plat des jobs du segment
     tous_les_jobs = []
-    # Extraction depuis la structure en couloirs (frozenset)
-    if isinstance(couloirs, dict):
-        for sens_dict in couloirs.values():
-            if isinstance(sens_dict, dict):
-                for liste_sj in sens_dict.values():
-                    tous_les_jobs.extend(liste_sj)
-            else:
-                tous_les_jobs.extend(sens_dict)
-    else:
-        tous_les_jobs = couloirs
+    for sens_dict in couloirs.values():
+        for liste_sj in sens_dict.values():
+            tous_les_jobs.extend(liste_sj)
 
     if not tous_les_jobs:
         return {"succes": True, "n_camions": 0, "postes": []}
 
-    # Tri chronologique par lissage (ou dispo par défaut)
-    tous_les_jobs.sort(key=lambda x: x.get('h_depart_actuelle', x.get('h_dispo_max', 0)))
+    tous_les_jobs.sort(key=lambda x: x.get('h_depart_actuelle', 0))
 
-    # --- 3. ANALYSE PRÉALABLE DE FAISABILITÉ ---
-    impossibles = []
-    for sj in tous_les_jobs:
-        # Vérification amplitude
-        if sj['poids_total'] > (duree_poste_max - rh["temps_fixes"]):
-            impossibles.append(f"❌ {sj['id_super_job']} : Trop long pour un seul chauffeur.")
-        
-        # Vérification deadline stricte
-        h_fin_theorique = sj['h_depart_actuelle'] + sj['poids_total']
-        if h_fin_theorique > sj['h_deadline_min']:
-            impossibles.append(f"❌ {sj['id_super_job']} : Dépasse la deadline à {h_fin_theorique:.1f} min.")
-    
-    if impossibles:
-        st.error(f"### 🚨 {len(impossibles)} Jobs impossibles pour le type {v_type}")
-        with st.expander("Détails des échecs critiques"):
-            for msg in impossibles: st.write(msg)
-        return {"succes": False, "impossibles": impossibles}
+    # Test itératif (de 1 à N jobs)
+    for n_test in range(1, len(tous_les_jobs) + 1):
+        res = tenter_sequencage(
+            n_test, tous_les_jobs, depot, matrice_duree, 
+            h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste, v_type
+        )
+        if res["succes"]:
+            tous_les_postes = []
+            for c in res['camions']:
+                for p in c['postes']:
+                    p['id_camion'] = c['id_camion']
+                    p['v_type'] = v_type
+                    tous_les_postes.append(p)
+            return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
 
-    # --- 4. RECHERCHE ITÉRATIVE DU NOMBRE DE VÉHICULES ---
-    # On teste de 1 à N camions jusqu'à trouver la première solution viable
-    solution_interne = None
-    n_max = len(tous_les_jobs)
-    
-    # Barre de progression pour le suivi utilisateur
-    with st.status(f"🔃 Calcul du dimensionnement pour {v_type}...") as status:
-        for n_test in range(1, n_max + 1):
-            res = tenter_sequencage(
-                n_test, tous_les_jobs, depot, matrice_duree, 
-                h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste,
-                v_type
-            )
-            
-            if res["succes"]:
-                solution_interne = res
-                status.update(label=f"✅ {v_type} : Solution trouvée avec {n_test} camions.", state="complete")
-                break 
-
-    # --- 5. FORMATAGE FINAL DES POSTES ---
-    if solution_interne:
-        tous_les_postes = []
-        for c in solution_interne['camions']:
-            for p in c['postes']:
-                # On marque chaque poste avec le type de véhicule pour le reporting final
-                p['id_camion'] = c['id_camion']
-                p['v_type'] = v_type
-                tous_les_postes.append(p)
-        
-        return {
-            "succes": True,
-            "n_camions": len(solution_interne['camions']),
-            "postes": tous_les_postes
-        }
-
-    st.error(f"❌ Aucun ordonnancement trouvé pour {v_type}.")
     return {"succes": False}
-
-
 
 def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
     """
-    Tente de caser les jobs pour un type de véhicule spécifique (v_type) sans aucune marge de dépassement.
+    Tente d'attribuer les jobs à une flotte de n_camions pour un type donné.
     """
     camions = []
     for i in range(n_camions):
         camions.append({
-            'id_camion': f"{v_type}_{i+1:02d}",
+            'id_camion': f"{v_type}_{i+1:02d}", # ID unique par type
             'type': v_type,
             'pos_actuelle': depot,
             'h_dispo_vehicule': h_start,
             'postes': []
         })
 
+    # Tri par heure de départ pour la logique de remplissage
     jobs_copy = sorted(copy.deepcopy(jobs_a_faire), key=lambda x: x.get('h_depart_actuelle', 0))
 
     for sj in jobs_copy:
         attribue = False
-        raison_echec = "Inconnu"
-        
         for c in camions:
-            besoin_nouveau_chauffeur = False
-            
-            # A. Test sur le chauffeur actuel du camion
+            besoin_nouveau_p = False
+            # Vérification si le chauffeur actuel peut prendre le job
             if not c['postes'] or c['postes'][-1]['fini']:
-                besoin_nouveau_chauffeur = True
+                besoin_nouveau_p = True
             else:
                 p_act = c['postes'][-1]
                 score, h_dep, net = calculer_score_opportuniste(p_act, sj, matrice_duree, t_fin)
@@ -239,17 +178,16 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
                 h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
                 debut = p_act['h_debut_service'] if p_act['h_debut_service'] is not None else (h_dep - t_prepa)
                 
-                # CONDITION STRICTE : Pas une minute de plus que l'amplitude ou la fin d'exploitation
+                # Si le job dépasse l'amplitude ou l'heure de fin max -> Fin de poste
                 if (h_ret - debut > max_poste) or (h_ret > h_limite):
                     p_act['fini'] = True
-                    besoin_nouveau_chauffeur = True
+                    besoin_nouveau_p = True
             
-            # B. Tentative avec Relève (Nouveau chauffeur)
-            if besoin_nouveau_chauffeur:
+            if besoin_nouveau_p:
+                # Nouveau poste (relève de chauffeur) sur le même camion
                 h_dispo_v = max(c['h_dispo_vehicule'], h_start)
                 p_neuf = {
                     'id_chauffeur': f"{c['id_camion']}_CH_{len(c['postes'])+1}",
-                    'v_type': v_type,
                     'h_debut_service': None,
                     'h_dispo': h_dispo_v + t_prepa,
                     'pos': c['pos_actuelle'],
@@ -259,26 +197,21 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
                     'dernier_type_sanitaire': None,
                     'total_nettoyages': 0
                 }
-                
                 score, h_dep, net = calculer_score_opportuniste(p_neuf, sj, matrice_duree, t_fin)
                 h_fin_m = h_dep + sj['poids_total']
                 h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
                 
-                # TESTS DE FAISABILITÉ STRICTS
-                if h_fin_m > sj['h_deadline_min']:
+                # Vérification faisabilité pour le nouveau chauffeur
+                if h_fin_m <= sj['h_deadline_min'] and (h_ret - (h_dep - t_prepa)) <= max_poste and h_ret <= h_limite:
+                    p_neuf['h_debut_service'] = h_dep - t_prepa
+                    c['postes'].append(p_neuf)
+                    p_cible = c['postes'][-1]
+                else:
                     continue
-                if (h_ret - (h_dep - t_prepa)) > max_poste:
-                    continue
-                if h_ret > h_limite:
-                    continue
-                
-                p_neuf['h_debut_service'] = h_dep - t_prepa
-                c['postes'].append(p_neuf)
-                p_cible = c['postes'][-1]
             else:
                 p_cible = c['postes'][-1]
 
-            # C. Attribution
+            # Attribution du job
             score, h_dep, net = calculer_score_opportuniste(p_cible, sj, matrice_duree, t_fin)
             h_fin_m = h_dep + sj['poids_total']
             
@@ -293,7 +226,6 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
             
             h_ret_final = h_fin_m + matrice_duree.loc[p_cible['pos'], depot] + t_fin
             p_cible['amplitude'] = h_ret_final - p_cible['h_debut_service']
-            
             attribue = True
             break
             
@@ -301,6 +233,9 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
             return {"succes": False}
 
     return {"succes": True, "camions": camions}
+
+
+
 
 def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants):
     df_travail = df_sequence_type.copy()
@@ -857,19 +792,13 @@ def ajustement_marginal_dynamique(couloirs):
 
 
 def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_contenants, matrice_duree):
-    """
-    Orchestre la simulation en résolvant chaque sous-problème (type de véhicule) 
-    indépendamment pour obtenir un dimensionnement précis par type.
-    """
     st.info("🚀 Démarrage du traitement segmenté par type de véhicule...")
 
     if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
         matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
         
-    # 1. Éclater les flux par type de véhicule
     sous_problemes = eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants)
     
-    # Récupération des paramètres
     params = st.session_state["params_logistique"]
     h_start = params["rh"]["h_prise_min"]
     h_end = params["rh"]["h_fin_max"]
@@ -877,55 +806,39 @@ def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_cont
     tous_les_postes_finaux = []
     dimensionnement_total = {}
 
-    # 2. Boucle de traitement INDÉPENDANTE par type de véhicule
     for v_type, df_v in sous_problemes.items():
         v_type_str = str(v_type).upper()
         
         with st.status(f"🚛 Calcul du segment : {v_type_str}...", expanded=False) as status:
-            # A. Fragmentation
+            # 1. Préparation (Fragmentation, Appairage, Fusion, Cartographie)
             jobs_c, jobs_i = fragmenter_flux_en_jobs(df_v, h_start, h_end)
-            
-            # B. Appairage
             super_jobs_i = appairer_tous_les_jobs_incomplets(jobs_i, df_vehicules, df_contenants, matrice_duree)
-            
-            # C. Fusion
             liste_sj_v = preparer_liste_tous_super_jobs(jobs_c, super_jobs_i, matrice_duree)
-            
-            # D. Cartographie (spécifique au type en cours)
             couloirs_v = cartographier_couloirs(liste_sj_v)
             
-            # E. Lissage temporel
+            # 2. Lissage
             couloirs_v = etaler_uniformément_par_couloir(couloirs_v)
             couloirs_v = ajustement_marginal_dynamique(couloirs_v)
             
-            # --- ÉTAPE CLÉ : ORDONNANCEMENT DU SOUS-PROBLÈME ---
-            # On ne passe que les couloirs de CE véhicule à l'ordonnanceur
+            # 3. Ordonnancement du SOUS-PROBLÈME (Appel segmenté)
             res_segment = ordonnancer_flotte_optimale(couloirs_v, matrice_duree, v_type_str)
             
             if res_segment and res_segment["succes"]:
-                n_camions = res_segment["n_camions"]
-                postes_v = res_segment["postes"]
-                
-                # On stocke les résultats
-                dimensionnement_total[v_type_str] = n_camions
-                tous_les_postes_finaux.extend(postes_v)
-                
-                st.write(f"✅ **{v_type_str}** : {n_camions} véhicules, {len(postes_v)} chauffeurs.")
-                status.update(label=f"✅ {v_type_str} : {n_camions} camions", state="complete")
+                dimensionnement_total[v_type_str] = res_segment["n_camions"]
+                tous_les_postes_finaux.extend(res_segment["postes"])
+                st.write(f"✅ **{v_type_str}** : {res_segment['n_camions']} véhicules.")
+                status.update(label=f"✅ {v_type_str} terminé", state="complete")
             else:
-                st.error(f"❌ Échec de l'ordonnancement pour le type {v_type_str}")
-                status.update(label=f"❌ Erreur sur {v_type_str}", state="error")
+                st.error(f"❌ Échec pour {v_type_str}")
+                status.update(label=f"❌ Erreur {v_type_str}", state="error")
 
-    # 3. Synthèse finale
+    # Synthèse finale
     if tous_les_postes_finaux:
         st.write("---")
         st.subheader("🏁 Résumé du dimensionnement")
         cols = st.columns(len(dimensionnement_total))
         for i, (name, count) in enumerate(dimensionnement_total.items()):
             cols[i].metric(name, f"{count} Camions")
-        
-        st.success(f"🎯 Simulation terminée. Total : {len(tous_les_postes_finaux)} postes chauffeurs créés.")
         return tous_les_postes_finaux
-    else:
-        st.error("❌ Aucun ordonnancement n'a pu être trouvé pour l'ensemble de la flotte.")
-        return []
+    
+    return []
