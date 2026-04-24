@@ -119,7 +119,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
     
     postes = []
     for v_type, n_veh in n_max_dict.items():
-        row_v = df_vehicules[df_vehicules['Type'] == v_type].iloc[0]
+        row_v = df_vehicules[df_vehicules['Types'] == v_type].iloc[0]
         for i in range(1, n_veh + 1):
             p = PosteChauffeur(f"{v_type}_{i:02d}", v_type, row_v['Stationnement initial'], params_logistique['rh'])
             p.t_manoeuvre = row_v['Temps de mise à quai - manœuvre, contact/admin (minutes)']
