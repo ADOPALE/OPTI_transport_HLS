@@ -40,7 +40,6 @@ class PosteChauffeur:
         self.vehicule_type = v_type
         self.stationnement_initial = site_depot
         self.position_actuelle = site_depot
-        
         self.etat = 'INACTIF' 
         self.temps_restant_etat = 0
         self.job_en_cours = None
@@ -50,8 +49,15 @@ class PosteChauffeur:
         self.pause_faite = False
         self.historique = []
         
-        self.amplitude_max = params_rh.get('amplitude_totale', 450)
+        # --- AJOUTS CRITIQUES ---
+        self.vehicule_id = None  # Sera lié à l'ID du camion physique
+        self.amplitude_max = params_rh.get('amplitude_totale', 540)
         self.duree_pause = params_rh.get('pause', 45)
+        
+        # On récupère t_fin depuis temps_fixes (souvent t_prise + t_fin)
+        # Si temps_fixes = 30, on alloue 15min à la fin
+        t_fixes = params_rh.get('temps_fixes', 30)
+        self.t_fin = t_fixes / 2 
 
     def enregistrer(self, minute, activite, sj=None, details=""):
         self.historique.append({
@@ -59,8 +65,10 @@ class PosteChauffeur:
             "Heure_Debut": f"{int(minute//60):02d}h{int(minute%60):02d}",
             "Activite": activite,
             "SJ_ID": sj.liste_jobs[0].flux_id if sj and sj.liste_jobs else "N/A",
-            "Details": details
+            "Details": details,
+            "Vehicule_Physique": self.vehicule_id
         })
+
 
 # =================================================================
 # 3. LOGIQUE DE SÉLECTION (MAILLON CRITIQUE)
@@ -166,18 +174,8 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
 # 4. MOTEUR DE SIMULATION
 # =================================================================
 
-import pandas as pd
-import math
-import streamlit as st
-from datetime import time, datetime, timedelta
-
-# ... (garder les fonctions to_min, get_couloir_id, est_sj_disponible_dynamique, calculer_stress_maillon_critique de l'étape précédente) ...
 
 def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
-    """
-    Simule la faisabilité avec I véhicules physiques.
-    Un véhicule peut enchaîner plusieurs postes (chauffeurs) successifs.
-    """
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_fin_max_theorique = to_min(rh.get('h_fin_max', 1260))
@@ -186,26 +184,23 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     
     try:
         depot = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
-    except: depot = "DEPOT_CENTRAL"
+    except: depot = "DEPOT_SITE"
 
-    # Initialisation des I véhicules physiques
-    # Chaque véhicule stocke le moment où il redevient libre après le ménage du chauffeur précédent
+    # I représente le nombre de camions physiques
     vehicules_physiques = [{"id": i, "dispo_a": h_start, "pos": depot} for i in range(I)]
     
-    # Liste des postes (chauffeurs) créés au fil de l'eau
     postes_actifs = []
     postes_termines = []
     jobs_restants = list(liste_sj_type)
     minute = h_start
 
     while minute <= h_fin_max_theorique:
-        # 1. Mise à jour des postes en cours
+        # 1. Gestion des chauffeurs en cours
         for p in postes_actifs[:]:
             if p.temps_restant_etat > 0:
                 p.temps_restant_etat -= pas
                 continue
             
-            # Logique d'états (Mission, Trajet, Retour...)
             if p.etat == 'PRISE_POSTE':
                 p.etat = 'DISPONIBLE'
             elif p.etat == 'EN_TRAJET_VIDE':
@@ -213,54 +208,53 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 if p.job_en_cours:
                     p.etat = 'EN_MISSION'; p.temps_restant_etat = p.job_en_cours.poids_total
                     p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
-                else: p.etat = 'RETOUR_DEPOT' # Cas de retour forcé
+                else: 
+                    p.etat = 'RETOUR_DEPOT'
             elif p.etat == 'EN_MISSION':
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
                 p.etat = 'DISPONIBLE'; p.job_en_cours = None
             elif p.etat == 'RETOUR_DEPOT':
-                # Le chauffeur a fini son amplitude et rendu le camion
-                p.position_actuelle = p.stationnement_initial
-                p.enregistrer(minute, "FIN_DE_POSTE")
-                
-                # LIBÉRATION DU VÉHICULE PHYSIQUE
+                # LIBÉRATION DU CAMION
                 for v in vehicules_physiques:
                     if v['id'] == p.vehicule_id:
-                        v['dispo_a'] = minute + p.t_fin # Le camion est libre après le ménage
+                        v['dispo_a'] = minute + p.t_fin
                         v['pos'] = p.stationnement_initial
                 
+                p.enregistrer(minute, "FIN_DE_POSTE")
                 postes_termines.append(p)
                 postes_actifs.remove(p)
 
-        # 2. Création de nouveaux postes si des camions sont libres et des jobs attendent
+        # 2. Création de postes (Chauffeurs) sur les camions libres
         dispos = [j for j in jobs_restants if to_min(j.liste_jobs[0].h_dispo) <= minute]
         
-        # On regarde s'il y a des véhicules libres au dépôt
         camions_libres = [v for v in vehicules_physiques 
                           if v['dispo_a'] <= minute 
                           and not any(p.vehicule_id == v['id'] for p in postes_actifs)]
 
         for v in camions_libres:
-            if dispos: # Si on a des jobs, on crée un nouveau poste (chauffeur)
+            if dispos:
+                # On crée un chauffeur pour ce camion
                 nouveau_p = PosteChauffeur(f"CH_{v['id']}_{minute}", v_type, v['pos'], rh)
-                nouveau_p.vehicule_id = v['id'] # On lie le poste au camion
+                nouveau_p.vehicule_id = v['id']
                 nouveau_p.h_debut_service = minute
                 nouveau_p.etat = 'PRISE_POSTE'; nouveau_p.temps_restant_etat = t_prise
-                nouveau_p.enregistrer(minute, "PRISE_POSTE", details=f"Camion {v['id']} réutilisé")
+                nouveau_p.enregistrer(minute, "PRISE_POSTE", details=f"Prise du camion {v['id']}")
                 postes_actifs.append(nouveau_p)
                 camions_libres.remove(v)
 
-        # 3. Affectation des jobs aux chauffeurs déjà en poste et DISPONIBLES
+        # 3. Affectation des jobs
         for p in [p for p in postes_actifs if p.etat == 'DISPONIBLE']:
-            # Check Amplitude
+            # Check Fin d'amplitude (Retour Dépôt)
             dist_r = matrice_duree.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+            # Utilisation correcte de p.t_fin
             if minute + dist_r + p.t_fin >= (p.h_debut_service + p.amplitude_max):
                 p.etat = 'RETOUR_DEPOT'; p.temps_restant_etat = dist_r
-                p.enregistrer(minute, "RETOUR_DEPOT", details="Fin d'amplitude")
+                p.enregistrer(minute, "RETOUR_DEPOT", details="Fin service")
                 continue
 
-            # Check Job
             if not dispos: continue
+            
             best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_duree, h_fin_max_theorique)
             if best_sj:
                 dist = matrice_duree.get(p.position_actuelle, {}).get(best_sj.points_depart[0], 0)
@@ -270,13 +264,13 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist
                 p.enregistrer(minute, "EN_TRAJET_VIDE", best_sj)
 
-        # 4. Condition d'arrêt
         if not jobs_restants and not postes_actifs:
             return postes_termines
-            
+        
         minute += pas
 
     return None
+
 
 # =================================================================
 # 5. FONCTION D'ENTREE
