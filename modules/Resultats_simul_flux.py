@@ -1,107 +1,117 @@
+import pandas as pd
 import plotly.express as px
-import plotly.figure_factory as ff
+from datetime import datetime, timedelta
+import streamlit as st
 
-def generer_gantt_chauffeur_detaille(postes):
+def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
     """
-    Génère un diagramme de Gantt ultra-détaillé pour l'ensemble des chauffeurs.
-    Inclus : Missions, trajets à vide, origine/destination et volumes.
+    Génère un diagramme de Gantt détaillé pour les chauffeurs d'un type de véhicule.
     """
+    if not postes:
+        st.warning(f"Aucune donnée à afficher pour le type {v_type_selectionne}")
+        return
+
     data_gantt = []
+    
+    # Filtrer les postes pour le type sélectionné
+    postes_filtres = [p for p in postes if p.get('v_type') == v_type_selectionne]
 
-    for p in postes:
-        chauffeur_id = p['id_chauffeur']
-        camion_id = p.get('id_camion', 'Inconnu')
-        v_type = p.get('v_type', 'N/A')
+    for p in postes_filtres:
+        ch_id = p['id_chauffeur']
+        camion_id = p.get('id_camion', 'N/A')
         
-        # 1. Ajout de la Prise de Service (Temps fixe)
-        h_debut = p['h_debut_service']
+        # 1. Prise de service
+        h_prise = p['h_debut_service']
         data_gantt.append(dict(
-            Chauffeur=f"{chauffeur_id} ({camion_id})",
-            Start=h_debut,
-            Finish=h_debut + 15, # On suppose 15min de prise de poste
-            Type="Prise de service",
-            Description="Préparation véhicule / Briefing",
+            Chauffeur=ch_id,
+            Start=h_prise,
+            Finish=h_prise + 15,
+            Type="🔧 Prise de service",
+            Description=f"Camion: {camion_id}<br>Préparation et briefing",
             Volume=""
         ))
 
-        last_h_fin = h_debut + 15
-        last_pos = "HLS" # On part du dépôt par défaut
+        curr_h = h_prise + 15
+        curr_pos = "Dépôt (HLS)"
 
-        for m in p['missions']:
+        # 2. Missions et Trajets/Attentes
+        for i, m in enumerate(p['missions']):
             sj = m['sj']
             h_dep = m['h_dep']
             h_fin = m['h_fin']
             
-            # --- A. Gestion de l'Attente ou Trajet à Vide avant mission ---
-            if h_dep > last_h_fin:
-                # On peut ici affiner si c'est du trajet à vide ou de l'attente
+            # Si intervalle > 0, on identifie si c'est de l'attente ou du trajet
+            if h_dep > curr_h:
                 data_gantt.append(dict(
-                    Chauffeur=f"{chauffeur_id} ({camion_id})",
-                    Start=last_h_fin,
+                    Chauffeur=ch_id,
+                    Start=curr_h,
                     Finish=h_dep,
-                    Type="Attente / Trajet",
-                    Description=f"Déplacement vers {sj['jobs'][0].origin}",
+                    Type="⏳ Attente/Trajet Vide",
+                    Description=f"Liaison vers {sj['jobs'][0].origin}",
                     Volume=""
                 ))
 
-            # --- B. La Mission (Job) ---
-            # Extraction des détails du Super Job
-            details_flux = " | ".join([f"{j.origin}->{j.destination}" for j in sj['jobs']])
-            nature = sj['type_combinaison']
-            total_vol = sum([j.quantite for j in sj['jobs']])
+            # Détails de la mission
+            details_flux = " > ".join([f"{j.origin}→{j.destination}" for j in sj['jobs']])
+            total_qty = sum(j.quantite for j in sj['jobs'])
             contenant = sj['jobs'][0].contenant
+            nature = sj.get('type_combinaison', 'DIRECT')
 
             data_gantt.append(dict(
-                Chauffeur=f"{chauffeur_id} ({camion_id})",
+                Chauffeur=ch_id,
                 Start=h_dep,
                 Finish=h_fin,
-                Type="MISSION",
-                Description=f"<b>Flux:</b> {details_flux}<br><b>Nature:</b> {nature}",
-                Volume=f"{total_vol} {contenant}"
+                Type="🚛 MISSION",
+                Description=f"<b>Itinéraire:</b> {details_flux}<br><b>Nature:</b> {nature}",
+                Volume=f"{total_qty} {contenant}"
             ))
             
-            last_h_fin = h_fin
-            last_pos = sj['jobs'][-1].destination
+            curr_h = h_fin
+            curr_pos = sj['jobs'][-1].destination
 
-        # 3. Fin de service (Retour dépôt)
+        # 3. Fin de service
         data_gantt.append(dict(
-            Chauffeur=f"{chauffeur_id} ({camion_id})",
-            Start=last_h_fin,
-            Finish=last_h_fin + 15,
-            Type="Fin de service",
-            Description="Retour dépôt / Administratif",
+            Chauffeur=ch_id,
+            Start=curr_h,
+            Finish=curr_h + 15,
+            Type="🏁 Fin de service",
+            Description="Retour dépôt et administratif",
             Volume=""
         ))
 
-    # Conversion en DataFrame pour Plotly
-    df_gantt = pd.DataFrame(data_gantt)
-    
-    # Transformation des minutes décimales en format Time pour l'axe X
-    def min_to_time(minutes):
-        base = datetime(2026, 1, 1, 0, 0)
-        return base + timedelta(minutes=minutes)
+    # Conversion en DataFrame
+    df = pd.DataFrame(data_gantt)
 
-    df_gantt['StartDT'] = df_gantt['Start'].apply(min_to_time)
-    df_gantt['FinishDT'] = df_gantt['Finish'].apply(min_to_time)
+    # Conversion des minutes en format Time pour Plotly
+    def to_dt(minutes):
+        return datetime(2026, 1, 1) + timedelta(minutes=minutes)
 
-    # Création du graphique
+    df['StartDT'] = df['Start'].apply(to_dt)
+    df['FinishDT'] = df['Finish'].apply(to_dt)
+
+    # Création du Plotly Timeline
     fig = px.timeline(
-        df_gantt, 
+        df, 
         x_start="StartDT", 
         x_end="FinishDT", 
         y="Chauffeur", 
         color="Type",
         hover_data={"Description": True, "Volume": True, "StartDT": False, "FinishDT": False},
-        title=f"Planning Détaillé de la Flotte - {v_type}",
         color_discrete_map={
-            "MISSION": "#1f77b4", 
-            "Attente / Trajet": "#ff7f0e", 
-            "Prise de service": "#2ca02c", 
-            "Fin de service": "#d62728"
+            "🚛 MISSION": "#00CC96",
+            "⏳ Attente/Trajet Vide": "#EF553B",
+            "🔧 Prise de service": "#636EFA",
+            "🏁 Fin de service": "#AB63FA"
         }
     )
 
     fig.update_yaxes(autorange="reversed")
-    fig.update_layout(xaxis_title="Heure de la journée", showlegend=True)
-    
-    return fig
+    fig.update_layout(
+        title=f"Planning détaillé des chauffeurs - {v_type_selectionne}",
+        xaxis_tickformat="%H:%M",
+        height=400 + (len(postes_filtres) * 30), # Hauteur dynamique
+        xaxis_title="Heures",
+        legend_title="Activité"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
