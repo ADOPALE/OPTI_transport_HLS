@@ -283,6 +283,30 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
         "postes": postes, 
         "reliquat": len(jobs_restants)
     }
+
+
+
+def sont_dans_le_meme_couloir(job1, job2):
+    """
+    Vérifie si deux jobs appartiennent au même axe (Aller ou Retour).
+    Basé sur les groupes origine/destination.
+    """
+    # Sécurité si l'un des jobs est None
+    if not job1 or not job2:
+        return False
+        
+    # On récupère les groupes (assure-toi que ces attributs existent sur tes objets Job)
+    # Sinon on utilise job.origin et job.destination par défaut
+    g_o1, g_d1 = job1.origin, job1.destination
+    g_o2, g_d2 = job2.origin, job2.destination
+    
+    condition_aller = (g_o1 == g_o2 and g_d1 == g_d2)
+    condition_retour = (g_o1 == g_d2 and g_d1 == g_o2)
+    
+    return condition_aller or condition_retour
+
+
+
 # =================================================================
 # 5. FONCTION D'ITÉRATION (LA MEILLEURE SOLUTION)
 # =================================================================
