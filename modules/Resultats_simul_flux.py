@@ -142,7 +142,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
         xaxis_title="Heure",
         yaxis_title=None,
         legend_title="Légende",
-        hoverlabel=dict(bgcolor="white", font_size=12)
+        hoverlabel=dict(bgcolor="black", font_size=12)
     )
 
     st.plotly_chart(fig, use_container_width=True)
