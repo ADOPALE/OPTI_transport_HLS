@@ -12,15 +12,20 @@ from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes, i
 # CLASSE DE BASE
 # =================================================================
 class Job:
+    """
+    Représente une unité de transport élémentaire.
+    Inclut la logique de Hub pour HSJ et la gestion des tournées imposées.
+    """
     def __init__(self, job_id, flux_id, type_job, origin, destination, 
                  h_dispo, h_deadline, quantite, contenant, 
-                 vehicule_type, type_propre_sale, aller_retour):
+                 vehicule_type, type_propre_sale, aller_retour,
+                 tournee_rattachement=None, taux_occupation=0):
         
         self.job_id = job_id          
         self.flux_id = flux_id        
-        self.type_job = type_job      
+        self.type_job = type_job      # 'COMPLET' ou 'INCOMPLET'
         
-        # Noms exacts pour la matrice
+        # --- GÉOGRAPHIE & LOGIQUE DE HUB ---
         self.origin = str(origin).strip().upper()
         self.destination = str(destination).strip().upper()
         
@@ -28,20 +33,32 @@ class Job:
         self.origin_group = "HUB_HSJ" if "HSJ_" in self.origin else self.origin
         self.dest_group = "HUB_HSJ" if "HSJ_" in self.destination else self.destination
         
-        # PROTECTION CRUCIALE : On force vehicule_type en String simple
+        # --- PROTECTION VÉHICULE ---
         if isinstance(vehicule_type, (pd.Series, list)):
             self.vehicule_type = str(vehicule_type[0]).strip().upper() if len(vehicule_type) > 0 else "INCONNU"
         else:
             self.vehicule_type = str(vehicule_type).strip().upper()
 
+        # --- TEMPS & QUANTITÉS ---
         self.h_dispo = h_dispo        
         self.h_deadline = h_deadline  
         self.quantite = quantite
-        self.contenant = contenant
+        self.contenant = str(contenant).strip().upper()
         self.type_propre_sale = type_propre_sale
         self.aller_retour = aller_retour 
+
+        # --- ATTRIBUTS DE PHASE 3 (COMBINAISON) ---
+        self.tournee_rattachement = tournee_rattachement
+        self.taux_occupation = taux_occupation
+        
+        # --- ATTRIBUTS DE PHASE 4 (ORDONNANCEMENT) ---
         self.est_planifie = False
-        self.poids_temps = 0     
+        self.poids_temps = 0 
+
+    def __repr__(self):
+        # Affichage enrichi pour le debug
+        return (f"Job({self.job_id} | {self.origin_group}->{self.dest_group} | "
+                f"Qte:{self.quantite} {self.contenant} | Occ:{round(self.taux_occupation,2)})")    
 
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
@@ -232,6 +249,64 @@ def fragmenter_en_jobs(df_eclate_v, v_type_str, df_vehicules, df_contenants):
     return jobs_complets, jobs_incomplets
 
 
+def regrouper_tournees_imposees(jobs_incomplets, matrice_duree):
+    """
+    ÉTAPE 1 : Regroupement des jobs partiels ayant une tournée de rattachement commune.
+    Respecte strictement la limite du TAUX D'OCCUPATION MAX paramétré.
+    """
+    # Récupération directe (supposée existante car enregistrée au préalable)
+    params = st.session_state["params_logistique"]
+    taux_max_cible = params["securite_remplissage"]
+    
+    super_jobs_tournees = []
+    jobs_solitaires = []
+    
+    # 1. Tri : Séparation entre tournées imposées et jobs libres
+    groupes_tournees = {}
+    
+    for j in jobs_incomplets:
+        nom_t = j.tournee_rattachement
+        # On vérifie si une tournée est spécifiée dans le Excel
+        if pd.notna(nom_t) and str(nom_t).strip() != "":
+            nom_t = str(nom_t).strip().upper()
+            if nom_t not in groupes_tournees:
+                groupes_tournees[nom_t] = []
+            groupes_tournees[nom_t].append(j)
+        else:
+            # Si pas de nom de tournée, le job part dans la pile des "solitaires"
+            jobs_solitaires.append(j)
+
+    # 2. Création des SuperJobs pour chaque groupe de tournée
+    for nom_t, liste_j in groupes_tournees.items():
+        # On trie par taux d'occupation décroissant pour remplir au mieux l'enveloppe cible
+        liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
+        
+        current_sj_list = []
+        cumul_occ = 0
+        
+        for job in liste_j:
+            # Vérification par rapport au taux de sécurité utilisateur (ex: 0.8)
+            # On ajoute une petite tolérance flottante (0.0001) pour éviter les arrondis capricieux
+            if cumul_occ + job.taux_occupation <= (taux_max_cible + 0.0001):
+                current_sj_list.append(job)
+                cumul_occ += job.taux_occupation
+            else:
+                # La limite de gestion est atteinte : on clôture ce camion
+                new_sj = SuperJob(current_sj_list, matrice_duree)
+                new_sj.nom_tournee_origine = nom_t 
+                super_jobs_tournees.append(new_sj)
+                
+                # On ouvre le camion suivant de la même tournée avec le job actuel
+                current_sj_list = [job]
+                cumul_occ = job.taux_occupation
+        
+        # On ferme le dernier camion du groupe
+        if current_sj_list:
+            last_sj = SuperJob(current_sj_list, matrice_duree)
+            last_sj.nom_tournee_origine = nom_t
+            super_jobs_tournees.append(last_sj)
+            
+    return super_jobs_tournees, jobs_solitaires
 
 
 
