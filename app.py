@@ -229,9 +229,9 @@ elif selected == "Simul tournées":
         
 elif selected == "Synthèse transport":
     if 'df_sequence_type' in st.session_state:
-        st.title("🚚 Synthèse & Consolidation des Flux")
+        st.title("🚚 Synthèse Hebdomadaire & Consolidation")
         
-        # 1. RÉCUPÉRATION DES DONNÉES DEPUIS LE SESSION STATE
+        # 1. RÉCUPÉRATION DES DONNÉES
         df_recurrent = st.session_state.get('df_sequence_type')
         df_specifique = st.session_state.get('df_flux_specifique', pd.DataFrame())
         df_vehicules = st.session_state['data']['param_vehicules']
@@ -239,87 +239,72 @@ elif selected == "Synthèse transport":
         df_sites = st.session_state['data']['param_sites']
         matrice_duree = st.session_state['data'].get('matrice_duree')
 
-        col1, col2 = st.columns([1, 3])
+        st.info("💡 L'algorithme va simuler chaque jour de la semaine pour calculer le besoin réel en Super-Jobs.")
         
-        with col1:
-            st.subheader("Paramètres")
-            # Le lundi est souvent le jour de référence, mais on laisse le choix
-            jour_simule = st.selectbox("Jour à simuler", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
-            lancer_simul = st.button("🚀 Lancer la consolidation", use_container_width=True, type="primary")
-            
-        with col2:
-            if lancer_simul:
-                if matrice_duree is None:
-                    st.error("⚠️ Matrice de temps introuvable. Veuillez la calculer dans l'onglet 'Matrice de distance'.")
-                else:
-                    try:
-                        with st.status(f"Simulation du {jour_simule} en cours...", expanded=True) as status:
-                            # Import des fonctions du moteur
-                            from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
+        if st.button("🚀 Lancer la simulation hebdomadaire", type="primary", use_container_width=True):
+            if matrice_duree is None:
+                st.error("⚠️ Matrice de temps introuvable.")
+            else:
+                try:
+                    jours_semaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
+                    resultats_hebdo = []
+                    
+                    with st.status("Simulation de la semaine en cours...", expanded=True) as status:
+                        from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
+                        
+                        for jour in jours_semaine:
+                            st.write(f"⏳ Traitement du **{jour}**...")
                             
-                            # A. Préparation et Harmonisation (Fusion Récurrents + Spécifiques)
-                            st.write("📊 Fusion des flux et harmonisation des colonnes...")
-                            df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_simule)
+                            # A. Préparation (Fusion Récurrents + Spécifiques du jour)
+                            df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
                             
-                            # B. Exécution du Tunnel de Consolidation
-                            st.write("🔍 Fragmentation et arbitrage des camions (SuperJobs)...")
+                            # B. Consolidation
                             liste_globale_sj = tunnel_consolidation_flux(
-                                df_complet_jour, 
-                                df_vehicules, 
-                                df_contenants, 
-                                df_sites, 
-                                matrice_duree
+                                df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree
                             )
                             
-                            # C. Sauvegarde pour l'étape finale d'ordonnancement
-                            st.session_state['liste_super_jobs_consolides'] = liste_globale_sj
+                            # C. Comptage des SJ par type de véhicule
+                            comptage_jour = {"Jour": jour}
+                            total_temps_jour = 0
                             
-                            # D. AFFICHAGE DES RÉSULTATS (Metrics)
-                            status.update(label=f"✅ Consolidation terminée pour le {jour_simule} !", state="complete")
-                            
-                            st.markdown(f"### 📊 Récapitulatif par Flotte")
-                            
-                            # Calcul des stats par type de véhicule
-                            stats_flotte = {}
                             for sj in liste_globale_sj:
                                 v_type = sj.liste_jobs[0].vehicule_type
                                 temps_mob = sj.calculer_poids_mobilisation()
-                                if v_type not in stats_flotte:
-                                    stats_flotte[v_type] = {"nb_sj": 0, "temps": 0}
-                                stats_flotte[v_type]["nb_sj"] += 1
-                                stats_flotte[v_type]["temps"] += temps_mob
-
-                            # Affichage des Metrics
-                            if stats_flotte:
-                                m_cols = st.columns(len(stats_flotte))
-                                for i, (v_type, data) in enumerate(stats_flotte.items()):
-                                    with m_cols[i]:
-                                        st.metric(label=f"🚚 {v_type}", value=f"{data['nb_sj']} SJ")
-                                        h = int(data['temps'] // 60)
-                                        m = int(data['temps'] % 60)
-                                        st.caption(f"⏱️ Total : {h}h{m:02d}")
-
-                            st.divider()
-
-                            # E. AFFICHAGE DU TABLEAU DÉTAILLÉ
-                            st.write("### 📋 Liste des SuperJobs (Tournées camions)")
-                            recap_data = []
-                            for i, sj in enumerate(liste_globale_sj):
-                                recap_data.append({
-                                    "ID Camion": i + 1,
-                                    "Véhicule": sj.liste_jobs[0].vehicule_type,
-                                    "Taux Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
-                                    "Nb Arrêts": len(set(sj.points_depart + sj.points_arrivee)),
-                                    "Temps estimé (min)": round(sj.calculer_poids_mobilisation(), 0)
-                                })
+                                
+                                # On incrémente le nombre de SJ pour ce type de véhicule
+                                col_name = f"SJ - {v_type}"
+                                comptage_jour[col_name] = comptage_jour.get(col_name, 0) + 1
+                                total_temps_jour += temps_mob
                             
-                            st.dataframe(pd.DataFrame(recap_data), use_container_width=True)
+                            comptage_jour["Temps Total (h)"] = round(total_temps_jour / 60, 1)
+                            resultats_hebdo.append(comptage_jour)
+                        
+                        status.update(label="✅ Simulation hebdomadaire terminée !", state="complete")
 
-                    except Exception as e:
-                        st.error(f"Erreur lors de la simulation : {e}")
-                        st.exception(e)
+                    # 2. AFFICHAGE DU TABLEAU RÉCAPITULATIF GLOBAL
+                    st.divider()
+                    st.subheader("📊 Récapitulatif Hebdomadaire des Super-Jobs")
+                    
+                    df_recap = pd.DataFrame(resultats_hebdo).fillna(0)
+                    
+                    # Style pour mettre en avant les jours
+                    st.dataframe(
+                        df_recap.style.highlight_max(axis=0, color='#fde2e2', subset=[c for c in df_recap.columns if "SJ" in c]),
+                        use_container_width=True
+                    )
+                    
+                    # 3. ANALYSE RAPIDE
+                    st.markdown("### 📈 Analyse des pics de charge")
+                    col_max = df_recap.set_index("Jour")[[c for c in df_recap.columns if "SJ" in c]].sum(axis=1).idxmax()
+                    val_max = df_recap.set_index("Jour")[[c for c in df_recap.columns if "SJ" in c]].sum(axis=1).max()
+                    
+                    st.success(f"Le pic d'activité se situe le **{col_max}** avec un total de **{int(val_max)} Super-Jobs**.")
+
+                except Exception as e:
+                    st.error(f"Erreur lors de la simulation : {e}")
+                    st.exception(e)
     else:
-        st.warning("⚠️ Aucune donnée de 'Séquence Type' trouvée. Veuillez lancer le calcul Jmax dans l'onglet précédent.")
+        st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
 
 
     if st.session_state.get('planning_detaille'):
