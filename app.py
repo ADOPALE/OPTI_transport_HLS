@@ -21,7 +21,11 @@ from modules.resultats_bio import (
 )
 from modules.param_flux import afficher_parametres_logistique
 from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
-from modules.sim_engine import traitement_flux_recurrents, ordonnancer_flotte_optimale
+from modules.sim_engine import (
+    traitement_flux_recurrents, 
+    ordonnancer_flotte_optimale,
+    tunnel_consolidation_flux  # <-- Ajout de la nouvelle fonction
+)
 import modules.Resultats_simul_flux as res_flux
 
 # --------- FONCTIONS UI ------------
@@ -284,6 +288,58 @@ elif selected == "Simul tournées":  # Transport
         st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
         
 elif selected == "Synthèse transport":
+    if st.button("🚀 Lancer le séquençage et l'optimisation"):
+        try:
+            with st.status("Initialisation de la simulation...", expanded=True) as status:
+                # 1. Récupération des données nécessaires
+                df_recurrent = st.session_state['df_sequence_type']
+                df_specifique = st.session_state['df_flux_specifique']
+                df_vehicules = st.session_state['df_vehicules']
+                df_contenants = st.session_state['df_contenants']
+                df_sites = st.session_state['df_sites']
+                matrice_duree = st.session_state['matrice_duree']
+                
+                # 2. Préparation des flux du jour (Fusion Récurrents + Spécifiques)
+                # Supposons qu'on travaille sur le "Lundi" ou un jour sélectionné
+                from modules.sim_engine import preparer_flux_complets_du_jour
+                df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, "Lundi")
+                
+                st.write("🔍 Consolidation et arbitrage des camions...")
+                
+                # 3. APPEL DU NOUVEAU TUNNEL (Remplace l'ancienne logique)
+                liste_globale_sj = tunnel_consolidation_flux(
+                    df_complet_jour, 
+                    df_vehicules, 
+                    df_contenants, 
+                    df_sites, 
+                    matrice_duree
+                )
+                
+                # 4. AFFICHAGE DES RÉSULTATS DE CONSOLIDATION
+                st.success(f"✅ Consolidation terminée : {len(liste_globale_sj)} SuperJobs générés.")
+                
+                # Petit tableau récapitulatif
+                recap_data = []
+                for i, sj in enumerate(liste_globale_sj):
+                    recap_data.append({
+                        "Camion ID": i+1,
+                        "Type": sj.liste_jobs[0].vehicule_type,
+                        "Occupation": f"{round(sj.taux_occupation_total * 100, 1)}%",
+                        "Arrêts": len(set(sj.points_depart + sj.points_arrivee)),
+                        "Poids (min)": round(sj.calculer_poids_mobilisation(), 1)
+                    })
+                
+                st.dataframe(pd.DataFrame(recap_data), use_container_width=True)
+                
+                # Sauvegarde dans le session_state pour la suite (ordonnancement)
+                st.session_state['liste_super_jobs_consolides'] = liste_globale_sj
+                
+                status.update(label="Simulation terminée !", state="complete")
+    
+        except Exception as e:
+            st.error(f"Erreur lors de la simulation : {e}")
+            st.exception(e)
+"""
     if 'df_sequence_type' in st.session_state:
         st.title("🚚 Simulation du Séquençage & Tournées")
         
@@ -340,7 +396,7 @@ elif selected == "Synthèse transport":
                     except Exception as e:
                         st.error(f"Erreur lors de la simulation : {e}")
                         st.exception(e) # Pour voir la trace complète en débug
-
+"""
     else:
         st.warning("⚠️ Veuillez générer la 'Séquence Type' dans l'onglet précédent avant de lancer le séquençage.")
 
