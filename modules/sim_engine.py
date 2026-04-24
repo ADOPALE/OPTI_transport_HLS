@@ -65,25 +65,27 @@ class Job:
 
 
 
+
 class SuperJob:
     """
-    Représente un groupe de jobs mutualisés dans un même véhicule.
-    Calcule sa mobilisation réelle en minutes (Trajet + Manœuvres + Manutention).
+    Représente un camion mutualisé. 
+    Calcule sa mobilisation réelle (Trajets + Manœuvres + Manutention)
+    en cherchant les paramètres par libellé dans la première colonne des référentiels.
     """
     def __init__(self, liste_jobs, matrice_duree):
         self.liste_jobs = liste_jobs
         self.matrice_duree = matrice_duree
         
-        # 1. Caractéristiques de base
+        # 1. Caractéristiques issues de la mutualisation
         self.taux_occupation_total = sum(j.taux_occupation for j in liste_jobs)
         self.v_type = self.liste_jobs[0].vehicule_type
         
-        # 2. Géographie
+        # 2. Points de passage uniques
         self.points_depart = list(set(j.origin for j in liste_jobs))
         self.points_arrivee = list(set(j.destination for j in liste_jobs))
         
-        # 3. Fenêtres temporelles (en minutes décimales depuis minuit)
-        # Utilise la fonction globale to_decimal_minutes
+        # 3. Fenêtres de temps (en minutes décimales depuis 00:00)
+        # On suppose que la fonction to_decimal_minutes est accessible dans ton scope
         self.h_dispo_min = max(to_decimal_minutes(j.h_dispo) for j in liste_jobs)
         self.h_deadline_min = min(to_decimal_minutes(j.h_deadline) for j in liste_jobs)
         
@@ -92,89 +94,102 @@ class SuperJob:
 
     def _to_minutes(self, val_excel):
         """ 
-        Convertit les formats Excel (time, timedelta, float) en minutes. 
-        Si 'NC' ou vide, retourne 0.
+        Convertit les formats Excel (00:00:25, Timedelta ou secondes) en minutes.
+        Si la valeur est 'NC' ou vide, retourne 0.0.
         """
-        # Gestion du "NC" ou Vide -> On retourne 0
         if pd.isna(val_excel) or str(val_excel).strip().upper() == "NC" or val_excel == "":
             return 0.0
 
-        # Cas 1 : datetime.time (00:00:25)
+        # Cas : datetime.time (format 00:00:25 dans Excel)
         if isinstance(val_excel, time):
             return (val_excel.hour * 3600 + val_excel.minute * 60 + val_excel.second) / 60
             
-        # Cas 2 : Timedelta
+        # Cas : Timedelta (durée Pandas)
         if isinstance(val_excel, (pd.Timedelta, timedelta)):
             return val_excel.total_seconds() / 60
             
-        # Cas 3 : Nombre (considéré comme des secondes dans ton Excel)
+        # Cas : Nombre brut (considéré comme des secondes)
         try:
             return float(val_excel) / 60
         except (ValueError, TypeError):
-            # En cas de texte bizarre non géré, on sécurise à 0 pour ne pas planter
             return 0.0
 
     def calculer_poids_mobilisation(self):
-        """ Calcule le temps de mobilisation total en minutes """
+        """ 
+        Récupère les paramètres en cherchant le libellé dans la COLONNE 0
+        et calcule le temps de mobilisation total.
+        """
         df_v = st.session_state["data"]["param_vehicules"]
         df_s = st.session_state["data"]["param_sites"]
         
-        # Recherche dynamique des colonnes par mots-clés
-        def get_col(df, keyword):
+        # --- A. RECHERCHE DYNAMIQUE DES COLONNES PAR MOTS-CLÉS ---
+        def get_col_name(df, keyword):
             for c in df.columns:
                 if keyword.upper() in str(c).upper():
                     return c
-            raise KeyError(f"Colonne '{keyword}' introuvable.")
+            return None
 
-        col_v_nom = df_v.columns[0]
-        col_man = get_col(df_v, "MANŒUVRE") 
-        col_sq  = get_col(df_v, "SANS QUAI")
-        col_aq  = get_col(df_v, "AVEC QUAI")
+        col_v_id = df_v.columns[0] # La colonne contenant "SEMI", "PORTAIL", etc.
+        col_man = get_col_name(df_v, "MANŒUVRE")
+        col_sq  = get_col_name(df_v, "SANS QUAI")
+        col_aq  = get_col_name(df_v, "AVEC QUAI")
+
+        # --- B. RÉCUPÉRATION DES PARAMÈTRES VÉHICULE ---
+        # Recherche de la ligne où la première colonne correspond au type de véhicule
+        v_data = df_v[df_v[col_v_id].astype(str).str.strip() == str(self.v_type).strip()]
         
-        # Récupération de la ligne véhicule
-        v_params = df_v[df_v[col_v_nom] == self.v_type].iloc[0]
-        
-        # Conversion (Secondes Excel -> Minutes décimales) avec repli à 0 si NC
-        t_man = self._to_minutes(v_params[col_man])
-        t_sq  = self._to_minutes(v_params[col_sq])
-        t_aq  = self._to_minutes(v_params[col_aq])
+        if v_data.empty:
+            st.error(f"❌ Véhicule '{self.v_type}' introuvable dans la première colonne de Param Véhicules.")
+            st.stop()
+            
+        ligne_v = v_data.iloc[0]
+        t_man = self._to_minutes(ligne_v[col_man]) if col_man else 0
+        t_sq  = self._to_minutes(ligne_v[col_sq]) if col_sq else 0
+        t_aq  = self._to_minutes(ligne_v[col_aq]) if col_aq else 0
 
         total_min = 0
         
-        # --- 1. TRAJET (Somme des segments Successifs) ---
+        # --- C. TEMPS DE TRAJET (Somme des segments entre arrêts) ---
         itineraire = self.points_depart + self.points_arrivee
         for i in range(len(itineraire) - 1):
             p1, p2 = itineraire[i], itineraire[i+1]
             total_min += self.matrice_duree.get((p1, p2), 0)
 
-        # --- 2. SITES (Manœuvre + Manutention) ---
-        col_s_nom = df_s.columns[0]
-        col_quai_site = get_col(df_s, "QUAI")
+        # --- D. TEMPS SUR SITES (Manœuvre + Manutention par site unique) ---
+        col_s_id = df_s.columns[0] # La colonne contenant les noms des sites
+        col_quai = get_col_name(df_s, "QUAI")
 
         for site in list(set(itineraire)):
-            # Temps de manœuvre véhicule
+            # 1. Temps de manœuvre fixe (à chaque arrêt)
             total_min += t_man 
             
-            # Temps de manutention selon présence de quai
-            site_row = df_s[df_s[col_s_nom] == site]
+            # 2. Recherche du site pour savoir s'il y a un quai
+            site_data = df_s[df_s[col_s_id].astype(str).str.strip() == str(site).strip()]
+            
             has_quai = False
-            if not site_row.empty:
-                val_q = str(site_row.iloc[0][col_quai_site]).upper()
+            if not site_data.empty and col_quai:
+                val_q = str(site_data.iloc[0][col_quai]).upper()
                 has_quai = any(x in val_q for x in ["OUI", "X", "VRAI", "1"])
             
+            # Choix du ratio (si pas de quai, on prend le temps "sans quai")
             ratio = t_aq if has_quai else t_sq
             
-            # Somme des contenants sur ce site pour ce SuperJob
+            # Somme des contenants manipulés (chargés ou déchargés) sur ce site
             qte_site = sum(j.quantite for j in self.liste_jobs if j.origin == site or j.destination == site)
             total_min += (qte_site * ratio)
 
         return total_min
 
     def __repr__(self):
+        """ Représentation étoffée pour le suivi du Graphe de Charge """
         h_start = f"{int(self.h_dispo_min // 60):02d}h{int(self.h_dispo_min % 60):02d}"
-        return (f"SuperJob(Type:{self.v_type}, Jobs:{len(self.liste_jobs)}, "
+        return (f"SuperJob(Type:{self.v_type}, "
+                f"Jobs:{len(self.liste_jobs)}, "
                 f"Occ:{round(self.taux_occupation_total, 1)}%, "
-                f"Durée:{round(self.poids_total, 1)}min, Début:{h_start})")
+                f"Mobilisation:{round(self.poids_total, 1)} min, "
+                f"Prêt à:{h_start})")
+
+
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
 # =================================================================
