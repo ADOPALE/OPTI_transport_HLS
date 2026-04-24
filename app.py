@@ -22,7 +22,7 @@ from modules.resultats_bio import (
 from modules.param_flux import afficher_parametres_logistique
 from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
 from modules.sim_engine import traitement_flux_recurrents, ordonnancer_flotte_optimale
-from modules.Resultats_simul_flux import afficher_resultats_complets
+import modules.Resultats_simul_flux as res_flux
 
 # --------- FONCTIONS UI ------------
 def show_home():
@@ -345,13 +345,18 @@ elif selected == "Synthèse transport":
         st.warning("⚠️ Veuillez générer la 'Séquence Type' dans l'onglet précédent avant de lancer le séquençage.")
 
 
-    
-    if 'planning_detaille' in st.session_state:
-        # Utilise la clé 'param_contenants' conforme à ta note technique
-        afficher_resultats_complets(
-            st.session_state['planning_detaille'], 
-            st.session_state['data']['param_vehicules'], 
-            st.session_state['data']['param_contenants'] # <--- Vérifie bien l'orthographe ici
-        )
+    if st.session_state.get('planning_detaille'):
+        postes = st.session_state['planning_detaille']
+        
+        st.write("## 📅 Planning graphique")
+        
+        # Sélecteur de type de véhicule (car on a segmenté l'ordonnancement)
+        liste_types = sorted(list(set(p['v_type'] for p in postes)))
+        type_choisi = st.selectbox("Sélectionnez le type de flotte à visualiser :", liste_types)
+        
+        # Appel de la fonction du module
+        res_flux.afficher_gantt_chauffeur_detaille(postes, type_choisi)
+
+
     else:
         st.info("⚠️ Aucune simulation n'est en mémoire. Allez dans l'onglet 'Simul tournées' et cliquez sur Lancer.")
