@@ -545,6 +545,56 @@ def convertir_complets_en_super_jobs(jobs_complets, matrice_duree):
         
     return super_jobs_complets
 
+def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree):
+    """
+    Transforme les flux bruts du jour en une liste de SuperJobs optimisés.
+    """
+    # ETAPE 1 : Choix du véhicule et calcul capacité utile
+    df_eclate = Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites)
+    
+    tous_les_super_jobs_du_jour = []
+    
+    # On segmente par type de véhicule pour ne pas mélanger les capacités
+    types_vehicules = df_eclate['Vehicule_Affecte'].unique()
+    
+    for v_type in types_vehicules:
+        if v_type == "NON_COMPATIBLE_OU_PAS_SELECTIONNE":
+            continue
+            
+        df_v = df_eclate[df_eclate['Vehicule_Affecte'] == v_type]
+        
+        # ETAPE 2 : Fragmentation (Complets vs Incomplets)
+        jobs_c, jobs_i = fragmenter_en_jobs(df_v, v_type, df_vehicules, df_contenants)
+        
+        # ETAPE 3 : Conversion des complets en SuperJobs
+        sj_complets = convertir_complets_en_super_jobs(jobs_c, matrice_duree)
+        
+        # ETAPE 4 : Gestion des tournées imposées
+        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree)
+        
+        # ETAPE 5 : Préparation de la pile (Reliquats + Solitaires)
+        sj_scelles, pile_a_optimiser = preparer_pile_optimisation(sj_imposes, solitaires_initiaux)
+        
+        # ETAPE 6 : Arbitrage et optimisation des solitaires
+        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree)
+        
+        # Fusion pour ce type de véhicule
+        tous_les_super_jobs_du_jour.extend(sj_complets)
+        tous_les_super_jobs_du_jour.extend(sj_scelles)
+        tous_les_super_jobs_du_jour.extend(sj_optimises)
+        
+    return tous_les_super_jobs_du_jour
+
+
+
+
+
+
+
+
+
+
+
 
 
 
