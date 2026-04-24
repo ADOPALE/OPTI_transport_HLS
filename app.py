@@ -184,16 +184,20 @@ elif selected == "Détail tournées BIO":
 elif selected == "Véhicules et paramètres":
     afficher_parametres_logistique()
 
-elif selected == "Simul tournées":  # Transport
+elif selected == "Simul tournées":
     st.title("🚀 Simulation Transport Lourd")
     
     if 'data' in st.session_state:
-        # 1. Extraction du DataFrame brut
         df_flux_brut = st.session_state['data']['m_flux']
         
-        # 2. Appel de la segmentation (Etape 2.a.i)
+        # --- MODIFICATION ICI : SAUVEGARDE SYSTÉMATIQUE ---
         with st.expander("📊 Détails de la segmentation des flux", expanded=False):
             df_recurrent, df_specifique = segmenter_flux(df_flux_brut)
+            
+            # On les enregistre dans le session_state pour qu'ils survivent aux boutons
+            st.session_state['df_recurrent'] = df_recurrent
+            st.session_state['df_flux_specifique'] = df_specifique
+            
             col1, col2 = st.columns(2)
             col1.metric("Flux Récurrents (L-V)", len(df_recurrent))
             col2.metric("Flux Spécifiques", len(df_specifique))
@@ -204,11 +208,11 @@ elif selected == "Simul tournées":  # Transport
         st.subheader("📌 Génération de la Séquence Type (Jmax)")
         
         if st.button("Lancer le calcul du Jmax", type="primary", use_container_width=True):
-            with st.spinner("🧠 Analyse des poids fictifs (Bin Packing + Accès Sites)..."):
+            with st.spinner("🧠 Analyse des poids fictifs..."):
                 try:
-                    # On passe bien les DataFrames stockés dans le session_state
+                    # Utiliser les DataFrames du session_state
                     df_sequence_type = choix_Jmax(
-                        df_recurrent=df_recurrent,
+                        df_recurrent=st.session_state['df_recurrent'], # Version persistante
                         df_vehicules=st.session_state['data']['param_vehicules'],
                         df_contenants=st.session_state['data']['param_contenants'],
                         matrice_duree=st.session_state['data']['matrice_duree'],
@@ -216,74 +220,9 @@ elif selected == "Simul tournées":  # Transport
                     )
                     
                     st.session_state['df_sequence_type'] = df_sequence_type
-                    st.success("✅ Séquence type générée ! Vérifiez le jour retenu dans votre console.")
+                    st.success("✅ Séquence type générée !")
                 except Exception as e:
                     st.error(f"Erreur lors du calcul : {e}")
-                    # Optionnel pour débugger : st.exception(e)
-
-        # 4. Affichage du résultat
-        if 'df_sequence_type' in st.session_state:
-            st.write("### 📋 Tableau de la Séquence Type")
-            st.dataframe(st.session_state['df_sequence_type'], use_container_width=True)
-
-        # 5. Calcul de la Flotte Théorique (Etape 2.b)
-        if 'df_sequence_type' in st.session_state:
-            st.divider()
-            st.subheader("🚛 Estimation de la Flotte Théorique (Cible)")
-            
-            # On vérifie si les paramètres logistiques sont bien configurés
-            if "params_logistique" not in st.session_state:
-                st.warning("⚠️ Pour calculer la flotte, veuillez d'abord configurer vos véhicules et le taux de remplissage dans l'onglet 'Paramètres'.")
-            else:
-                if st.button("Calculer le besoin en véhicules", type="secondary", use_container_width=True):
-                    with st.spinner("⏳ Lissage des flux sur les fenêtres horaires..."):
-                        try:
-                            # Appel de ta fonction de lissage
-                            flotte_theorique = simuler_lissage_flotte(
-                                df_sequence_type=st.session_state['df_sequence_type'],
-                                df_vehicules=st.session_state['data']['param_vehicules'],
-                                df_contenants=st.session_state['data']['param_contenants'],
-                                matrice_duree=st.session_state['data']['matrice_duree'],
-                                df_sites=st.session_state['data']['param_sites']
-                            )
-                            
-                            if flotte_theorique:
-                                # Affichage des résultats sous forme de colonnes
-                                st.write("### 📊 Besoin maximum par type de véhicule")
-                                cols = st.columns(len(flotte_theorique))
-                                
-                                for i, (v_type, nb) in enumerate(flotte_theorique.items()):
-                                    with cols[i]:
-                                        st.metric(label=f"🚚 {v_type}", value=f"{nb} unités")
-                                
-                                # Stockage pour la suite (optimisation)
-                                st.session_state['flotte_theorique'] = flotte_theorique
-                                
-                                st.info("💡 *Ce nombre représente le pic de véhicules nécessaires en simultané pour respecter vos fenêtres horaires sans optimisation de tournées.*")
-                            # ... (Après l'affichage des metrics de la flotte)
-                            if flotte_theorique:
-                                st.divider()
-                                st.subheader("📈 Analyse détaillée de la charge")
-                            
-                            
-                                # Récupération des horaires RH
-                                h_fin_rh = st.session_state["params_logistique"]["rh"]["h_fin_max"]
-                                h_deb_rh = st.session_state["params_logistique"]["rh"]["h_prise_min"]
-                            
-                                # Appel de la fonction de graphique filtré
-                                afficher_graphique_charge_empilee(
-                                    st.session_state['df_sequence_type'],
-                                    st.session_state['data']['param_vehicules'],
-                                    st.session_state['data']['param_contenants'],
-                                    st.session_state['data']['param_sites'],
-                                    h_fin_rh,
-                                    h_deb_rh
-                                )
-                            else:
-                                st.warning("Aucun besoin de véhicule détecté. Vérifiez vos quantités et horaires.")
-                                
-                        except Exception as e:
-                            st.error(f"Erreur lors du calcul de la flotte : {e}")
                 
     else: 
         st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
