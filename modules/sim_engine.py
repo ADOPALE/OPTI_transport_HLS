@@ -106,7 +106,7 @@ class SuperJob:
         v_params = df_v[df_v[col_nom_v] == self.v_type].iloc[0]
         
         # Conversion sécurisée des formats 00:00:xx en minutes décimales
-        t_manoeuvre_min = self._to_minutes(v_params["Temps de mise à quai - manœuvre, contact/admin min (minutes)"])
+        t_manoeuvre_min = self._to_minutes(v_params["Temps de mise à quai - manœuvre, contact/admin (minutes)"])
         t_min_sans_quai = self._to_minutes(v_params["Manutention sans quai (minutes / contenants)"])
         t_min_avec_quai = self._to_minutes(v_params["Manutention avec quai (minutes / contenants)"])
 
