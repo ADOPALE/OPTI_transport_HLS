@@ -822,7 +822,7 @@ def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_cont
         st.subheader("🏁 Résumé du dimensionnement")
         cols = st.columns(len(dimensionnement_total))
         for i, (name, count) in enumerate(dimensionnement_total.items()):
-            cols[i].metric(name, f"{count} Camions")
+            cols[i].metric(name, f"{count} véhicules")
         return tous_les_postes_finaux
     
     return []
