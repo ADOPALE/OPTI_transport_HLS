@@ -648,47 +648,54 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
     return tous_les_super_jobs_du_jour
 
-
 def calculer_nmax_theorique(liste_super_jobs):
     """
-    Calcule l'intensité de charge par créneau de 30 min.
-    Retourne le Nmax et les données du graphe.
+    Calcule l'intensité de charge en étalant systématiquement le poids total
+    sur l'amplitude (h_dispo -> h_deadline).
     """
-    # 48 créneaux de 30 minutes pour couvrir 24h (1440 min)
+    import math
     nb_creneaux = 48
     pas = 30
     intensite_par_creneau = [0.0] * nb_creneaux
 
     for sj in liste_super_jobs:
-        # Temps de début et fin théorique du job
         t_debut = sj.h_dispo_min
-        t_fin = t_debut + sj.poids_total
+        t_fin_autorisee = sj.h_deadline_min
+        poids_a_placer = sj.poids_total
         
+        # Calcul de l'amplitude (en minutes)
+        amplitude = t_fin_autorisee - t_debut
+        
+        # Sécurité pour éviter la division par zéro si dispo == deadline
+        if amplitude <= 0:
+            amplitude = 1  # On évite le crash, le poids se met sur 1 min
+        
+        # CALCUL DU RATIO SYSTÉMATIQUE
+        # Le job occupe (poids / amplitude) % d'un camion sur chaque minute
+        ratio_occupation = poids_a_placer / amplitude
+
         curr = t_debut
-        while curr < t_fin:
-            # Index du créneau actuel (0 à 47)
+        while curr < t_fin_autorisee:
             idx = int((curr % 1440) // pas)
-            
-            # Calcul de la fin du créneau actuel
             fin_creneau = (idx + 1) * pas
             
-            # Temps passé par le job dans ce créneau spécifique
-            temps_dans_ce_creneau = min(t_fin, fin_creneau) - curr
+            # Temps (en minutes) que le job passe dans ce créneau de 30 min
+            temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
             
-            # L'intensité ajoutée est le prorata du créneau occupé
-            # Ex: Si le camion travaille 15 min sur les 30 min du créneau, intensité +0.5
-            intensite_par_creneau[idx] += (temps_dans_ce_creneau / pas)
+            # Ajout de la charge lissée
+            # (Minutes dans le créneau / 30 min) * ratio d'occupation
+            intensite_par_creneau[idx] += (temps_dans_ce_creneau / pas) * ratio_occupation
             
             curr += temps_dans_ce_creneau
 
-    # Le pic d'intensité représente le besoin instantané maximal
+    # Pic d'intensité et calcul Nmax avec marge de 20%
     pic_intensite = max(intensite_par_creneau)
-    
-    # Calcul du Nmax avec une marge de sécurité (ex: 15%) pour absorber
-    # les futurs trajets "Haut-le-pied" (à vide) entre deux missions.
     n_max_theorique = math.ceil(pic_intensite * 1.20)
     
     return n_max_theorique, intensite_par_creneau
+
+
+
 
 def lancer_simulation(liste_super_jobs):
     """
