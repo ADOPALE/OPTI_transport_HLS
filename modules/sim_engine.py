@@ -101,50 +101,7 @@ def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avan
 # =================================================================
 # MOTEUR DE SÉQUENÇAGE ET ORDONNANCEMENT
 # =================================================================
-def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
-    """
-    Cherche le nombre minimal de véhicules (de 1 à N) en utilisant 
-    la logique de chaînage prioritaire.
-    """
-    if "params_logistique" not in st.session_state:
-        return None
 
-    params = st.session_state["params_logistique"]
-    rh = params["rh"]
-    h_prise_min = to_decimal_minutes(rh["h_prise_min"])
-    h_fin_max = to_decimal_minutes(rh["h_fin_max"])
-    max_poste = rh["amplitude_totale"]
-    t_prepa = rh["temps_fixes"] / 2
-    t_fin = rh["temps_fixes"] / 2
-    depot = params.get("stationnement_initial", "HLS").upper()
-
-    tous_les_jobs = []
-    for sens_dict in couloirs.values():
-        for liste in sens_dict.values():
-            tous_les_jobs.extend(liste)
-
-    if not tous_les_jobs:
-        return {"succes": True, "n_camions": 0, "postes": []}
-
-    # --- TA BOUCLE ITÉRATIVE ---
-    for n_test in range(1, len(tous_les_jobs) + 1):
-        res = tenter_sequencage(
-            n_test, tous_les_jobs, depot, matrice_duree, 
-            h_prise_min, h_fin_max, max_poste, t_prepa, t_fin, v_type
-        )
-        
-        if res["succes"]:
-            tous_les_postes = []
-            for c in res['camions']:
-                for p in c['postes']:
-                    p['id_camion'] = c['id_camion']
-                    p['v_type'] = v_type
-                    tous_les_postes.append(p)
-            return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
-
-    return {"succes": False}
-
-"""
 def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
 
     if "params_logistique" not in st.session_state:
@@ -187,96 +144,7 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
             return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
 
     return {"succes": False}
-"""
 
-def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
-    """
-    Tente de faire entrer tous les jobs dans n_camions.
-    Logique : Pour chaque job urgent, on cherche le camion le plus 'proche' 
-    en favorisant le rechargement sur place (chaînage).
-    """
-    camions = []
-    for i in range(n_camions):
-        camions.append({
-            'id_camion': f"{v_type}_{i+1:02d}",
-            'type': v_type,
-            'pos_actuelle': depot,
-            'h_dispo_vehicule': h_start,
-            'postes': []
-        })
-
-    # On travaille sur une copie triée par deadline (Urgence)
-    jobs_restants = sorted(copy.deepcopy(jobs_a_faire), key=lambda x: x['h_deadline_min'])
-
-    while jobs_restants:
-        attribue = False
-        sj = jobs_restants[0] # On traite toujours le plus urgent en priorité
-        
-        meilleur_camion_candidat = None
-        meilleur_score = float('inf')
-
-        for c in camions:
-            # Récupération ou création de poste
-            if not c['postes'] or c['postes'][-1]['fini']:
-                h_d = max(c['h_dispo_vehicule'], h_start)
-                p_cible = {
-                    'id_chauffeur': f"{c['id_camion']}_CH_{len(c['postes'])+1}",
-                    'h_debut_service': None, 'h_dispo': h_d + t_prepa,
-                    'pos': c['pos_actuelle'], 'missions': [], 'fini': False
-                }
-                is_new = True
-            else:
-                p_cible = c['postes'][-1]
-                is_new = False
-
-            # Calcul de la faisabilité
-            site_dep = sj['jobs'][0].origin.upper()
-            trajet_vide = matrice_duree.loc[p_cible['pos'], site_dep]
-            h_arrivee = p_cible['h_dispo'] + trajet_vide
-            h_dep_reel = max(h_arrivee, sj['h_dispo_max'])
-            h_fin_m = h_dep_reel + sj['poids_total']
-            
-            # Retour dépôt pour vérification amplitude
-            site_dest = sj['jobs'][-1].destination.upper()
-            h_ret_depot = h_fin_m + matrice_duree.loc[site_dest, depot] + t_fin
-            debut_p = p_cible['h_debut_service'] if p_cible['h_debut_service'] else (h_dep_reel - t_prepa)
-
-            # --- LOGIQUE DE SCORE DE CHAÎNAGE ---
-            # Bonus si on est déjà sur place (évite de repartir à vide)
-            bonus_chainage = 150 if trajet_vide < 2 else 0
-            # Le score pénalise le trajet à vide et l'attente
-            score = (trajet_vide * 3) + (h_dep_reel - h_arrivee) - bonus_chainage
-
-            # Vérification des contraintes
-            if h_fin_m <= sj['h_deadline_min'] and (h_ret_depot - debut_p <= max_poste) and (h_ret_depot <= h_limite):
-                if score < meilleur_score:
-                    meilleur_score = score
-                    meilleur_camion_candidat = (c, p_cible, is_new, h_dep_reel, h_fin_m)
-
-        if meilleur_camion_candidat:
-            c, p, is_new, h_dep, h_fin = meilleur_camion_candidat
-            if is_new:
-                p['h_debut_service'] = h_dep - t_prepa
-                c['postes'].append(p)
-            
-            p['missions'].append({'sj': sj, 'h_dep': h_dep, 'h_fin': h_fin})
-            p['pos'] = sj['jobs'][-1].destination.upper()
-            p['h_dispo'] = h_fin
-            c['pos_actuelle'] = p['pos']
-            c['h_dispo_vehicule'] = h_fin
-            
-            jobs_restants.pop(0) # Job attribué avec succès
-            attribue = True
-        else:
-            # Impossible d'attribuer ce job avec le nombre de camions actuel
-            return {"succes": False}
-
-    return {"succes": True, "camions": camions}
-
-
-
-
-"""
 def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
 
     camions = []
@@ -375,7 +243,7 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
             return {"succes": False}
 
     return {"succes": True, "camions": camions}
-"""
+
 
 
 
