@@ -686,31 +686,37 @@ Répartit les jobs par couloir selon leur représentativité :
 - Solitaires : Positionnement strict au plus tôt (h_dispo_max).
 """
 def etaler_uniformément_par_couloir(couloirs):
-    for nom_couloir, sens_dict in couloirs.items():
-        for sens, liste_sj in sens_dict.items():
-            groupes_fenetres = {}
-            for sj in liste_sj:
-                # CORRECTION : Calcul de la deadline de départ
-                h_max_depart_secu = sj['h_deadline_min'] - sj['poids_total']
-                h_max_depart = max(sj['h_dispo_max'], h_max_depart_secu)
-                
-                cle = (sj['h_dispo_max'], h_max_depart)
-                if cle not in groupes_fenetres: groupes_fenetres[cle] = []
-                groupes_fenetres[cle].append(sj)
+    """
+    Répartit les départs sur toute la plage disponible pour chaque couloir.
+    """
+    for key in couloirs:
+        for sens in ["ALLER", "RETOUR"]:
+            jobs = couloirs[key][sens]
+            if not jobs: continue
             
-            for (h_min, h_max), jobs in groupes_fenetres.items():
-                nb_jobs = len(jobs)
-                if nb_jobs == 1:
-                    jobs[0]['h_depart_actuelle'] = h_min
-                else:
-                    if h_max > h_min:
-                        intervalle = (h_max - h_min) / (nb_jobs - 1)
-                        for idx, sj in enumerate(jobs):
-                            sj['h_depart_actuelle'] = h_min + (idx * intervalle)
-                    else:
-                        for sj in jobs: sj['h_depart_actuelle'] = h_min
-    return couloirs
+            # 1. Trier par urgence réelle
+            jobs.sort(key=lambda x: x['h_deadline_min'])
+            
+            n = len(jobs)
+            if n <= 1:
+                if n == 1: jobs[0]['h_depart_actuelle'] = jobs[0]['h_dispo_max']
+                continue
 
+            # 2. Définir la fenêtre de tir
+            t_start = min(sj['h_dispo_max'] for sj in jobs)
+            t_end = max(sj['h_deadline_min'] for sj in jobs)
+            
+            # On calcule un pas qui permet d'occuper l'espace sans entasser à la fin
+            plage = max(60, t_end - t_start)
+            pas = plage / n 
+
+            for i, sj in enumerate(jobs):
+                # On place le job à intervalle régulier
+                cible = t_start + (i * pas)
+                # Mais on respecte TOUJOURS la dispo (on ne peut pas partir avant que ce soit prêt)
+                sj['h_depart_actuelle'] = max(cible, sj['h_dispo_max'])
+                
+    return couloirs
 
 
 
@@ -718,77 +724,39 @@ def etaler_uniformément_par_couloir(couloirs):
 Lissage marginal dynamique (on ajuste la charge pour le véhicule au cours de la journée. 
 """
 def ajustement_marginal_dynamique(couloirs):
-
-    if "params_logistique" not in st.session_state:
-        st.error("Configuration logistique manquante.")
-        return couloirs
-    
-    params = st.session_state["params_logistique"]
-    capacites_flotte = st.session_state.get("resultat_lissage_flotte", {})
-    
-    h_debut_explo = to_decimal_minutes(params["rh"]["h_prise_min"])
-    h_fin_explo = to_decimal_minutes(params["rh"]["h_fin_max"])
-    
-    # 1. Mise à plat de tous les jobs pour analyser la charge globale par type de véhicule
-    tous_les_jobs = []
+    """
+    Évite les collisions de départ (saturation de quai) en décalant 
+    légèrement les jobs qui ont la même heure de départ, sans créer d'effet falaise.
+    """
+    # 1. On remet tous les jobs dans une liste à plat pour voir les collisions par SITE
+    tous_les_sj = []
     for sens_dict in couloirs.values():
-        for liste_sj in sens_dict.values():
-            tous_les_jobs.extend(liste_sj)
-    
-    types_v = set(j['jobs'][0].vehicule_type for j in tous_les_jobs)
-    
-    for v_type in types_v:
-        capa_camions = capacites_flotte.get(v_type.upper(), 1)
-        # Capacité en minutes-camion pour un créneau de 30 min
-        CAPA_TEMPS_CRENEAU = capa_camions * 30 
-        
-        jobs_v = [j for j in tous_les_jobs if j['jobs'][0].vehicule_type == v_type]
-        
-        # On définit des créneaux de 30 min
-        creneaux = list(range(int(h_debut_explo), int(h_fin_explo), 30))
-        
-        for c in creneaux:
-            # Identifier les jobs qui occupent ce créneau
-            jobs_actifs = []
-            poids_occupe = 0
+        for liste in sens_dict.values():
+            tous_les_sj.extend(liste)
             
-            for j in jobs_v:
-                h_dep = j['h_depart_actuelle']
-                h_fin = h_dep + j['poids_total']
-                
-                # Si le job chevauche le créneau [c, c + 30]
-                if h_dep < c + 30 and h_fin > c:
-                    intersection = min(h_fin, c + 30) - max(h_dep, c)
-                    poids_occupe += intersection
-                    jobs_actifs.append(j)
+    # 2. Tri chronologique strict
+    tous_les_sj.sort(key=lambda x: x['h_depart_actuelle'])
+    
+    # 3. Dictionnaire pour suivre le dernier départ par SITE ORIGINE
+    dernier_depart_par_site = {}
+    CADENCE_MINUTAGE = 10 # Pas plus d'un départ toutes les 10 min par quai
 
-            # 2. Si surcharge, on tente de décaler
-            if poids_occupe > CAPA_TEMPS_CRENEAU:
-                # On trie : ceux qui ont le plus de marge (slack) en premier
-                # Marge = Deadline - (Heure Fin Actuelle)
-                jobs_actifs.sort(key=lambda x: (x['h_deadline_min'] - (x['h_depart_actuelle'] + x['poids_total'])), reverse=True)
-                
-                for sj in jobs_actifs:
-                    if poids_occupe <= CAPA_TEMPS_CRENEAU: 
-                        break
-                    
-                    nouveau_dep = sj['h_depart_actuelle'] + 15
-                    
-                    # --- CONDITION DE SÉCURITÉ CRITIQUE ---
-                    # Le nouveau départ est autorisé SI ET SEULEMENT SI :
-                    # 1. Il finit avant sa deadline
-                    # 2. Il finit avant la fin de l'exploitation globale
-                    if nouveau_dep + sj['poids_total'] <= min(sj['h_deadline_min'], h_fin_explo):
-                        sj['h_depart_actuelle'] = nouveau_dep
-                        poids_occupe -= 15 
-                    else:
-                        # Si on ne peut pas décaler ce job sans briser la deadline, 
-                        # on le laisse là. L'ordonnancement devra gérer la surcharge 
-                        # en ajoutant un camion si nécessaire.
-                        pass
+    for sj in tous_les_sj:
+        site_origine = sj['jobs'][0].origin_group
+        h_prevue = sj['h_depart_actuelle']
+        
+        if site_origine in dernier_depart_par_site:
+            h_mini_possible = dernier_depart_par_site[site_origine] + CADENCE_MINUTAGE
+            # Si le job est trop proche du précédent sur le même quai, on le décale juste ce qu'il faut
+            if h_prevue < h_mini_possible:
+                # On décale, mais on vérifie de ne pas tuer la deadline
+                nouvelle_h = min(h_mini_possible, sj['h_deadline_min'])
+                sj['h_depart_actuelle'] = nouvelle_h
+        
+        # On enregistre l'heure réelle de départ pour le prochain job de ce site
+        dernier_depart_par_site[site_origine] = sj['h_depart_actuelle']
 
     return couloirs
-
 
 
 def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_contenants, matrice_duree):
