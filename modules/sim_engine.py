@@ -60,6 +60,80 @@ class Job:
         return (f"Job({self.job_id} | {self.origin_group}->{self.dest_group} | "
                 f"Qte:{self.quantite} {self.contenant} | Occ:{round(self.taux_occupation,2)})")    
 
+
+
+
+
+
+class SuperJob:
+    """
+    Représente un camion chargé. 
+    Peut contenir un ou plusieurs Jobs (complets ou partiels).
+    """
+    def __init__(self, liste_jobs, matrice_duree):
+        self.liste_jobs = liste_jobs
+        self.matrice_duree = matrice_duree
+        
+        # 1. Calcul de l'occupation totale
+        self.taux_occupation_total = sum(j.taux_occupation for j in liste_jobs)
+        
+        # 2. Identification des points uniques (pour le trajet)
+        self.points_depart = list(set(j.origin for j in liste_jobs))
+        self.points_arrivee = list(set(j.destination for j in liste_jobs))
+        
+        # 3. Récupération des contraintes de temps les plus strictes
+        self.h_dispo_max = max(j.h_dispo for j in liste_jobs)  # Dispo quand le DERNIER est prêt
+        self.h_deadline_min = min(j.h_deadline for j in liste_jobs) # Livré avant le PREMIER deadline
+        
+        # Tag pour le suivi (optionnel)
+        self.nom_tournee_origine = getattr(liste_jobs[0], 'tournee_rattachement', None)
+
+    def calculer_poids_mobilisation(self):
+        """
+        Calcule le temps total de mobilisation du camion (en minutes).
+        Logique : Temps de trajet entre tous les points + Temps de manutention.
+        """
+        params = st.session_state["params_logistique"]
+        tps_quai = params.get("temps_changement_quai", 15) # Temps fixe par arrêt supp
+        
+        poids_total = 0
+        itineraire = []
+        
+        # --- LOGIQUE SIMPLIFIÉE DE TRAJET ---
+        # On part du principe que le camion fait : 
+        # Départs (un par un) -> Arrivées (une par une)
+        
+        tous_les_points = self.points_depart + self.points_arrivee
+        nb_arrets = len(set(tous_les_points))
+        
+        # 1. Calcul du temps de trajet (somme des segments successifs)
+        # Note : Dans l'étape de séquençage, on optimisera l'ordre exact.
+        # Ici, on fait une estimation pour l'arbitrage.
+        for i in range(len(tous_les_points) - 1):
+            p1 = tous_les_points[i]
+            p2 = tous_les_points[i+1]
+            poids_total += self.matrice_duree.get((p1, p2), 0)
+            
+        # 2. Ajout du temps de manutention (Changement de quai)
+        # On paye le temps de quai pour chaque arrêt après le premier
+        poids_total += (nb_arrets - 1) * tps_quai
+        
+        return poids_total
+
+    def peut_ajouter(self, job, taux_max_cible):
+        """ Vérifie si un job peut être ajouté sans dépasser la limite cible. """
+        return (self.taux_occupation_total + job.taux_occupation) <= (taux_max_cible + 0.0001)
+
+    def ajouter_job(self, job):
+        """ Ajoute un job et recalcule les propriétés. """
+        self.liste_jobs.append(job)
+        self.taux_occupation_total += job.taux_occupation
+        self.points_depart = list(set(j.origin for j in self.liste_jobs))
+        self.points_arrivee = list(set(j.destination for j in self.liste_jobs))
+
+    def __repr__(self):
+        return f"SuperJob({len(self.liste_jobs)} jobs, Occ:{round(self.taux_occupation_total,2)})"
+
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
 # =================================================================
@@ -309,7 +383,29 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree):
     return super_jobs_tournees, jobs_solitaires
 
 
+def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
+    """
+    Décide quels jobs vont être envoyés à l'arbitrage (Etape 2).
+    """
+    params = st.session_state["params_logistique"]
+    autoriser_melange = params.get("optimiser_reliquats_tournees", True)
 
+    super_jobs_scelles = []
+    pile_a_optimiser = jobs_solitaires_initiaux.copy()
+
+    for sj in super_jobs_tournees:
+        # On considère qu'un SuperJob est un "reliquat" s'il est sous le taux_max_cible
+        # (Chaque SuperJob doit avoir une propriété .taux_occupation_total)
+        taux_max_cible = params["securite_remplissage"]
+        
+        if autoriser_melange and sj.taux_occupation_total < (taux_max_cible - 0.01):
+            # On "casse" le SuperJob incomplet pour remettre ses jobs dans la pile d'optimisation
+            pile_a_optimiser.extend(sj.liste_jobs)
+        else:
+            # On garde le SuperJob tel quel (soit parce qu'il est plein, soit parce qu'on ne mélange pas)
+            super_jobs_scelles.append(sj)
+
+    return super_jobs_scelles, pile_a_optimiser
 
 
 
