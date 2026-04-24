@@ -143,31 +143,35 @@ def calculer_stress_maillon_critique(sj, minute_actuelle, matrice_duree, p_posit
 
 
 def selectionner_meilleur_job(p, dispos, minute, matrice_duree, h_fin_max_theorique):
+    """
+    Version simplifiée : Priorité au stress et à l'efficacité.
+    Le retour au dépôt est géré uniquement par la boucle principale.
+    """
     candidats_evalues = []
     
-    # Calcul de l'heure butoir (Amplitude - Ménage)
-    # Si le chauffeur n'a pas encore de h_debut, on se base sur la fin de journée théorique
-    debut = p.h_debut_service if p.h_debut_service is not None else minute
-    h_limite_chauffeur = debut + p.amplitude_max - p.t_fin
+    # On définit juste la fin de vie du chauffeur (Amplitude pure)
+    h_fin_service = p.h_debut_service + p.amplitude_max
     
     for j in dispos:
-        # 1. Check Dispo Dynamique (Est-ce que les flux sont prêts dans l'ordre ?)
+        # 1. Disponibilité dynamique (Check si les flux sont prêts)
         if not est_sj_disponible_dynamique(j, minute, matrice_duree):
             continue
             
-        # 2. Check Retour Dépôt (Faisabilité Amplitude)
+        # 2. Faisabilité simple : Est-ce qu'on finit le job avant la fin de l'amplitude ?
         dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
         duree_sj = j.poids_total
-        dist_retour = matrice_duree.get(j.points_arrivee[-1], {}).get(p.stationnement_initial, 0)
         
-        # On vérifie si tout le cycle rentre dans son temps de travail restant
-        if minute + dist_approche + duree_sj + dist_retour <= h_limite_chauffeur:
+        # On ne teste QUE l'approche + le job. Le retour se fera après.
+        if minute + dist_approche + duree_sj <= h_fin_service:
             
-            # --- TA LOGIQUE DE SCORE CRITIQUE ---
+            # CALCUL DU SCORE (Identique à ta logique cible)
             stress = calculer_stress_maillon_critique(j, minute, matrice_duree, p.position_actuelle)
             
-            # Arbitrage Urgence vs Efficacité
+            # Arbitrage Urgence vs Proximité
+            # On pénalise la distance d'approche pour éviter les trajets à vide inutiles
             score = stress - (dist_approche * 1.5)
+            
+            # Bonus de positionnement
             if j.points_depart[0] == p.position_actuelle: score += 50
             if get_couloir_id(j) == p.couloir_actuel: score += 30
             
@@ -176,10 +180,9 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, h_fin_max_theori
     if not candidats_evalues:
         return None
 
-    # On trie pour prendre le meilleur score (le plus stressé/efficace)
+    # On prend le meilleur score
     candidats_evalues.sort(key=lambda x: x['score'], reverse=True)
     return candidats_evalues[0]['job']
-
 
 
 # =================================================================
