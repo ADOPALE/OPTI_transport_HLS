@@ -47,6 +47,66 @@ class Job:
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
 # =================================================================
 
+def preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_nom):
+    """
+    Etape 1 : Fusionne les récurrents et les spécifiques filtrés pour un jour J.
+    jour_nom : "Lundi", "Mardi", "Mercredi", "Jeudi" ou "Vendredi"
+    """
+    
+    # 1. Traitement des Récurrents
+    # On utilise la colonne 'Quantité_Séquence_Type' comme base de volume
+    recurrents_du_jour = df_recurrent.copy()
+    recurrents_du_jour['Quantite_du_jour'] = recurrents_du_jour['Quantité_Séquence_Type']
+    recurrents_du_jour['Origine_Flux'] = 'RECURRENT'
+    
+    # 2. Traitement des Spécifiques
+    # Le nom exact de la colonne dans ton df_specifique est "Quantité [Jour]"
+    col_jour_specifique = f"Quantité {jour_nom}"
+    
+    # On filtre : on ne veut que les lignes qui ont un volume ce jour-là
+    mask_present = df_specifique[col_jour_specifique] > 0
+    specifiques_du_jour = df_specifique[mask_present].copy()
+    
+    # On aligne le nom de la colonne de volume
+    specifiques_du_jour['Quantite_du_jour'] = specifiques_du_jour[col_jour_specifique]
+    specifiques_du_jour['Origine_Flux'] = 'SPECIFIQUE'
+    
+    # 3. Fusion finale
+    # On concatène les deux pour avoir la liste exhaustive des transports à faire
+    df_complet = pd.concat([recurrents_du_jour, specifiques_du_jour], ignore_index=True)
+    
+    return df_complet
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def calculer_delta_temps_mission(p, sj, matrice_duree, t_nettoyage):
     """
     Calcule le trajet d'approche en intégrant le détour par HUB_HSJ 
