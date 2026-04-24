@@ -307,8 +307,8 @@ elif selected == "Synthèse transport":
             if liste_sj_jour:
 
                 # Affichage du graphe d'intensité pour le jour sélectionné
-                from modules.sim_engine import calculer_nmax_theorique
-                n_max_sel, intensite_sel = calculer_nmax_theorique(liste_sj_jour)
+                from modules.sim_engine import calculer_nmax_par_type
+                n_max_sel, intensite_sel = calculer_nmax_par_type(liste_sj_jour)
                 
                 st.write(f"**Courbe de charge du {jour_sel} (Besoin théorique : {n_max_sel} camions)**")
                 labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
