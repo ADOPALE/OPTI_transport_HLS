@@ -701,6 +701,55 @@ def calculer_nmax_par_type(liste_super_jobs):
     return intensite_par_type
 
 
+def calculer_nmax_theorique(liste_super_jobs):
+    """
+    Calcule l'intensité de charge globale (tous types confondus).
+    Retourne (Nmax_arrondi, liste_intensites_48_creneaux).
+    """
+    import math
+    nb_creneaux = 48
+    pas = 30
+    intensite_creneaux = [0.0] * nb_creneaux
+
+    for sj in liste_super_jobs:
+        t_debut = sj.h_dispo_min
+        t_fin_autorisee = sj.h_deadline_min
+        poids_total = sj.poids_total
+        
+        # Amplitude de la fenêtre de tir
+        amplitude = max(1, t_fin_autorisee - t_debut)
+        ratio_theorique = poids_total / amplitude
+
+        # --- CAS A : Lissage (Charge répartie sur toute la fenêtre) ---
+        if ratio_theorique <= 1:
+            curr = t_debut
+            while curr < t_fin_autorisee:
+                idx = int((curr % 1440) // pas)
+                if idx >= nb_creneaux: break
+                fin_creneau = (idx + 1) * pas
+                temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
+                intensite_creneaux[idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
+                curr += temps_dans_ce_creneau
+
+        # --- CAS B : Saturation (Le job prend 100% du temps camions dès le début) ---
+        else:
+            poids_restant = poids_total
+            curr = t_debut
+            while poids_restant > 0 and curr < 1440:
+                idx = int((curr % 1440) // pas)
+                if idx >= nb_creneaux: break
+                fin_creneau = (idx + 1) * pas
+                consommation = min(poids_restant, fin_creneau - curr)
+                intensite_creneaux[idx] += (consommation / pas)
+                poids_restant -= consommation
+                curr += consommation
+
+    # Calcul du Nmax avec une marge de sécurité (ex: 20%)
+    pic_max = max(intensite_creneaux) if intensite_creneaux else 0
+    n_max_theorique = math.ceil(pic_max * 1.20)
+    
+    return n_max_theorique, intensite_creneaux
+
 
 
 def lancer_simulation(liste_super_jobs):
