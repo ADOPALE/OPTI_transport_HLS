@@ -5,6 +5,7 @@ from streamlit_folium import st_folium
 import folium
 import pandas as pd
 import plotly.express as px
+import math
 
 # --- IMPORTS DES MODULES ---
 from modules.GeoMatrix import run_matrix_tool
