@@ -65,8 +65,6 @@ class Job:
 
 
 
-
-
 class SuperJob:
     """
     Représente un groupe de jobs mutualisés dans un même véhicule.
@@ -92,15 +90,14 @@ class SuperJob:
         # 4. Calcul du poids de mobilisation réel (Temps Camion)
         self.poids_total = self.calculer_poids_mobilisation()
 
-    def _to_minutes(self, val_excel, nom_param, v_type):
+    def _to_minutes(self, val_excel):
         """ 
         Convertit les formats Excel (time, timedelta, float) en minutes. 
-        Gère les 'NC' et les erreurs de saisie.
+        Si 'NC' ou vide, retourne 0.
         """
-        # Gestion des valeurs vides ou "NC"
+        # Gestion du "NC" ou Vide -> On retourne 0
         if pd.isna(val_excel) or str(val_excel).strip().upper() == "NC" or val_excel == "":
-            st.error(f"❌ Donnée manquante ('NC' ou vide) pour : **{nom_param}** sur le véhicule **{v_type}**.")
-            st.stop()
+            return 0.0
 
         # Cas 1 : datetime.time (00:00:25)
         if isinstance(val_excel, time):
@@ -110,19 +107,19 @@ class SuperJob:
         if isinstance(val_excel, (pd.Timedelta, timedelta)):
             return val_excel.total_seconds() / 60
             
-        # Cas 3 : Nombre (secondes)
+        # Cas 3 : Nombre (considéré comme des secondes dans ton Excel)
         try:
             return float(val_excel) / 60
         except (ValueError, TypeError):
-            st.error(f"❌ Format invalide pour '{nom_param}' ({val_excel}) sur le véhicule {v_type}.")
-            st.stop()
+            # En cas de texte bizarre non géré, on sécurise à 0 pour ne pas planter
+            return 0.0
 
     def calculer_poids_mobilisation(self):
         """ Calcule le temps de mobilisation total en minutes """
         df_v = st.session_state["data"]["param_vehicules"]
         df_s = st.session_state["data"]["param_sites"]
         
-        # Recherche dynamique des colonnes
+        # Recherche dynamique des colonnes par mots-clés
         def get_col(df, keyword):
             for c in df.columns:
                 if keyword.upper() in str(c).upper():
@@ -137,24 +134,28 @@ class SuperJob:
         # Récupération de la ligne véhicule
         v_params = df_v[df_v[col_v_nom] == self.v_type].iloc[0]
         
-        t_man = self._to_minutes(v_params[col_man], "Temps de manœuvre", self.v_type)
-        t_sq  = self._to_minutes(v_params[col_sq], "Manutention SANS quai", self.v_type)
-        t_aq  = self._to_minutes(v_params[col_aq], "Manutention AVEC quai", self.v_type)
+        # Conversion (Secondes Excel -> Minutes décimales) avec repli à 0 si NC
+        t_man = self._to_minutes(v_params[col_man])
+        t_sq  = self._to_minutes(v_params[col_sq])
+        t_aq  = self._to_minutes(v_params[col_aq])
 
         total_min = 0
         
-        # 1. Trajet
+        # --- 1. TRAJET (Somme des segments Successifs) ---
         itineraire = self.points_depart + self.points_arrivee
         for i in range(len(itineraire) - 1):
-            total_min += self.matrice_duree.get((itineraire[i], itineraire[i+1]), 0)
+            p1, p2 = itineraire[i], itineraire[i+1]
+            total_min += self.matrice_duree.get((p1, p2), 0)
 
-        # 2. Sites (Manœuvre + Manutention)
+        # --- 2. SITES (Manœuvre + Manutention) ---
         col_s_nom = df_s.columns[0]
         col_quai_site = get_col(df_s, "QUAI")
 
         for site in list(set(itineraire)):
+            # Temps de manœuvre véhicule
             total_min += t_man 
             
+            # Temps de manutention selon présence de quai
             site_row = df_s[df_s[col_s_nom] == site]
             has_quai = False
             if not site_row.empty:
@@ -162,20 +163,18 @@ class SuperJob:
                 has_quai = any(x in val_q for x in ["OUI", "X", "VRAI", "1"])
             
             ratio = t_aq if has_quai else t_sq
-            qte = sum(j.quantite for j in self.liste_jobs if j.origin == site or j.destination == site)
-            total_min += (qte * ratio)
+            
+            # Somme des contenants sur ce site pour ce SuperJob
+            qte_site = sum(j.quantite for j in self.liste_jobs if j.origin == site or j.destination == site)
+            total_min += (qte_site * ratio)
 
         return total_min
 
     def __repr__(self):
-        """ Représentation lisible de l'objet pour le debug """
         h_start = f"{int(self.h_dispo_min // 60):02d}h{int(self.h_dispo_min % 60):02d}"
-        return (f"SuperJob(Type:{self.v_type}, "
-                f"Jobs:{len(self.liste_jobs)}, "
+        return (f"SuperJob(Type:{self.v_type}, Jobs:{len(self.liste_jobs)}, "
                 f"Occ:{round(self.taux_occupation_total, 1)}%, "
-                f"Durée:{round(self.poids_total, 1)}min, "
-                f"Départ:{h_start})")
-
+                f"Durée:{round(self.poids_total, 1)}min, Début:{h_start})")
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
 # =================================================================
