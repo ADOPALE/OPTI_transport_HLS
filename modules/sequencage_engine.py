@@ -244,3 +244,32 @@ def trouver_meilleure_configuration_journee(liste_sj, intensite_par_type, df_veh
     else:
         n_max_safe = {v: count + 1 for v, count in n_max_initial.items()}
         return ordonnancer_journee(liste_sj, n_max_safe, df_vehicules, matrice_duree, params_logistique)
+
+
+
+def afficher_gantt_chauffeur_detaille(postes, type_vehicule):
+    import plotly.express as px
+    import pandas as pd
+
+    data = []
+    for p in postes:
+        if p.vehicule_type == type_vehicule:
+            for ev in p.historique:
+                data.append({
+                    "Poste": p.id_poste,
+                    "Start": ev["Minute_Debut"],
+                    "Finish": ev["Minute_Debut"] + 5, # Le pas de temps
+                    "Activite": ev["Activite"],
+                    "SJ_ID": ev["SJ_ID"]
+                })
+    
+    if not data:
+        st.warning("Aucune donnée à afficher pour ce type de véhicule.")
+        return
+
+    df_plot = pd.DataFrame(data)
+    # Conversion minutes -> Heures pour l'affichage
+    df_plot["Heure_Debut"] = df_plot["Start"].apply(lambda x: f"{int(x//60):02d}:{int(x%60):02d}")
+    
+    fig = px.timeline(df_plot, x_start="Start", x_end="Finish", y="Poste", color="Activite", hover_data=["SJ_ID", "Heure_Debut"])
+    st.plotly_chart(fig, use_container_width=True)
