@@ -140,34 +140,50 @@ class SuperJob:
 
 def preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_nom):
     """
-    Etape 1 : Fusionne les récurrents et les spécifiques filtrés pour un jour J.
-    jour_nom : "Lundi", "Mardi", "Mercredi", "Jeudi" ou "Vendredi"
+    Fusionne les flux et harmonise les noms de colonnes.
     """
+    # 1. On définit ce que le moteur de simulation attend ABSOLUMENT
+    COL_CIBLE_TYPE = 'Type (propre/sale)'
     
-    # 1. Traitement des Récurrents
-    # On utilise la colonne 'Quantité_Séquence_Type' comme base de volume
-    recurrents_du_jour = df_recurrent.copy()
-    recurrents_du_jour['Quantite_du_jour'] = recurrents_du_jour['Quantité_Séquence_Type']
-    recurrents_du_jour['Origine_Flux'] = 'RECURRENT'
+    # 2. Préparation des Récurrents
+    df_rec = df_recurrent.copy()
     
-    # 2. Traitement des Spécifiques
-    # Le nom exact de la colonne dans ton df_specifique est "Quantité [Jour]"
-    col_jour_specifique = f"Quantité {jour_nom}"
+    # Si la colonne s'appelle 'Sale / propre', on la renomme pour le moteur
+    if 'Sale / propre' in df_rec.columns:
+        df_rec = df_rec.rename(columns={'Sale / propre': COL_CIBLE_TYPE})
+        
+    df_rec['Quantite_du_jour'] = df_rec['Quantité_Séquence_Type']
+    df_rec['Origine_Flux'] = 'RECURRENT'
     
-    # On filtre : on ne veut que les lignes qui ont un volume ce jour-là
-    mask_present = df_specifique[col_jour_specifique] > 0
-    specifiques_du_jour = df_specifique[mask_present].copy()
-    
-    # On aligne le nom de la colonne de volume
-    specifiques_du_jour['Quantite_du_jour'] = specifiques_du_jour[col_jour_specifique]
-    specifiques_du_jour['Origine_Flux'] = 'SPECIFIQUE'
-    
-    # 3. Fusion finale
-    # On concatène les deux pour avoir la liste exhaustive des transports à faire
-    df_complet = pd.concat([recurrents_du_jour, specifiques_du_jour], ignore_index=True)
-    
-    return df_complet
+    # 3. Préparation des Spécifiques
+    df_spec = pd.DataFrame()
+    if df_specifique is not None and not df_specifique.empty:
+        # Recherche de la colonne de quantité pour le jour J
+        col_quantite = next((c for c in df_specifique.columns if jour_nom.lower() in c.lower() and ("quant" in c.lower() or "qt" in c.lower())), None)
+        
+        if col_quantite:
+            df_spec = df_specifique[df_specifique[col_quantite] > 0].copy()
+            df_spec['Quantite_du_jour'] = df_spec[col_quantite]
+            df_spec['Origine_Flux'] = 'SPECIFIQUE'
+            
+            # Harmonisation pour les spécifiques aussi
+            if 'Sale / propre' in df_spec.columns:
+                df_spec = df_spec.rename(columns={'Sale / propre': COL_CIBLE_TYPE})
+            
+            # On aligne les autres colonnes critiques au cas où
+            mapping_autres = {
+                'Heure de livraison': 'Heure max de livraison à la destination',
+                'Heure de dispo': 'Heure de mise à disposition min départ'
+            }
+            df_spec = df_spec.rename(columns=mapping_autres)
 
+    # 4. Fusion finale sécurisée
+    if not df_spec.empty:
+        # On ne garde que les colonnes communes pour éviter les NaN polluants
+        colonnes_communes = [c for c in df_rec.columns if c in df_spec.columns]
+        return pd.concat([df_rec[colonnes_communes], df_spec[colonnes_communes]], ignore_index=True)
+    
+    return df_rec
 
 
 
