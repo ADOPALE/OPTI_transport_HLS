@@ -66,56 +66,101 @@ class PosteChauffeur:
 # 3. LOGIQUE DE SÉLECTION (MAILLON CRITIQUE)
 # =================================================================
 
+def est_sj_disponible_dynamique(sj, minute_actuelle, matrice_duree):
+    """
+    Vérifie si, en partant maintenant, chaque job du SJ sera prêt 
+    au moment où le camion arrivera à son point de collecte.
+    """
+    # 1. Condition de base : le premier job doit être prêt
+    if to_min(sj.liste_jobs[0].h_dispo) > minute_actuelle:
+        return False
+    
+    temps_cumule = minute_actuelle
+    position_simulee = sj.points_depart[0] # On est déjà au départ du 1er
+    
+    # 2. On parcourt les jobs du SJ pour vérifier les dispos suivantes
+    for i, job in enumerate(sj.liste_jobs):
+        # Si ce n'est pas le premier, on ajoute le trajet depuis la fin du job précédent
+        if i > 0:
+            trajet_interne = matrice_duree.get(position_simulee, {}).get(job.origin, 0)
+            temps_cumule += trajet_interne
+            
+            # Vérification : le job i est-il prêt quand on arrive ?
+            if temps_cumule < to_min(job.h_dispo):
+                return False # Le camion arriverait trop tôt, le SJ n'est pas "fluide"
+        
+        # On ajoute la durée du job i (manutention + trajet livraison)
+        temps_cumule += job.poids_total if hasattr(job, 'poids_total') else 30 # fallback
+        position_simulee = job.destination
+        
+    return True
+
+
+def calculer_stress_maillon_critique(sj, minute_actuelle, matrice_duree, p_position_actuelle):
+    """
+    Calcule le stress de chaque job i du SJ et renvoie le maximum.
+    """
+    scores_stress = []
+    temps_cumule = minute_actuelle
+    
+    # Ajout du trajet d'approche initial du camion
+    dist_approche = matrice_duree.get(p_position_actuelle, {}).get(sj.points_depart[0], 0)
+    temps_cumule += dist_approche
+    
+    position_simulee = sj.points_depart[0]
+    
+    for job in sj.liste_jobs:
+        # Temps pour finir CE job spécifique
+        # (Si multi-jobs, on ajoute le trajet depuis le drop précédent vers ce pick-up)
+        trajet_interne = matrice_duree.get(position_simulee, {}).get(job.origin, 0)
+        temps_cumule += trajet_interne
+        
+        heure_fin_estimee = temps_cumule + (job.poids_total if hasattr(job, 'poids_total') else 20)
+        deadline_job = to_min(job.h_deadline)
+        
+        # Stress relatif : (Heure Max - Heure Fin estimée)
+        # Plus la marge est petite (ou négative), plus le stress est grand
+        marge = deadline_job - heure_fin_estimee
+        
+        # Transformation en score (plus c'est petit/négatif, plus le score est haut)
+        # On peut utiliser : 1000 - marge
+        scores_stress.append(1000 - marge)
+        
+        # Mise à jour pour le maillon suivant
+        temps_cumule = heure_fin_estimee
+        position_simulee = job.destination
+
+    return max(scores_stress) # Le maillon le plus stressé dicte la priorité du SJ
+
 def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
-    """
-    Arbitrage par Score Combiné : Urgence vs Efficacité.
-    """
     candidats_evalues = []
     
     for j in dispos:
-        first_job = j.liste_jobs[0]
-        h_deadline_1er = to_min(first_job.h_deadline)
-        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
-        duree_maillon_1 = first_job.poids_total if hasattr(first_job, 'poids_total') else (j.poids_total / len(j.liste_jobs))
-        
-        # 1. Filtre de faisabilité physique (Incontournable)
-        if minute + dist_approche + duree_maillon_1 <= h_deadline_1er:
+        # CONDITION 1 : Le SJ est-il fluide et disponible à cet instant ?
+        if est_sj_disponible_dynamique(j, minute, matrice_duree):
             
-            # --- CALCUL DU SCORE COMBINÉ ---
+            # CONDITION 2 : Calcul du stress par le maillon limitant
+            stress_max = calculer_stress_maillon_critique(j, minute, matrice_duree, p.position_actuelle)
             
-            # A. Composante Urgence (Stress) : 0 à +infini
-            # On utilise ton calcul existant
-            stress = calculer_stress_dynamique(j, minute)
+            # --- ARBITRAGE OPTIONNEL (Proximité) ---
+            dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
             
-            # B. Composante Proximité (Pénalité de trajet à vide)
-            # On retire du "temps utile" pour chaque minute de trajet à vide
-            # Poids 1.5 : on est assez sévère sur les trajets à vide longs
-            penalite_distance = dist_approche * 1.5
+            # Bonus couloir (pour garder de l'efficacité)
+            bonus_couloir = 50 if get_couloir_id(j) == p.couloir_actuel else 0
             
-            # C. Composante Bonus Couloir (Continuité)
-            # Si on est déjà sur place ET dans le bon couloir, gros bonus
-            bonus_strategique = 0
-            if j.points_depart[0] == p.position_actuelle:
-                bonus_strategique += 30 # Équivalent à "gagner" 30 min d'urgence
-                if get_couloir_id(j) == p.couloir_actuel:
-                    bonus_strategique += 20 # Bonus cumulé pour le couloir
+            # Score final : Stress + Bonus - Coût trajet vide
+            score = stress_max + bonus_couloir - (dist_approche * 1.2)
             
-            # SCORE FINAL
-            # On veut maximiser l'urgence tout en minimisant la distance
-            score_final = stress - penalite_distance + bonus_strategique
-            
-            candidats_evalues.append({
-                'job': j,
-                'score': score_final
-            })
+            candidats_evalues.append({'job': j, 'score': score})
 
     if not candidats_evalues:
         return None
 
-    # On trie par le score le plus élevé
+    # Tri par score décroissant
     candidats_evalues.sort(key=lambda x: x['score'], reverse=True)
-    
     return candidats_evalues[0]['job']
+
+
 
 # =================================================================
 # 4. MOTEUR DE SIMULATION
