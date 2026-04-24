@@ -328,7 +328,7 @@ elif selected == "Synthèse transport":
                     pic = max(intensites)
                     n_max_v = math.ceil(pic * 1.20)
                     with cols_nmax[i]:
-                        st.metric(f"Nmax {v_type}", f"{n_max_v} cam.")
+                        st.metric(f"Nmax {v_type}", f"{n_max_v} véh.")
                 
                 # Tableau des SuperJobs
                 recap_sj = []
