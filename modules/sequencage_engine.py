@@ -1,6 +1,8 @@
 import pandas as pd
 import math
 from datetime import time, datetime
+import plotly.express as px
+import streamlit as st
 
 # =================================================================
 # 1. UTILITAIRES
@@ -247,29 +249,65 @@ def trouver_meilleure_configuration_journee(liste_sj, intensite_par_type, df_veh
 
 
 
-def afficher_gantt_chauffeur_detaille(postes, type_vehicule):
-    import plotly.express as px
-    import pandas as pd
 
-    data = []
-    for p in postes:
-        if p.vehicule_type == type_vehicule:
-            for ev in p.historique:
-                data.append({
-                    "Poste": p.id_poste,
-                    "Start": ev["Minute_Debut"],
-                    "Finish": ev["Minute_Debut"] + 5, # Le pas de temps
-                    "Activite": ev["Activite"],
-                    "SJ_ID": ev["SJ_ID"]
-                })
-    
-    if not data:
-        st.warning("Aucune donnée à afficher pour ce type de véhicule.")
+
+def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
+    """
+    Affiche le planning GANTT pour les objets PosteChauffeur.
+    """
+    if not postes:
+        st.warning("Aucun poste à afficher.")
         return
 
-    df_plot = pd.DataFrame(data)
-    # Conversion minutes -> Heures pour l'affichage
-    df_plot["Heure_Debut"] = df_plot["Start"].apply(lambda x: f"{int(x//60):02d}:{int(x%60):02d}")
+    data = []
+    # CORRECTION : Accès par attribut .vehicule_type et non .get()
+    postes_filtres = [p for p in postes if p.vehicule_type == v_type_selectionne]
+
+    if not postes_filtres:
+        st.info(f"Aucune activité pour le type de véhicule : {v_type_selectionne}")
+        return
+
+    for p in postes_filtres:
+        for ev in p.historique:
+            # On calcule la fin de l'événement. 
+            # Si c'est le dernier événement, on lui donne une durée minimale pour l'affichage
+            minute_debut = ev["Minute_Debut"]
+            
+            # Pour le Gantt, on cherche le début de l'événement suivant pour définir la fin de celui-ci
+            # Ou on utilise un pas fixe de 5 minutes si c'est le dernier point connu
+            data.append({
+                "Poste": p.id_poste,
+                "Début": minute_debut,
+                "Fin": minute_debut + 5, # Valeur par défaut, Plotly ajustera les blocs adjacents
+                "Activité": ev["Activite"],
+                "SJ_ID": ev.get("SJ_ID", "N/A"),
+                "Détails": ev.get("Details", ""),
+                "Heure": ev["Heure_Debut"]
+            })
+
+    df = pd.DataFrame(data)
+
+    # Création du graphique
+    fig = px.timeline(
+        df, 
+        x_start="Début", 
+        x_end="Fin", 
+        y="Poste", 
+        color="Activité",
+        hover_data=["Heure", "SJ_ID", "Détails"],
+        title=f"Planning détaillé - {v_type_selectionne}",
+        color_discrete_map={
+            "EN_MISSION": "#1f77b4",      # Bleu
+            "EN_TRAJET_VIDE": "#ff7f0e",  # Orange
+            "DISPONIBLE": "#2ca02c",      # Vert
+            "EN_PAUSE": "#d62728",        # Rouge
+            "PRISE_POSTE": "#9467bd",     # Violet
+            "FIN_POSTE": "#7f7f7f"        # Gris
+        }
+    )
+
+    # Ajustement des axes pour afficher les minutes/heures correctement
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(xaxis_title="Minutes de la journée", showlegend=True)
     
-    fig = px.timeline(df_plot, x_start="Start", x_end="Finish", y="Poste", color="Activite", hover_data=["SJ_ID", "Heure_Debut"])
     st.plotly_chart(fig, use_container_width=True)
