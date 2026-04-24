@@ -283,25 +283,49 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 # =================================================================
 
 def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
-    postes_complets = []
+    """
+    Boucle sur le nombre de véhicules physiques (I) pour trouver le minimum viable.
+    """
+    tous_les_postes_finaux = []
+    resultats_synthese = {}
+
     for v_type, val_max in n_max_dict.items():
-        # Règle : Max théorique + 20%
-        n_max_calc = math.ceil(max(val_max) * 1,2) if isinstance(val_max, list) else math.ceil(val_max * 1,2)
-        st.info(f"Analyse **{v_type}** : Recherche d'optimisation (Max: {n_max_calc} camions)")
+        # On garde une marge de sécurité sur le max pour la recherche
+        n_max_recherche = math.ceil(max(val_max) * 2) if isinstance(val_max, list) else math.ceil(val_max * 2)
+        
+        st.info(f"🔎 Analyse **{v_type}** : Recherche du nombre de camions physiques (Max testé : {n_max_recherche})")
         
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
-        if not jobs_v: continue
+        if not jobs_v:
+            st.warning(f"⚠️ Aucun job trouvé pour le type {v_type}")
+            continue
             
-        solution_trouvee = False
-        for I in range(1, n_max_calc + 1):
-            res = simuler_faisabilite(I, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
-            if res:
-                st.success(f"✅ **{v_type}** : Solution validée avec **{I}** véhicule(s).")
-                postes_complets.extend(res)
-                solution_trouvee = True
-                break
+        solution_pour_ce_type = None
         
-        if not solution_trouvee:
-            st.error(f"❌ **{v_type}** : Aucun planning valide trouvé. Les délais du 1er segment sont peut-être trop courts.")
+        # On cherche le nombre minimal de véhicules physiques I
+        for I in range(1, n_max_recherche + 1):
+            # La fonction simuler_faisabilite renvoie la liste des POSTES (chauffeurs)
+            res_postes = simuler_faisabilite(I, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+            
+            if res_postes:
+                # Calcul de la productivité pour le log
+                n_chauffeurs = len(res_postes)
+                ratio = len(jobs_v) / I
+                
+                st.success(f"✅ **{v_type}** validé avec **{I} camions** physiques.")
+                st.caption(f"📊 Utilisation : {n_chauffeurs} postes chauffeurs créés pour {len(jobs_v)} SuperJobs (Moyenne : {ratio:.1f} SJ/camion)")
+                
+                solution_pour_ce_type = res_postes
+                resultats_synthese[v_type] = I
+                break # On a trouvé le minimum de camions, on arrête pour ce type
+        
+        if solution_pour_ce_type:
+            tous_les_postes_finaux.extend(solution_pour_ce_type)
+        else:
+            st.error(f"❌ **{v_type}** : Impossible de trouver une solution, même avec {n_max_recherche} camions.")
 
-    return {"succes": len(postes_complets) > 0, "postes": postes_complets}
+    return {
+        "succes": len(tous_les_postes_finaux) > 0,
+        "postes": tous_les_postes_finaux,
+        "bilan_vehicules": resultats_synthese
+    }
