@@ -402,23 +402,20 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree):
 def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
     """
     Décide quels jobs vont être envoyés à l'arbitrage (Etape 2).
+    Seuil strict basé sur les paramètres enregistrés.
     """
     params = st.session_state["params_logistique"]
-    autoriser_melange = params.get("optimiser_reliquats_tournees", True)
+    autoriser_melange = params["optimiser_reliquats_tournees"]
+    seuil_rupture = params["seuil_rupture_reliquat"] / 100 
 
     super_jobs_scelles = []
     pile_a_optimiser = jobs_solitaires_initiaux.copy()
 
     for sj in super_jobs_tournees:
-        # On considère qu'un SuperJob est un "reliquat" s'il est sous le taux_max_cible
-        # (Chaque SuperJob doit avoir une propriété .taux_occupation_total)
-        taux_max_cible = params["securite_remplissage"]
-        
-        if autoriser_melange and sj.taux_occupation_total < (taux_max_cible - 0.01):
-            # On "casse" le SuperJob incomplet pour remettre ses jobs dans la pile d'optimisation
+        # Si le mélange est autorisé et que le taux est strictement inférieur au seuil
+        if autoriser_melange and sj.taux_occupation_total < seuil_rupture:
             pile_a_optimiser.extend(sj.liste_jobs)
         else:
-            # On garde le SuperJob tel quel (soit parce qu'il est plein, soit parce qu'on ne mélange pas)
             super_jobs_scelles.append(sj)
 
     return super_jobs_scelles, pile_a_optimiser
@@ -427,47 +424,58 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree):
     """
     Arbitre entre les différentes stratégies de regroupement.
     Priorise le remplissage maximum pour éviter les camions vides.
+    Utilise strictement les paramètres chargés en session_state.
     """
-    params = st.session_state.get("params_logistique", {"securite_remplissage": 1.0})
+    # Récupération stricte des paramètres sans valeur par défaut
+    params = st.session_state["params_logistique"]
     taux_max_cible = params["securite_remplissage"]
+    
+    # On définit une marge pour considérer qu'un remplissage est "satisfaisant"
+    # par rapport à l'objectif maximum (ici on garde ta logique de -20%)
     seuil_remplissage_minimum = max(0, taux_max_cible - 0.20)
     
     super_jobs_optimises = []
     restants = jobs_solitaires.copy()
 
-    # Tri par heure pour respecter la chronologie
+    # Tri par heure pour respecter la chronologie de mise à disposition
     restants.sort(key=lambda x: x.h_dispo)
 
     while len(restants) > 0:
         job_pivot = restants.pop(0)
         
         # --- PRIORITÉ 1 : COUPLES PARFAITS (Même trajet exact) ---
+        # On ajoute ici la sécurité sur le type de véhicule et la nature propre/sale
         couples_parfaits = [
             j for j in restants 
             if j.origin == job_pivot.origin 
             and j.destination == job_pivot.destination
-            and j.vehicule_type == job_pivot.vehicule_type
-            and j.type_propre_sale == job_pivot.type_propre_sale
+            and j.vehicule_type == job_pivot.vehicule_type  # Sécurité type véhicule
+            and j.type_propre_sale == job_pivot.type_propre_sale # Sécurité hygiène
         ]
         
         if couples_parfaits:
             comb_directe = [job_pivot]
             occ_directe = job_pivot.taux_occupation
             for c in couples_parfaits:
+                # Vérification stricte contre le taux max cible
                 if occ_directe + c.taux_occupation <= taux_max_cible + 0.0001:
                     comb_directe.append(c)
                     occ_directe += c.taux_occupation
             
-            # Si le regroupement direct est efficace (au dessus du seuil ou plusieurs jobs)
-            if occ_directe >= seuil_remplissage_minimum or len(comb_directe) >= 3:
+            # Si le regroupement direct est efficace :
+            # - Soit il atteint le seuil de rentabilité (ex: 65% si cible à 85%)
+            # - Soit il permet de vider la pile (3 jobs ou plus ensemble)
+            if occ_directe >= seuil_remplissage_minimum or len(comb_directe) >= 5:
                 sj_direct = SuperJob(comb_directe, matrice_duree)
                 super_jobs_optimises.append(sj_direct)
+                
+                # Nettoyage des jobs utilisés
                 ids_elus = [j.job_id for j in comb_directe if j.job_id != job_pivot.job_id]
                 restants = [j for j in restants if j.job_id not in ids_elus]
                 continue 
 
         # --- PRIORITÉ 2 : ARBITRAGE COMPLEXE (Multi-Pick ou Multi-Drop) ---
-        # On évalue les deux stratégies
+        # On appelle evaluer_strategie qui doit aussi utiliser taux_max_cible en interne
         sj_dest, poids_dest, membres_dest = evaluer_strategie(
             job_pivot, restants, "dest_group", taux_max_cible, matrice_duree
         )
@@ -475,31 +483,31 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree):
             job_pivot, restants, "origin_group", taux_max_cible, matrice_duree
         )
 
-        # Calcul des taux de remplissage réels
+        # Calcul des taux de remplissage cumulés pour l'arbitrage
         occ_dest = sum(j.taux_occupation for j in membres_dest)
         occ_dep = sum(j.taux_occupation for j in membres_dep)
 
         # LOGIQUE D'ARBITRAGE :
-        # On choisit d'abord celle qui remplit le plus le camion
+        # On choisit la branche qui maximise l'occupation du véhicule
         if occ_dest > occ_dep + 0.01:
             meilleur_sj, elus = sj_dest, membres_dest
         elif occ_dep > occ_dest + 0.01:
             meilleur_sj, elus = sj_dep, membres_dep
         else:
-            # Si remplissage identique, on prend le moins cher en temps (poids)
+            # Si remplissage identique, on prend le trajet le plus court (poids temps)
             if poids_dest <= poids_dep:
                 meilleur_sj, elus = sj_dest, membres_dest
             else:
                 meilleur_sj, elus = sj_dep, membres_dep
 
-        # Si l'arbitrage n'a rien donné de mieux qu'un camion seul
+        # Si l'arbitrage n'a rien trouvé de mieux qu'un camion seul (pas de partenaires)
         if len(elus) <= 1:
             meilleur_sj = SuperJob([job_pivot], matrice_duree)
             elus = [job_pivot]
 
         super_jobs_optimises.append(meilleur_sj)
         
-        # Nettoyage de la liste des restants
+        # Nettoyage final de la liste des restants
         ids_elus = [j.job_id for j in elus if j.job_id != job_pivot.job_id]
         restants = [j for j in restants if j.job_id not in ids_elus]
 
