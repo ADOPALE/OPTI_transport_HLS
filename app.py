@@ -317,8 +317,8 @@ elif selected == "Synthèse transport":
                 else:
                     try:
                         with st.status("Exécution du Tunnel de Consolidation...", expanded=True) as status:
-                            # Import des fonctions nécessaires du moteur
-                            from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
+                            st.write("Colonnes détectées dans Spécifiques :", df_specifique.columns.tolist())
+                            st.write("Aperçu des données :", df_specifique.head())
                             
                             # A. Préparation des flux (Fusion Récurrents + Spécifiques)
                             st.write(f"📊 Préparation des flux pour le {jour_simule}...")
