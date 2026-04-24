@@ -146,9 +146,7 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
 
 """
 def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
-    """
-    Cherche le nombre minimal de véhicules pour un type spécifique.
-    """
+
     if "params_logistique" not in st.session_state:
         return None
 
@@ -189,7 +187,7 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
             return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
 
     return {"succes": False}
-    """
+"""
 
 def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
     """
@@ -280,10 +278,7 @@ def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_
 
 """
 def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
-    """
-    Version optimisée avec CHAINAGE ACTIF : 
-    Le chauffeur cherche prioritairement à recharger là où il décharge.
-    """
+
     camions = []
     for i in range(n_camions):
         camions.append({
