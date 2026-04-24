@@ -210,9 +210,9 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
     for v_type, val_max in n_max_dict.items():
         # Gestion du format de n_max (liste d'intensités vs nombre)
         if isinstance(val_max, list):
-            n_max_calc = math.ceil(max(val_max) * 1.20)+1
+            n_max_calc = math.ceil(max(val_max) * 2)
         else:
-            n_max_calc = math.ceil(max(val_max) * 1.20)+1
+            n_max_calc = math.ceil(max(val_max) * 2)+1
             
         st.info(f"Analyse du type **{v_type}** (Recherche jusqu'à {n_max_calc} véhicules)")
         
