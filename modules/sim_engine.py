@@ -65,25 +65,25 @@ class Job:
 
 
 
-
 class SuperJob:
     """
-    Représente un camion mutualisé. 
-    Recherche insensible à la casse et aux espaces dans la COLONNE 0.
+    Représente un groupe de jobs mutualisés.
+    Calcule la mobilisation (Temps Camion) avec recherche insensible à la casse.
     """
     def __init__(self, liste_jobs, matrice_duree):
         self.liste_jobs = liste_jobs
         self.matrice_duree = matrice_duree
         
-        # 1. Caractéristiques
+        # 1. Infos de base
         self.taux_occupation_total = sum(j.taux_occupation for j in liste_jobs)
         self.v_type = self.liste_jobs[0].vehicule_type
         
-        # 2. Géographie
+        # 2. Points de passage
         self.points_depart = list(set(j.origin for j in liste_jobs))
         self.points_arrivee = list(set(j.destination for j in liste_jobs))
         
-        # 3. Temps (Minutes décimales)
+        # 3. Temps (Minutes décimales depuis 00:00)
+        # Nécessite la fonction to_decimal_minutes définie dans ton code
         self.h_dispo_min = max(to_decimal_minutes(j.h_dispo) for j in liste_jobs)
         self.h_deadline_min = min(to_decimal_minutes(j.h_deadline) for j in liste_jobs)
         
@@ -91,7 +91,7 @@ class SuperJob:
         self.poids_total = self.calculer_poids_mobilisation()
 
     def _to_minutes(self, val_excel):
-        """ Convertit formats Excel (Time, Timedelta, Float) en minutes. Gère NC. """
+        """ Convertit Time, Timedelta ou Float en minutes. 'NC' ou vide = 0. """
         if pd.isna(val_excel) or str(val_excel).strip().upper() == "NC" or val_excel == "":
             return 0.0
         if isinstance(val_excel, time):
@@ -104,7 +104,7 @@ class SuperJob:
             return 0.0
 
     def calculer_poids_mobilisation(self):
-        """ Récupère les paramètres avec recherche insensible à la casse sur COLONNE 0 """
+        """ Récupère les paramètres en Colonne 0 (insensible à la casse/espaces) """
         df_v = st.session_state["data"]["param_vehicules"]
         df_s = st.session_state["data"]["param_sites"]
         
@@ -118,15 +118,16 @@ class SuperJob:
         col_sq  = get_col_name(df_v, "SANS QUAI")
         col_aq  = get_col_name(df_v, "AVEC QUAI")
 
-        # --- RECHERCHE VÉHICULE (Insensible à la casse) ---
-        # On met tout en minuscules et on enlève les espaces pour comparer
-        v_type_clean = str(self.v_type).strip().lower()
-        masque_v = df_v[col_v_id].astype(str).str.strip().str.lower() == v_type_clean
-        v_data = df_v[masque_v]
-
+        # --- RECHERCHE VÉHICULE ---
+        # Nettoyage : minuscules + suppression espaces
+        v_type_recherche = str(self.v_type).strip().lower()
+        v_col_clean = df_v[col_v_id].astype(str).str.strip().str.lower()
+        
+        v_data = df_v[v_col_clean == v_type_recherche]
+        
         if v_data.empty:
             st.error(f"❌ Véhicule '{self.v_type}' introuvable dans la colonne '{col_v_id}'.")
-            st.info(f"Valeurs disponibles : {df_v[col_v_id].tolist()}")
+            st.info(f"Valeurs détectées dans l'Excel : {df_v[col_v_id].unique().tolist()}")
             st.stop()
             
         ligne_v = v_data.iloc[0]
@@ -136,20 +137,21 @@ class SuperJob:
 
         total_min = 0
         
-        # Trajet
+        # --- TRAJET ---
         itineraire = self.points_depart + self.points_arrivee
         for i in range(len(itineraire) - 1):
             total_min += self.matrice_duree.get((itineraire[i], itineraire[i+1]), 0)
 
-        # --- RECHERCHE SITE (Insensible à la casse) ---
+        # --- SITES & MANUTENTION ---
         col_s_id = df_s.columns[0]
         col_quai = get_col_name(df_s, "QUAI")
 
         for site in list(set(itineraire)):
             total_min += t_man 
             
-            site_clean = str(site).strip().lower()
-            site_data = df_s[df_s[col_s_id].astype(str).str.strip().str.lower() == site_clean]
+            site_recherche = str(site).strip().lower()
+            s_col_clean = df_s[col_s_id].astype(str).str.strip().str.lower()
+            site_data = df_s[s_col_clean == site_recherche]
             
             has_quai = False
             if not site_data.empty and col_quai:
@@ -162,16 +164,14 @@ class SuperJob:
 
         return total_min
 
-
     def __repr__(self):
-        """ Représentation étoffée pour le suivi du Graphe de Charge """
+        """ Affichage détaillé pour le débug et le graphe d'intensité """
         h_start = f"{int(self.h_dispo_min // 60):02d}h{int(self.h_dispo_min % 60):02d}"
-        return (f"SuperJob(Type:{self.v_type}, "
-                f"Jobs:{len(self.liste_jobs)}, "
-                f"Occ:{round(self.taux_occupation_total, 1)}%, "
-                f"Mobilisation:{round(self.poids_total, 1)} min, "
-                f"Prêt à:{h_start})")
-
+        return (f"SuperJob(Véhicule: {self.v_type}, "
+                f"Contenus: {len(self.liste_jobs)} jobs, "
+                f"Remplissage: {round(self.taux_occupation_total, 1)}%, "
+                f"Mobilisation: {round(self.poids_total, 1)} min, "
+                f"Dispo: {h_start})")
 
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
