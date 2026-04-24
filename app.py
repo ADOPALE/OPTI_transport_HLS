@@ -271,14 +271,18 @@ elif selected == "Synthèse transport":
                             )
                             
                             detail_par_jour[jour] = liste_globale_sj
+
+
+                            # Calcul du pic de charge pour le récapitulatif
+                            n_max_j, intensite_j = calculer_nmax_theorique(liste_globale_sj)
+                            comptage_jour = {"Jour": jour, "Nmax": n_max_j}
                             
-                            comptage_jour = {"Jour": jour}
                             total_temps_jour = 0
                             for sj in liste_globale_sj:
-                                v_type = sj.liste_jobs[0].vehicule_type
+                                v_type = sj.v_type
                                 col_name = f"SJ - {v_type}"
                                 comptage_jour[col_name] = comptage_jour.get(col_name, 0) + 1
-                                total_temps_jour += sj.calculer_poids_mobilisation()
+                                total_temps_jour += sj.poids_total
                             
                             comptage_jour["Temps Total (h)"] = round(total_temps_jour / 60, 1)
                             resultats_hebdo.append(comptage_jour)
@@ -301,6 +305,15 @@ elif selected == "Synthèse transport":
             liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_sel, [])
             
             if liste_sj_jour:
+
+                # Affichage du graphe d'intensité pour le jour sélectionné
+                from modules.sim_engine import calculer_nmax_theorique
+                n_max_sel, intensite_sel = calculer_nmax_theorique(liste_sj_jour)
+                
+                st.write(f"**Courbe de charge du {jour_sel} (Besoin théorique : {n_max_sel} camions)**")
+                labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
+                st.area_chart(pd.DataFrame({"Camions requis": intensite_sel}, index=labels_h))
+                
                 # Tableau des SuperJobs
                 recap_sj = []
                 for i, sj in enumerate(liste_sj_jour):
