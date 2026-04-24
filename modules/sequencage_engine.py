@@ -39,7 +39,7 @@ class PosteChauffeur:
         self.position_actuelle = site_initial
         self.etat = 'INACTIF'
         self.job_en_cours = None
-        self.job_precedent = None  # Pour la mémoire du couloir
+        self.job_precedent = None  
         self.temps_restant_etat = 0
         self.temps_service_total = 0   
         self.is_pause_faite = False
@@ -88,7 +88,7 @@ class PosteChauffeur:
         return self.etat == 'DISPONIBLE' and self.temps_restant_etat == 0
 
 # =================================================================
-# 3. LOGIQUE DE SCORING ET SÉLECTION
+# 3. LOGIQUE DE SELECTION
 # =================================================================
 
 def calculer_score_stress(job, temps_actuel):
@@ -101,19 +101,15 @@ def calculer_score_stress(job, temps_actuel):
 def trouver_meilleur_job(poste, jobs_dispos, matrice_duree):
     candidats = [j for j in jobs_dispos if j.v_type == poste.vehicule_type]
     if not candidats: return None
-    
     candidats.sort(key=lambda x: x.score_stress, reverse=True)
     top_candidats = candidats[:5]
     
-    # 1. Même couloir dynamique + Sur place
     for j in top_candidats:
         if sont_dans_le_meme_couloir(poste.job_precedent, j) and j.origin == poste.position_actuelle:
             return j
-    # 2. Hors couloir + Sur place
     for j in top_candidats:
         if j.origin == poste.position_actuelle:
             return j
-    # 3. Proche voisin
     scored = []
     for idx, j in enumerate(top_candidats):
         dist = matrice_duree.get(poste.position_actuelle, {}).get(j.origin, 999)
@@ -122,7 +118,7 @@ def trouver_meilleur_job(poste, jobs_dispos, matrice_duree):
     return scored[0][1]
 
 # =================================================================
-# 4. FONCTION D'ORDONNANCEMENT
+# 4. ORDONNANCEMENT
 # =================================================================
 
 def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
@@ -132,13 +128,25 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
     h_fin = to_decimal_minutes(rh_params.get('h_fin_max', time(21, 0)))
     
     postes = []
+    nom_col_manoeuvre = "Temps de mise à quai - manœuvre, contact/admin (minutes)"
+
     for v_type, n_veh in n_max_dict.items():
         if n_veh <= 0: continue
         
-        # Utilisation de ta colonne 'Types' corrigée
-        row_v = df_vehicules[df_vehicules['Types'] == v_type].iloc[0]
+        # Filtre sur ta colonne Types
+        df_f = df_vehicules[df_vehicules['Types'] == v_type]
+        if df_f.empty: continue
+        row_v = df_f.iloc[0]
+        
         site_depot = row_v['Stationnement initial']
-        t_man = row_v['Temps manœuvre (min)'] 
+        
+        # --- RÉCUPÉRATION DU TEMPS DE MANOEUVRE ---
+        if nom_col_manoeuvre in df_vehicules.columns:
+            t_man = row_v[nom_col_manoeuvre]
+        else:
+            # Sécurité : si le nom exact échoue (problème d'accent/œ), on cherche par mot-clé
+            col_alternative = [c for c in df_vehicules.columns if "man" in c.lower() and "min" in c.lower()]
+            t_man = row_v[col_alternative[0]] if col_alternative else 10
         
         for i in range(1, int(n_veh) + 1):
             p = PosteChauffeur(f"{v_type}_{i:02d}", v_type, site_depot, rh_params)
@@ -152,52 +160,37 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
         for p in postes:
             if p.mettre_a_jour(pas):
                 if p.etat == 'PRISE_POSTE':
-                    p.etat = 'DISPONIBLE'
-                    p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
-                
+                    p.etat = 'DISPONIBLE'; p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
                 elif p.etat == 'EN_TRAJET_VIDE':
                     if p.job_en_cours:
-                        p.etat = 'EN_MANOEUVRE_QUAI'
-                        p.temps_restant_etat = p.t_manoeuvre
+                        p.etat = 'EN_MANOEUVRE_QUAI'; p.temps_restant_etat = p.t_manoeuvre
                         p.position_actuelle = p.job_en_cours.origin
-                        p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", p.job_en_cours, "Mise à quai Chargement")
+                        p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", p.job_en_cours, "Mise à quai")
                     else:
-                        p.position_actuelle = p.stationnement_initial
-                        p.etat = 'DISPONIBLE'
-
+                        p.position_actuelle = p.stationnement_initial; p.etat = 'DISPONIBLE'
                 elif p.etat == 'EN_MANOEUVRE_QUAI':
                     if p.job_en_cours and p.position_actuelle == p.job_en_cours.origin:
-                        p.etat = 'EN_CHARGEMENT'
-                        p.temps_restant_etat = p.job_en_cours.temps_chargement
+                        p.etat = 'EN_CHARGEMENT'; p.temps_restant_etat = p.job_en_cours.temps_chargement
                         p.enregistrer_evenement(heure_actuelle, "EN_CHARGEMENT", p.job_en_cours)
                     else:
-                        p.etat = 'EN_DECHARGEMENT'
-                        p.temps_restant_etat = p.job_en_cours.temps_dechargement
+                        p.etat = 'EN_DECHARGEMENT'; p.temps_restant_etat = p.job_en_cours.temps_dechargement
                         p.enregistrer_evenement(heure_actuelle, "EN_DECHARGEMENT", p.job_en_cours)
-
                 elif p.etat == 'EN_CHARGEMENT':
                     p.etat = 'EN_TRAJET_PLEIN'
                     dist = matrice_duree.get(p.job_en_cours.origin, {}).get(p.job_en_cours.destination, 30)
                     p.temps_restant_etat = dist
                     p.enregistrer_evenement(heure_actuelle, "EN_TRAJET_PLEIN", p.job_en_cours)
-
                 elif p.etat == 'EN_TRAJET_PLEIN':
-                    p.etat = 'EN_MANOEUVRE_QUAI'
-                    p.temps_restant_etat = p.t_manoeuvre
+                    p.etat = 'EN_MANOEUVRE_QUAI'; p.temps_restant_etat = p.t_manoeuvre
                     p.position_actuelle = p.job_en_cours.destination
-                    p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", p.job_en_cours, "Mise à quai Déchargement")
-
+                    p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", p.job_en_cours, "Mise à quai")
                 elif p.etat == 'EN_DECHARGEMENT':
                     if heure_actuelle > p.job_en_cours.h_deadline_min:
                         return {"succes": False, "erreur": f"Retard sur {p.job_en_cours.flux_id}"}
-                    p.etat = 'DISPONIBLE'
-                    p.job_precedent = p.job_en_cours
-                    p.job_en_cours = None
+                    p.etat = 'DISPONIBLE'; p.job_precedent = p.job_en_cours; p.job_en_cours = None
                     p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
-
                 elif p.etat == 'EN_PAUSE':
-                    p.etat = 'DISPONIBLE'
-                    p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
+                    p.etat = 'DISPONIBLE'; p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
 
         jobs_dispos = [j for j in jobs_restants if j.h_dispo_min <= heure_actuelle]
         for j in jobs_dispos: j.score_stress = calculer_score_stress(j, heure_actuelle)
@@ -205,9 +198,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
         for p in postes:
             if p.etat == 'INACTIF':
                 if any(j.v_type == p.vehicule_type for j in jobs_dispos):
-                    p.etat = 'PRISE_POSTE'; p.temps_restant_etat = 15
-                    p.enregistrer_evenement(heure_actuelle, "PRISE_POSTE")
-            
+                    p.etat = 'PRISE_POSTE'; p.temps_restant_etat = 15; p.enregistrer_evenement(heure_actuelle, "PRISE_POSTE")
             elif p.est_disponible():
                 if p.verifier_fin_service() or p.verifier_besoin_pause():
                     if p.position_actuelle == p.stationnement_initial:
@@ -223,8 +214,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 else:
                     job = trouver_meilleur_job(p, jobs_dispos, matrice_duree)
                     if job:
-                        p.job_en_cours = job
-                        jobs_restants.remove(job); jobs_dispos.remove(job)
+                        p.job_en_cours = job; jobs_restants.remove(job); jobs_dispos.remove(job)
                         dist_approche = matrice_duree.get(p.position_actuelle, {}).get(job.origin, 0)
                         if dist_approche > 0:
                             p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist_approche
@@ -237,7 +227,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
     return {"succes": len(jobs_restants) == 0, "postes": postes, "reliquat": len(jobs_restants)}
 
 # =================================================================
-# 5. FONCTION D'ITÉRATION
+# 5. ITERATION
 # =================================================================
 
 def trouver_meilleure_configuration_journee(liste_sj, intensite_par_type, df_vehicules, matrice_duree, params_logistique):
