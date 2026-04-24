@@ -648,40 +648,47 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
     return tous_les_super_jobs_du_jour
 
+
 def calculer_nmax_theorique(liste_super_jobs):
     """
-    Calcule le pic de charge par pas de 30min pour déterminer le Nmax de départ.
+    Calcule l'intensité de charge par créneau de 30 min.
+    Retourne le Nmax et les données du graphe.
     """
-    if not liste_super_jobs:
-        return 0
-
-    # 1. Création des créneaux (48 créneaux de 30min dans 24h)
-    creneaux = [0] * 48 
+    # 48 créneaux de 30 minutes pour couvrir 24h (1440 min)
+    nb_creneaux = 48
+    pas = 30
+    intensite_par_creneau = [0.0] * nb_creneaux
 
     for sj in liste_super_jobs:
-        # On récupère les minutes décimales depuis minuit
-        # h_start : quand le job commence
-        # h_end : quand le job finit (on prend sa deadline pour être conservateur)
-        m_start = sj.h_dispo_min  
-        m_end = sj.h_deadline_min 
+        # Temps de début et fin théorique du job
+        t_debut = sj.h_dispo_min
+        t_fin = t_debut + sj.poids_total
+        
+        curr = t_debut
+        while curr < t_fin:
+            # Index du créneau actuel (0 à 47)
+            idx = int((curr % 1440) // pas)
+            
+            # Calcul de la fin du créneau actuel
+            fin_creneau = (idx + 1) * pas
+            
+            # Temps passé par le job dans ce créneau spécifique
+            temps_dans_ce_creneau = min(t_fin, fin_creneau) - curr
+            
+            # L'intensité ajoutée est le prorata du créneau occupé
+            # Ex: Si le camion travaille 15 min sur les 30 min du créneau, intensité +0.5
+            intensite_par_creneau[idx] += (temps_dans_ce_creneau / pas)
+            
+            curr += temps_dans_ce_creneau
 
-        # Conversion en index de créneau (0 à 47)
-        idx_start = int(m_start // 30)
-        idx_end = int(m_end // 30)
-
-        # On incrémente la charge pour chaque créneau couvert
-        # On s'assure de rester dans les limites 0-47
-        for i in range(max(0, idx_start), min(48, idx_end + 1)):
-            creneaux[i] += 1
-
-    # 2. Le Nmax est le pic maximal de jobs simultanés
-    pic_charge = max(creneaux)
+    # Le pic d'intensité représente le besoin instantané maximal
+    pic_intensite = max(intensite_par_creneau)
     
-    # Sécurité : On peut ajouter une petite marge de 10-20% pour absorber 
-    # les temps de trajets à vide futurs lors de la simulation Nmax
-    n_max_theorique = math.ceil(pic_charge * 1.2) 
-
-    return n_max_theorique
+    # Calcul du Nmax avec une marge de sécurité (ex: 15%) pour absorber
+    # les futurs trajets "Haut-le-pied" (à vide) entre deux missions.
+    n_max_theorique = math.ceil(pic_intensite * 1.20)
+    
+    return n_max_theorique, intensite_par_creneau
 
 
 
