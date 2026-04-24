@@ -66,12 +66,13 @@ class PosteChauffeur:
 # =================================================================
 
 """
-def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
-    """
     Vérifie si on peut :
     1. Arriver au chargement du 1er job
     2. ET finir la livraison du 1er job avant sa deadline.
     """
+"""
+def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
+    
     candidats_possibles = []
     
     for j in dispos:
