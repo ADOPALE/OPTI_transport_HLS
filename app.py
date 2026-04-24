@@ -317,6 +317,43 @@ elif selected == "Synthèse transport":
             else:
                 st.info(f"Aucun SuperJob généré pour le {jour_selectionne}.")
 
+            # --- ANALYSE DES MAUVAIS REMPLISSAGES ---
+            st.divider()
+            st.subheader("⚠️ Focus sur les 10 SuperJobs les moins remplis")
+            st.write("Ce tableau détaille les flux (Jobs) contenus dans les camions à faible taux d'occupation pour comprendre les blocages.")
+
+            if liste_sj_jour:
+                # 1. On trie pour avoir les 10 pires taux
+                sj_tries = sorted(liste_sj_jour, key=lambda x: x.taux_occupation_total)
+                top_10_pires = sj_tries[:10]
+
+                details_jobs = []
+                for sj_idx, sj in enumerate(top_10_pires):
+                    for job in sj.liste_jobs:
+                        details_jobs.append({
+                            "ID SuperJob": f"Top_{sj_idx+1} (Taux: {round(sj.taux_occupation_total*100,1)}%)",
+                            "Flux ID": job.flux_id,
+                            "Origine": job.origin,
+                            "Destination": job.destination,
+                            "Dispo": job.h_dispo if isinstance(job.h_dispo, str) else f"{int(job.h_dispo//60):02d}:{int(job.h_dispo%60):02d}",
+                            "Deadline": job.h_deadline if isinstance(job.h_deadline, str) else f"{int(job.h_deadline//60):02d}:{int(job.h_deadline%60):02d}",
+                            "Quantité": job.quantite,
+                            "Contenant": job.contenant,
+                            "Type": job.type_propre_sale,
+                            "A/R": job.aller_retour
+                        })
+
+                if details_jobs:
+                    df_details = pd.DataFrame(details_jobs)
+                    st.dataframe(df_details, use_container_width=True)
+                    
+                    st.info("""
+                    **Comment lire ce tableau ?**
+                    - Si la fenêtre **[Dispo - Deadline]** est très courte, le camion ne pouvait pas être groupé.
+                    - Si le **Type** est différent des autres flux du secteur, une désinfection ou un camion séparé était nécessaire.
+                    - Si la **Quantité** est faible mais que le flux est loin, le camion est sacrifié pour un petit volume.
+                    """)
+
     else:
         st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
 
