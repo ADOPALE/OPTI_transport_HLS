@@ -305,14 +305,29 @@ elif selected == "Synthèse transport":
             liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_sel, [])
             
             if liste_sj_jour:
-
-                # Affichage du graphe d'intensité pour le jour sélectionné
+                # --- ÉTAPE 1 : CALCUL VENTILÉ PAR TYPE (Nouvelle Logique) ---
                 from modules.sim_engine import calculer_nmax_par_type
-                n_max_sel, intensite_sel = calculer_nmax_par_type(liste_sj_jour)
                 
-                st.write(f"**Courbe de charge du {jour_sel} (Besoin théorique : {n_max_sel} camions)**")
+                # On récupère le dictionnaire {Type: [48 créneaux]}
+                intensite_dict = calculer_nmax_par_type(liste_sj_jour)
+                
+                st.write(f"**📈 Courbe de charge ventilée du {jour_sel}**")
+                
+                # Préparation du DataFrame pour le graphique empilé
                 labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
-                st.area_chart(pd.DataFrame({"Camions requis": intensite_sel}, index=labels_h))
+                df_graph = pd.DataFrame(intensite_dict, index=labels_h)
+                
+                # L'affichage devient un graphique d'aire empilé par couleur
+                st.area_chart(df_graph)
+
+                # --- ÉTAPE 2 : INDICATEURS NMAX PAR TYPE ---
+                st.write("**Besoin max détecté par catégorie :**")
+                cols_nmax = st.columns(len(intensite_dict))
+                for i, (v_type, intensites) in enumerate(intensite_dict.items()):
+                    pic = max(intensites)
+                    n_max_v = math.ceil(pic * 1.20)
+                    with cols_nmax[i]:
+                        st.metric(f"Nmax {v_type}", f"{n_max_v} cam.")
                 
                 # Tableau des SuperJobs
                 recap_sj = []
