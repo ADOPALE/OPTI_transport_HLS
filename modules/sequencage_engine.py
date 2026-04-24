@@ -65,6 +65,7 @@ class PosteChauffeur:
 # 3. LOGIQUE DE SÉLECTION (MAILLON CRITIQUE)
 # =================================================================
 
+"""
 def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
     """
     Vérifie si on peut :
@@ -106,6 +107,43 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
             
     top_3.sort(key=lambda x: matrice_duree.get(p.position_actuelle, {}).get(x.points_depart[0], 999))
     return top_3[0]
+"""
+def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
+    """
+    Sélectionne le job le plus stressé parmi les candidats physiquement réalisables.
+    La priorité est donnée au stress (urgence) avant les optimisations de couloir.
+    """
+    candidats_possibles = []
+    
+    for j in dispos:
+        first_job = j.liste_jobs[0]
+        h_deadline_1er = to_min(first_job.h_deadline)
+        
+        # 1. Temps d'approche vers l'origine du 1er Job
+        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
+        
+        # 2. Temps du 1er segment (on prend le premier job du bloc)
+        # On utilise le poids du premier job s'il existe, sinon on estime
+        duree_maillon_1 = first_job.poids_total if hasattr(first_job, 'poids_total') else (j.poids_total / len(j.liste_jobs))
+        
+        # CONDITION DE FAISABILITÉ PHYSIQUE : 
+        # On ne peut pas prendre un job si le camion arrive APRES la deadline du 1er segment
+        if minute + dist_approche + duree_maillon_1 <= h_deadline_1er:
+            j.stress_temp = calculer_stress_dynamique(j, minute)
+            candidats_possibles.append(j)
+
+    if not candidats_possibles:
+        # Debug : on affiche l'heure en format lisible
+        h_affichage = f"{int(minute//60):02d}h{int(minute%60):02d}"
+        # st.warning(f"🕒 {h_affichage} : Aucun job réalisable pour {p.id_poste} (Deadlines trop serrées)")
+        return None
+
+    # TRI ABSOLU PAR STRESS (le plus élevé en premier)
+    # On ignore les priorités de couloir/position pour forcer le traitement de l'urgence
+    candidats_possibles.sort(key=lambda x: x.stress_temp, reverse=True)
+    
+    # On retourne le premier de la liste (le plus stressé)
+    return candidats_possibles[0]
 
 # =================================================================
 # 4. MOTEUR DE SIMULATION
