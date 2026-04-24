@@ -229,11 +229,10 @@ elif selected == "Simul tournées":
         
 elif selected == "Synthèse transport":
     if 'df_sequence_type' in st.session_state:
-        st.title("🚚 Simulation & Consolidation des Flux")
+        st.title("🚚 Synthèse & Consolidation des Flux")
         
-        # 1. RÉCUPÉRATION DES DONNÉES
-        # On centralise les accès pour plus de clarté
-        df_recurrent = st.session_state['df_sequence_type']
+        # 1. RÉCUPÉRATION DES DONNÉES DEPUIS LE SESSION STATE
+        df_recurrent = st.session_state.get('df_sequence_type')
         df_specifique = st.session_state.get('df_flux_specifique', pd.DataFrame())
         df_vehicules = st.session_state['data']['param_vehicules']
         df_contenants = st.session_state['data']['param_contenants']
@@ -244,27 +243,26 @@ elif selected == "Synthèse transport":
         
         with col1:
             st.subheader("Paramètres")
-            # Choix du jour (Optionnel, on peut le rendre dynamique plus tard)
+            # Le lundi est souvent le jour de référence, mais on laisse le choix
             jour_simule = st.selectbox("Jour à simuler", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
-            
-            lancer_simul = st.button("🚀 Lancer la consolidation", use_container_width=True)
+            lancer_simul = st.button("🚀 Lancer la consolidation", use_container_width=True, type="primary")
             
         with col2:
             if lancer_simul:
                 if matrice_duree is None:
-                    st.error("⚠️ Matrice de temps introuvable. Calculez-la dans l'onglet 'Matrice de distance'.")
+                    st.error("⚠️ Matrice de temps introuvable. Veuillez la calculer dans l'onglet 'Matrice de distance'.")
                 else:
                     try:
-                        with st.status("Exécution du Tunnel de Consolidation...", expanded=True) as status:
-                            st.write("Colonnes détectées dans Spécifiques :", df_specifique.columns.tolist())
-                            st.write("Aperçu des données :", df_specifique.head())
+                        with st.status(f"Simulation du {jour_simule} en cours...", expanded=True) as status:
+                            # Import des fonctions du moteur
+                            from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
                             
-                            # A. Préparation des flux (Fusion Récurrents + Spécifiques)
-                            st.write(f"📊 Préparation des flux pour le {jour_simule}...")
+                            # A. Préparation et Harmonisation (Fusion Récurrents + Spécifiques)
+                            st.write("📊 Fusion des flux et harmonisation des colonnes...")
                             df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_simule)
                             
-                            # B. Appel du Tunnel (Fragmentation -> Tournées imposées -> Arbitrage solitaires)
-                            st.write("🔍 Consolidation et arbitrage des camions...")
+                            # B. Exécution du Tunnel de Consolidation
+                            st.write("🔍 Fragmentation et arbitrage des camions (SuperJobs)...")
                             liste_globale_sj = tunnel_consolidation_flux(
                                 df_complet_jour, 
                                 df_vehicules, 
@@ -273,31 +271,55 @@ elif selected == "Synthèse transport":
                                 matrice_duree
                             )
                             
-                            # C. Stockage du résultat pour les étapes futures (Lissage / Ordonnancement)
+                            # C. Sauvegarde pour l'étape finale d'ordonnancement
                             st.session_state['liste_super_jobs_consolides'] = liste_globale_sj
                             
-                            # D. Affichage du succès
-                            st.success(f"✅ Consolidation terminée : {len(liste_globale_sj)} SuperJobs (camions) générés.")
+                            # D. AFFICHAGE DES RÉSULTATS (Metrics)
+                            status.update(label=f"✅ Consolidation terminée pour le {jour_simule} !", state="complete")
                             
-                            # Construction d'un DataFrame pour visualiser le résultat
+                            st.markdown(f"### 📊 Récapitulatif par Flotte")
+                            
+                            # Calcul des stats par type de véhicule
+                            stats_flotte = {}
+                            for sj in liste_globale_sj:
+                                v_type = sj.liste_jobs[0].vehicule_type
+                                temps_mob = sj.calculer_poids_mobilisation()
+                                if v_type not in stats_flotte:
+                                    stats_flotte[v_type] = {"nb_sj": 0, "temps": 0}
+                                stats_flotte[v_type]["nb_sj"] += 1
+                                stats_flotte[v_type]["temps"] += temps_mob
+
+                            # Affichage des Metrics
+                            if stats_flotte:
+                                m_cols = st.columns(len(stats_flotte))
+                                for i, (v_type, data) in enumerate(stats_flotte.items()):
+                                    with m_cols[i]:
+                                        st.metric(label=f"🚚 {v_type}", value=f"{data['nb_sj']} SJ")
+                                        h = int(data['temps'] // 60)
+                                        m = int(data['temps'] % 60)
+                                        st.caption(f"⏱️ Total : {h}h{m:02d}")
+
+                            st.divider()
+
+                            # E. AFFICHAGE DU TABLEAU DÉTAILLÉ
+                            st.write("### 📋 Liste des SuperJobs (Tournées camions)")
                             recap_data = []
                             for i, sj in enumerate(liste_globale_sj):
                                 recap_data.append({
                                     "ID Camion": i + 1,
                                     "Véhicule": sj.liste_jobs[0].vehicule_type,
-                                    "Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
+                                    "Taux Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
                                     "Nb Arrêts": len(set(sj.points_depart + sj.points_arrivee)),
-                                    "Temps Mobilisation": f"{round(sj.calculer_poids_mobilisation(), 0)} min"
+                                    "Temps estimé (min)": round(sj.calculer_poids_mobilisation(), 0)
                                 })
                             
                             st.dataframe(pd.DataFrame(recap_data), use_container_width=True)
-                            status.update(label="Simulation de consolidation terminée !", state="complete")
 
                     except Exception as e:
                         st.error(f"Erreur lors de la simulation : {e}")
                         st.exception(e)
     else:
-        st.warning("⚠️ Veuillez générer la 'Séquence Type' dans l'onglet précédent avant de lancer la synthèse.")
+        st.warning("⚠️ Aucune donnée de 'Séquence Type' trouvée. Veuillez lancer le calcul Jmax dans l'onglet précédent.")
 
 
     if st.session_state.get('planning_detaille'):
