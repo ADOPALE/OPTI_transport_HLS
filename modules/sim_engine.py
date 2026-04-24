@@ -652,111 +652,92 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
 
 
 
-def calculer_nmax_theorique(liste_super_jobs):
+def calculer_nmax_par_type(liste_super_jobs):
     """
-    Calcule l'intensité de charge avec lissage conditionnel :
-    - Si ratio <= 1 : Lissage uniforme sur l'amplitude.
-    - Si ratio > 1 : Saturation à 1.0 et débordement (overflow) sur les créneaux suivants.
+    Calcule l'intensité de charge ventilée par type de véhicule.
+    Retourne un dictionnaire {type_v: [intensités]} et le Nmax global.
     """
     import math
     nb_creneaux = 48
     pas = 30
-    intensite_par_creneau = [0.0] * nb_creneaux
+    
+    # Dictionnaire pour stocker l'intensité par type : { 'SEMI': [0.0]*48, 'VL': [0.0]*48 }
+    intensite_par_type = {}
 
     for sj in liste_super_jobs:
+        v_type = sj.v_type
+        if v_type not in intensite_par_type:
+            intensite_par_type[v_type] = [0.0] * nb_creneaux
+            
         t_debut = sj.h_dispo_min
         t_fin_autorisee = sj.h_deadline_min
         poids_total = sj.poids_total
-        amplitude = max(1, t_fin_autorisee - t_debut) # Sécurité 1min min
+        amplitude = max(1, t_fin_autorisee - t_debut)
         
         ratio_theorique = poids_total / amplitude
 
-        # --- CAS A : BESOIN FLUIDE (Ratio <= 1) -> Lissage uniforme ---
+        # --- CAS A : Lissage ---
         if ratio_theorique <= 1:
             curr = t_debut
             while curr < t_fin_autorisee:
                 idx = int((curr % 1440) // pas)
                 fin_creneau = (idx + 1) * pas
                 temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
-                
-                # On applique le ratio lissé (ex: 0.4 camion sur toute la durée)
-                intensite_par_creneau[idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
+                intensite_par_type[v_type][idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
                 curr += temps_dans_ce_creneau
 
-        # --- CAS B : TENSION (Ratio > 1) -> Saturation et Débordement ---
+        # --- CAS B : Débordement ---
         else:
             poids_restant = poids_total
             curr = t_debut
             while poids_restant > 0 and curr < 1440:
                 idx = int((curr % 1440) // pas)
                 fin_creneau = (idx + 1) * pas
-                temps_dispo_creneau = fin_creneau - curr
-                
-                # On consomme le max possible (saturation à 100% du temps restant)
-                consommation = min(poids_restant, temps_dispo_creneau)
-                
-                # Ici on ajoute la part du créneau occupée à 100%
-                intensite_par_creneau[idx] += (consommation / pas)
-                
+                consommation = min(poids_restant, fin_creneau - curr)
+                intensite_par_type[v_type][idx] += (consommation / pas)
                 poids_restant -= consommation
                 curr += consommation
 
-    # Pic d'intensité et Nmax avec marge de 20%
-    pic_intensite = max(intensite_par_creneau)
-    n_max_theorique = math.ceil(pic_intensite * 1.20)
-    
-    return n_max_theorique, intensite_par_creneau
+    return intensite_par_type
 
 
 
 
 def lancer_simulation(liste_super_jobs):
-    """
-    Tunnel de Simulation
-    Étape 1 : Calcul du Nmax théorique et des données d'intensité
-    Étape 2 : Affichage des graphiques et indicateurs
-    """
     st.header("🚀 Simulation des Tournées")
     
     if not liste_super_jobs:
-        st.warning("⚠️ Aucun SuperJob disponible pour la simulation. Vérifiez la consolidation.")
+        st.warning("⚠️ Aucun SuperJob disponible.")
         return
 
-    # --- ÉTAPE 1 : CALCUL (Logique Métier) ---
-    # On appelle la fonction de calcul que nous avons définie précédemment
-    n_max_theorique, intensite_creneaux = calculer_nmax_theorique(liste_super_jobs)
+    # --- ÉTAPE 1 : CALCUL VENTILÉ ---
+    intensite_dict = calculer_nmax_par_type(liste_super_jobs)
 
-    # --- ÉTAPE 2 : AFFICHAGE (Interface Utilisateur) ---
+    # --- ÉTAPE 2 : AFFICHAGE ---
+    st.subheader("📊 Intensité de charge par type de véhicule")
     
-    # 2.1 Graphique d'intensité
-    st.subheader("📊 Intensité de charge théorique")
-    st.write("Ce graphique représente le cumul des temps de mobilisation (trajet + manutention) par créneau de 30 min.")
-    
-    # Préparation des libellés (00:00, 00:30...)
+    # Préparation des libellés d'heures
     labels_heures = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
-    df_graph = pd.DataFrame({
-        "Heure": labels_heures,
-        "Besoin Camions": intensite_creneaux
-    }).set_index("Heure")
-
+    
+    # Création du DataFrame pour le graphe
+    # index = Heures, colonnes = Types de véhicules
+    df_graph = pd.DataFrame(intensite_dict, index=labels_heures)
+    
+    # Affichage du graphe empilé (Stacked Area Chart)
     st.area_chart(df_graph)
 
-    # 2.2 Indicateurs Clés (Key Metrics)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Pic d'intensité", f"{max(intensite_creneaux):.2f} cam.")
-    with col2:
-        st.metric("Nmax estimé", f"{n_max_theorique} cam.", help="Inclut une marge pour les trajets à vide")
-    with col3:
-        st.metric("Volume de flux", f"{len(liste_super_jobs)} SuperJobs")
+    # --- ÉTAPE 3 : INDICATEURS PAR TYPE ---
+    st.write("**Besoin maximum par catégorie (Nmax) :**")
+    cols = st.columns(len(intensite_dict))
+    
+    for i, (v_type, intensites) in enumerate(intensite_dict.items()):
+        pic = max(intensites)
+        n_max_v = math.ceil(pic * 1.20)
+        with cols[i]:
+            st.metric(f"Nmax {v_type}", f"{n_max_v} cam.")
 
     st.divider()
-
-    # --- ÉTAPE 3 : POUR LA SUITE (Séquençage) ---
-    st.info("💡 Prochaine étape : Attribution des jobs aux camions pour créer des tournées réelles.")
-    
-    # On peut stocker le n_max pour l'algorithme suivant
-    return n_max_theorique, intensite_creneaux
+    return intensite_dict
 
 
 
