@@ -36,6 +36,7 @@ def calculer_stress_dynamique(sj, minute_actuelle):
 
 class PosteChauffeur:
     def __init__(self, id_p, v_type, site_depot, params_rh):
+        # id_p devient l'identifiant du véhicule physique
         self.id_poste = id_p
         self.vehicule_type = v_type
         self.stationnement_initial = site_depot
@@ -46,19 +47,36 @@ class PosteChauffeur:
         self.job_en_cours = None
         self.couloir_actuel = None
         
-        self.h_debut_service = None
+        # --- LOGIQUE DE ROTATION ---
+        # Heure à laquelle le chauffeur ACTUEL a pris le volant
+        self.h_debut_service_actuel = None 
         self.pause_faite = False
         self.historique = []
         
+        # Paramètres issus du dictionnaire RH
         self.amplitude_max = params_rh.get('amplitude_totale', 450)
         self.duree_pause = params_rh.get('pause', 45)
+        
+        # Temps de passation (fin de poste précédent + prise de poste suivant)
+        # On peut utiliser la moitié de 'temps_fixes' pour chaque étape ou une valeur fixe
+        self.temps_passation = params_rh.get('temps_fixes', 30)
 
     def enregistrer(self, minute, activite, sj=None, details=""):
+        """
+        Enregistre une activité dans l'historique du véhicule.
+        sj : l'objet SuperJob en cours (optionnel)
+        details : message libre (ex: 'Retour Dépôt (Fin de poste)', 'Passation')
+        """
+        # Sécurité pour récupérer l'ID du flux si un SJ est présent
+        sj_id = "N/A"
+        if sj and hasattr(sj, 'liste_jobs') and len(sj.liste_jobs) > 0:
+            sj_id = sj.liste_jobs[0].flux_id
+
         self.historique.append({
             "Minute_Debut": minute,
             "Heure_Debut": f"{int(minute//60):02d}h{int(minute%60):02d}",
             "Activite": activite,
-            "SJ_ID": sj.liste_jobs[0].flux_id if sj and sj.liste_jobs else "N/A",
+            "SJ_ID": sj_id,
             "Details": details
         })
 
@@ -165,7 +183,6 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
 # =================================================================
 # 4. MOTEUR DE SIMULATION
 # =================================================================
-
 def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
@@ -195,16 +212,19 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.temps_restant_etat = p.job_en_cours.poids_total
                 p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
             elif p.etat == 'EN_MISSION':
-                # Fin de mission
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
                 p.etat = 'DISPONIBLE'
                 p.job_en_cours = None
+            # --- MODIFICATION : GESTION DE LA PASSATION ---
             elif p.etat == 'RETOUR_DEPOT':
                 p.position_actuelle = p.stationnement_initial
-                p.etat = 'EN_PAUSE'; p.temps_restant_etat = p.duree_pause
-                p.pause_faite = True; p.enregistrer(minute, "EN_PAUSE")
-            elif p.etat == 'EN_PAUSE':
+                p.etat = 'PASSATION_POSTE'
+                p.temps_restant_etat = p.temps_passation
+                p.enregistrer(minute, "PASSATION_POSTE", details="Changement de chauffeur")
+            elif p.etat == 'PASSATION_POSTE':
+                p.h_debut_service_actuel = minute # Reset de l'amplitude pour le nouveau
+                p.pause_faite = False
                 p.etat = 'DISPONIBLE'
 
         # Affectation
@@ -212,18 +232,20 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
         for p in postes:
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'; p.temps_restant_etat = 15
-                p.h_debut_service = minute; p.enregistrer(minute, "PRISE_POSTE")
+                p.h_debut_service_actuel = minute # Initialisation premier chauffeur
+                p.enregistrer(minute, "PRISE_POSTE")
             
             elif p.etat == 'DISPONIBLE':
-                # Gestion de la pause au dépôt
-                if (minute - (p.h_debut_service or minute)) >= (p.amplitude_max / 2) and not p.pause_faite:
+                # --- MODIFICATION : DECLENCHEMENT FIN DE POSTE (Remplace la pause) ---
+                if (minute - (p.h_debut_service_actuel or minute)) >= p.amplitude_max:
                     if p.position_actuelle == p.stationnement_initial:
-                        p.etat = 'EN_PAUSE'; p.temps_restant_etat = p.duree_pause; p.pause_faite = True
-                        p.enregistrer(minute, "EN_PAUSE")
+                        p.etat = 'PASSATION_POSTE'
+                        p.temps_restant_etat = p.temps_passation
+                        p.enregistrer(minute, "PASSATION_POSTE")
                     else:
                         dist_d = matrice_duree.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                         p.etat = 'RETOUR_DEPOT'; p.temps_restant_etat = dist_d
-                        p.enregistrer(minute, "EN_TRAJET_VIDE", details="Retour Dépôt (Pause)")
+                        p.enregistrer(minute, "EN_TRAJET_VIDE", details="Fin d'amplitude -> Retour Dépôt")
                     continue
 
                 if not dispos: continue
