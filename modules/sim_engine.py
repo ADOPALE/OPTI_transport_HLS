@@ -66,73 +66,82 @@ class Job:
 
 
 class SuperJob:
-    """
-    Représente un camion chargé. 
-    Peut contenir un ou plusieurs Jobs (complets ou partiels).
-    """
     def __init__(self, liste_jobs, matrice_duree):
         self.liste_jobs = liste_jobs
         self.matrice_duree = matrice_duree
-        
-        # 1. Calcul de l'occupation totale
         self.taux_occupation_total = sum(j.taux_occupation for j in liste_jobs)
+        self.v_type = self.liste_jobs[0].vehicule_type
         
-        # 2. Identification des points uniques (pour le trajet)
+        # Identification des points uniques
         self.points_depart = list(set(j.origin for j in liste_jobs))
         self.points_arrivee = list(set(j.destination for j in liste_jobs))
         
-        # 3. Récupération des contraintes de temps les plus strictes
-        self.h_dispo_max = max(j.h_dispo for j in liste_jobs)  # Dispo quand le DERNIER est prêt
-        self.h_deadline_min = min(j.h_deadline for j in liste_jobs) # Livré avant le PREMIER deadline
+        # Heures au format decimal minutes pour le graphe
+        self.h_dispo_min = max(to_decimal_minutes(j.h_dispo) for j in liste_jobs)
         
-        # Tag pour le suivi (optionnel)
-        self.nom_tournee_origine = getattr(liste_jobs[0], 'tournee_rattachement', None)
+        # Calcul de la mobilisation (Temps Camion)
+        self.poids_total = self.calculer_poids_mobilisation()
+
+    def _to_minutes(self, val_excel):
+        """
+        Convertit une valeur Excel (soit float secondes, soit timedelta) en minutes.
+        """
+        if isinstance(val_excel, (pd.Timedelta, timedelta)):
+            # Si c'est un format 00:00:25 -> extraction des secondes totales
+            return val_excel.total_seconds() / 60
+        else:
+            # Si c'est déjà un nombre (25) représentant des secondes
+            return float(val_excel) / 60
 
     def calculer_poids_mobilisation(self):
         """
-        Calcule le temps total de mobilisation du camion (en minutes).
-        Logique : Temps de trajet entre tous les points + Temps de manutention.
+        Calcule le temps total de mobilisation en minutes.
+        Extraction directe depuis les DataFrames sans .get()
         """
-        params = st.session_state["params_logistique"]
-        tps_quai = params.get("temps_changement_quai", 15) # Temps fixe par arrêt supp
+        df_v = st.session_state["data"]["param_vehicules"]
+        df_s = st.session_state["data"]["param_sites"]
         
-        poids_total = 0
-        itineraire = []
+        # 1. PARAMÈTRES VÉHICULE
+        col_nom_v = df_v.columns[0]
+        v_params = df_v[df_v[col_nom_v] == self.v_type].iloc[0]
         
-        # --- LOGIQUE SIMPLIFIÉE DE TRAJET ---
-        # On part du principe que le camion fait : 
-        # Départs (un par un) -> Arrivées (une par une)
+        # Conversion sécurisée des formats 00:00:xx en minutes décimales
+        t_manoeuvre_min = self._to_minutes(v_params["Temps de mise à quai - manœuvre, contact/admin min (minutes)"])
+        t_min_sans_quai = self._to_minutes(v_params["Manutention sans quai (minutes / contenants)"])
+        t_min_avec_quai = self._to_minutes(v_params["Manutention avec quai (minutes / contenants)"])
+
+        total_min = 0
         
-        tous_les_points = self.points_depart + self.points_arrivee
-        nb_arrets = len(set(tous_les_points))
-        
-        # 1. Calcul du temps de trajet (somme des segments successifs)
-        # Note : Dans l'étape de séquençage, on optimisera l'ordre exact.
-        # Ici, on fait une estimation pour l'arbitrage.
-        for i in range(len(tous_les_points) - 1):
-            p1 = tous_les_points[i]
-            p2 = tous_les_points[i+1]
-            poids_total += self.matrice_duree.get((p1, p2), 0)
+        # 2. TEMPS DE TRAJET
+        itineraire = self.points_depart + self.points_arrivee
+        for i in range(len(itineraire) - 1):
+            p1, p2 = itineraire[i], itineraire[i+1]
+            total_min += self.matrice_duree.get((p1, p2), 0)
+
+        # 3. TEMPS SUR SITES
+        sites_visites = list(set(itineraire))
+        col_site_nom = df_s.columns[0]
+        col_quai = next((c for c in df_s.columns if "PRÉSENCE DE QUAI" in str(c).upper()), None)
+
+        for site in sites_visites:
+            # Manœuvre fixe
+            total_min += t_manoeuvre_min
             
-        # 2. Ajout du temps de manutention (Changement de quai)
-        # On paye le temps de quai pour chaque arrêt après le premier
-        poids_total += (nb_arrets - 1) * tps_quai
-        
-        return poids_total
+            # Manutention selon présence de quai
+            site_info = df_s[df_s[col_site_nom] == site]
+            has_quai = False
+            if not site_info.empty and col_quai:
+                val_quai = str(site_info.iloc[0][col_quai]).upper()
+                has_quai = any(kw in val_quai for kw in ["OUI", "VRAI", "X", "1"])
+            
+            ratio = t_min_avec_quai if has_quai else t_min_sans_quai
+            
+            # Somme des contenants sur ce site
+            qte_site = sum(j.quantite for j in self.liste_jobs if j.origin == site or j.destination == site)
+            total_min += (qte_site * ratio)
 
-    def peut_ajouter(self, job, taux_max_cible):
-        """ Vérifie si un job peut être ajouté sans dépasser la limite cible. """
-        return (self.taux_occupation_total + job.taux_occupation) <= (taux_max_cible + 0.0001)
+        return total_min
 
-    def ajouter_job(self, job):
-        """ Ajoute un job et recalcule les propriétés. """
-        self.liste_jobs.append(job)
-        self.taux_occupation_total += job.taux_occupation
-        self.points_depart = list(set(j.origin for j in self.liste_jobs))
-        self.points_arrivee = list(set(j.destination for j in self.liste_jobs))
-
-    def __repr__(self):
-        return f"SuperJob({len(self.liste_jobs)} jobs, Occ:{round(self.taux_occupation_total,2)})"
 
 # =================================================================
 # FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
@@ -609,7 +618,40 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
     return tous_les_super_jobs_du_jour
 
+def calculer_nmax_theorique(liste_super_jobs):
+    """
+    Calcule le pic de charge par pas de 30min pour déterminer le Nmax de départ.
+    """
+    if not liste_super_jobs:
+        return 0
 
+    # 1. Création des créneaux (48 créneaux de 30min dans 24h)
+    creneaux = [0] * 48 
+
+    for sj in liste_super_jobs:
+        # On récupère les minutes décimales depuis minuit
+        # h_start : quand le job commence
+        # h_end : quand le job finit (on prend sa deadline pour être conservateur)
+        m_start = sj.h_dispo_min  
+        m_end = sj.h_deadline_min 
+
+        # Conversion en index de créneau (0 à 47)
+        idx_start = int(m_start // 30)
+        idx_end = int(m_end // 30)
+
+        # On incrémente la charge pour chaque créneau couvert
+        # On s'assure de rester dans les limites 0-47
+        for i in range(max(0, idx_start), min(48, idx_end + 1)):
+            creneaux[i] += 1
+
+    # 2. Le Nmax est le pic maximal de jobs simultanés
+    pic_charge = max(creneaux)
+    
+    # Sécurité : On peut ajouter une petite marge de 10-20% pour absorber 
+    # les temps de trajets à vide futurs lors de la simulation Nmax
+    n_max_theorique = math.ceil(pic_charge * 1.2) 
+
+    return n_max_theorique
 
 
 
