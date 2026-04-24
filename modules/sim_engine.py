@@ -423,95 +423,81 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
 def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree):
     """
     Arbitre entre les différentes stratégies de regroupement.
-    Priorise le remplissage maximum pour éviter les camions vides.
     Utilise strictement les paramètres chargés en session_state.
     """
-    # Récupération stricte des paramètres sans valeur par défaut
+    # Récupération sécurisée (doit exister dans l'onglet Paramètres)
     params = st.session_state["params_logistique"]
     taux_max_cible = params["securite_remplissage"]
     
-    # On définit une marge pour considérer qu'un remplissage est "satisfaisant"
-    # par rapport à l'objectif maximum (ici on garde ta logique de -20%)
+    # Seuil métier pour valider un trajet direct
     seuil_remplissage_minimum = max(0, taux_max_cible - 0.20)
     
     super_jobs_optimises = []
     restants = jobs_solitaires.copy()
 
-    # Tri par heure pour respecter la chronologie de mise à disposition
+    # Tri chronologique
     restants.sort(key=lambda x: x.h_dispo)
 
     while len(restants) > 0:
         job_pivot = restants.pop(0)
         
         # --- PRIORITÉ 1 : COUPLES PARFAITS (Même trajet exact) ---
-        # On ajoute ici la sécurité sur le type de véhicule et la nature propre/sale
         couples_parfaits = [
             j for j in restants 
             if j.origin == job_pivot.origin 
             and j.destination == job_pivot.destination
-            and j.vehicule_type == job_pivot.vehicule_type  # Sécurité type véhicule
-            and j.type_propre_sale == job_pivot.type_propre_sale # Sécurité hygiène
+            and j.vehicule_type == job_pivot.vehicule_type 
+            and j.type_propre_sale == job_pivot.type_propre_sale
         ]
         
         if couples_parfaits:
             comb_directe = [job_pivot]
             occ_directe = job_pivot.taux_occupation
             for c in couples_parfaits:
-                # Vérification stricte contre le taux max cible
                 if occ_directe + c.taux_occupation <= taux_max_cible + 0.0001:
                     comb_directe.append(c)
                     occ_directe += c.taux_occupation
             
-            # Si le regroupement direct est efficace :
-            # - Soit il atteint le seuil de rentabilité (ex: 65% si cible à 85%)
-            # - Soit il permet de vider la pile (3 jobs ou plus ensemble)
+            # Si le direct est "rentable" ou vide la pile massivement
             if occ_directe >= seuil_remplissage_minimum or len(comb_directe) >= 5:
                 sj_direct = SuperJob(comb_directe, matrice_duree)
                 super_jobs_optimises.append(sj_direct)
                 
-                # Nettoyage des jobs utilisés
                 ids_elus = [j.job_id for j in comb_directe if j.job_id != job_pivot.job_id]
                 restants = [j for j in restants if j.job_id not in ids_elus]
                 continue 
 
-        # --- PRIORITÉ 2 : ARBITRAGE COMPLEXE (Multi-Pick ou Multi-Drop) ---
-        # On appelle evaluer_strategie qui doit aussi utiliser taux_max_cible en interne
-        sj_dest, poids_dest, membres_dest = evaluer_strategie(
+        # --- PRIORITÉ 2 : ARBITRAGE COMPLEXE (Multi-Pick / Multi-Drop) ---
+        # On délègue à evaluer_strategie avec le taux_max dynamique
+        sj_dest, score_dest, membres_dest = evaluer_strategie(
             job_pivot, restants, "dest_group", taux_max_cible, matrice_duree
         )
-        sj_dep, poids_dep, membres_dep = evaluer_strategie(
+        sj_dep, score_dep, membres_dep = evaluer_strategie(
             job_pivot, restants, "origin_group", taux_max_cible, matrice_duree
         )
 
-        # Calcul des taux de remplissage cumulés pour l'arbitrage
-        occ_dest = sum(j.taux_occupation for j in membres_dest)
-        occ_dep = sum(j.taux_occupation for j in membres_dep)
-
-        # LOGIQUE D'ARBITRAGE :
-        # On choisit la branche qui maximise l'occupation du véhicule
-        if occ_dest > occ_dep + 0.01:
+        # ARBITRAGE PAR LE SCORE :
+        # Le score inclut déjà la pénalité de remplissage et le temps de trajet.
+        # On choisit le score le plus FAIBLE (coût minimal).
+        if score_dest <= score_dep:
             meilleur_sj, elus = sj_dest, membres_dest
-        elif occ_dep > occ_dest + 0.01:
-            meilleur_sj, elus = sj_dep, membres_dep
         else:
-            # Si remplissage identique, on prend le trajet le plus court (poids temps)
-            if poids_dest <= poids_dep:
-                meilleur_sj, elus = sj_dest, membres_dest
-            else:
-                meilleur_sj, elus = sj_dep, membres_dep
+            meilleur_sj, elus = sj_dep, membres_dep
 
-        # Si l'arbitrage n'a rien trouvé de mieux qu'un camion seul (pas de partenaires)
+        # Si aucun regroupement n'a été trouvé (camion solo)
         if len(elus) <= 1:
             meilleur_sj = SuperJob([job_pivot], matrice_duree)
             elus = [job_pivot]
 
         super_jobs_optimises.append(meilleur_sj)
         
-        # Nettoyage final de la liste des restants
+        # Nettoyage
         ids_elus = [j.job_id for j in elus if j.job_id != job_pivot.job_id]
         restants = [j for j in restants if j.job_id not in ids_elus]
 
     return super_jobs_optimises
+
+
 
 
 def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matrice):
@@ -521,7 +507,7 @@ def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matr
     """
     valeur_groupe = getattr(job_pivot, attribut_groupe)
     
-    # 1. Filtrage des partenaires compatibles
+    # 1. Filtrage des partenaires compatibles (Même groupe + Même type véhicule + Hygiène)
     partenaires = [
         j for j in candidats_pool 
         if getattr(j, attribut_groupe) == valeur_groupe 
@@ -529,38 +515,37 @@ def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matr
         and j.type_propre_sale == job_pivot.type_propre_sale
     ]
     
-    # On trie les partenaires par taux d'occupation décroissant 
-    # pour boucher les gros trous d'abord
+    # Tri vorace : on essaie de caser les plus gros volumes d'abord
     partenaires.sort(key=lambda x: x.taux_occupation, reverse=True)
     
     groupe_retenu = [job_pivot]
     cumul_occ = job_pivot.taux_occupation
     
-    # Paramètres de voracité
+    # Paramètres basés sur le taux_max dynamique de l'interface
     SEUIL_CIBLE = max(0, taux_max - 0.20)
-    LIMITE_NB_JOBS = 15 # Augmenté pour permettre de grouper les petits flux (ex: prisons)
+    LIMITE_NB_JOBS = 15 
 
     for p in partenaires:
-        # Si on a encore de la place physique
+        # Vérification de la capacité physique
         if (cumul_occ + p.taux_occupation) <= (taux_max + 0.0001):
-            # Si on n'a pas atteint la limite de stops raisonnable
             if len(groupe_retenu) < LIMITE_NB_JOBS:
                 groupe_retenu.append(p)
                 cumul_occ += p.taux_occupation
         
-        # Si on est déjà "plein" (proche du taux max), on peut arrêter de chercher
+        # Sortie anticipée si le camion est quasi-plein
         if cumul_occ >= taux_max - 0.01:
             break
 
-    # 2. Création du SuperJob
+    # 2. Création du SuperJob pour calcul de l'itinéraire et du temps
     sj_temp = SuperJob(groupe_retenu, matrice)
     
-    # 3. Calcul du Score (Poids de mobilisation)
-    # On ajoute une pénalité de score si le camion est trop vide 
-    # pour que l'étape d'arbitrage rejette cette option si une meilleure existe
+    # 3. Calcul du Score avec pénalité de vide
+    # On utilise la méthode de la classe SuperJob pour le temps de trajet
     score = sj_temp.calculer_poids_mobilisation()
+    
     if cumul_occ < SEUIL_CIBLE:
-        # Pénalité proportionnelle au vide pour forcer l'algo à chercher d'autres voisins
+        # Si on est sous le seuil de rentabilité, on dégrade le score
+        # pour favoriser une autre stratégie qui remplirait mieux le camion
         score += (SEUIL_CIBLE - cumul_occ) * 1000 
     
     return sj_temp, score, groupe_retenu
