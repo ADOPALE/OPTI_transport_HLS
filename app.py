@@ -288,117 +288,76 @@ elif selected == "Simul tournées":  # Transport
         st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
         
 elif selected == "Synthèse transport":
-    if st.button("🚀 Lancer le séquençage et l'optimisation"):
-        try:
-            with st.status("Initialisation de la simulation...", expanded=True) as status:
-                # 1. Récupération des données nécessaires
-                df_recurrent = st.session_state['df_sequence_type']
-                df_specifique = st.session_state['df_flux_specifique']
-                df_vehicules = st.session_state['df_vehicules']
-                df_contenants = st.session_state['df_contenants']
-                df_sites = st.session_state['df_sites']
-                matrice_duree = st.session_state['matrice_duree']
-                
-                # 2. Préparation des flux du jour (Fusion Récurrents + Spécifiques)
-                # Supposons qu'on travaille sur le "Lundi" ou un jour sélectionné
-                from modules.sim_engine import preparer_flux_complets_du_jour
-                df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, "Lundi")
-                
-                st.write("🔍 Consolidation et arbitrage des camions...")
-                
-                # 3. APPEL DU NOUVEAU TUNNEL (Remplace l'ancienne logique)
-                liste_globale_sj = tunnel_consolidation_flux(
-                    df_complet_jour, 
-                    df_vehicules, 
-                    df_contenants, 
-                    df_sites, 
-                    matrice_duree
-                )
-                
-                # 4. AFFICHAGE DES RÉSULTATS DE CONSOLIDATION
-                st.success(f"✅ Consolidation terminée : {len(liste_globale_sj)} SuperJobs générés.")
-                
-                # Petit tableau récapitulatif
-                recap_data = []
-                for i, sj in enumerate(liste_globale_sj):
-                    recap_data.append({
-                        "Camion ID": i+1,
-                        "Type": sj.liste_jobs[0].vehicule_type,
-                        "Occupation": f"{round(sj.taux_occupation_total * 100, 1)}%",
-                        "Arrêts": len(set(sj.points_depart + sj.points_arrivee)),
-                        "Poids (min)": round(sj.calculer_poids_mobilisation(), 1)
-                    })
-                
-                st.dataframe(pd.DataFrame(recap_data), use_container_width=True)
-                
-                # Sauvegarde dans le session_state pour la suite (ordonnancement)
-                st.session_state['liste_super_jobs_consolides'] = liste_globale_sj
-                
-                status.update(label="Simulation terminée !", state="complete")
-    
-        except Exception as e:
-            st.error(f"Erreur lors de la simulation : {e}")
-            st.exception(e)
-"""
     if 'df_sequence_type' in st.session_state:
-        st.title("🚚 Simulation du Séquençage & Tournées")
+        st.title("🚚 Simulation & Consolidation des Flux")
         
-        # On récupère la matrice de distance (déjà calculée ou importée)
-        # On suppose qu'elle est dans st.session_state['matrix'] ou chargée via GeoMatrix
-        matrice_duree=st.session_state['data']['matrice_duree']
+        # 1. RÉCUPÉRATION DES DONNÉES
+        # On centralise les accès pour plus de clarté
+        df_recurrent = st.session_state['df_sequence_type']
+        df_specifique = st.session_state.get('df_flux_specifique', pd.DataFrame())
+        df_vehicules = st.session_state['data']['param_vehicules']
+        df_contenants = st.session_state['data']['param_contenants']
+        df_sites = st.session_state['data']['param_sites']
+        matrice_duree = st.session_state['data'].get('matrice_duree')
+
         col1, col2 = st.columns([1, 3])
         
         with col1:
             st.subheader("Paramètres")
-            lancer_simul = st.button("🚀 Lancer le séquençage", use_container_width=True)
+            # Choix du jour (Optionnel, on peut le rendre dynamique plus tard)
+            jour_simule = st.selectbox("Jour à simuler", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
+            
+            lancer_simul = st.button("🚀 Lancer la consolidation", use_container_width=True)
             
         with col2:
             if lancer_simul:
                 if matrice_duree is None:
-                    st.error("⚠️ Matrice de temps introuvable. Calculez-la dans 'Matrice de distance'.")
+                    st.error("⚠️ Matrice de temps introuvable. Calculez-la dans l'onglet 'Matrice de distance'.")
                 else:
                     try:
-                        # IMPORT DU MOTEUR (Assurez-vous que sim_engine est bien importé en haut du fichier)
-                        from modules.sim_engine import traitement_flux_recurrents
-
-
-                        # Préparation des véhicules autorisés
-                        vehicules_autorises = st.session_state["params_logistique"]["vehicules_selectionnes"]
-                        col_nom_v = st.session_state['data']['param_vehicules'].columns[0]
-                        df_v_actifs = st.session_state['data']['param_vehicules'][
-                            st.session_state['data']['param_vehicules'][col_nom_v].isin(vehicules_autorises)
-                        ].copy()
-                        
-                       
-                        # 1. EXECUTION DU MOTEUR
-                        with st.spinner("Fragmentation, Appairage et Séquençage en cours..."):
-                            postes_chauffeurs = traitement_flux_recurrents(
-                                st.session_state['df_sequence_type'],
-                                st.session_state['data']['param_sites'],
-                                df_v_actifs,
-                                st.session_state['data']['param_contenants'],
+                        with st.status("Exécution du Tunnel de Consolidation...", expanded=True) as status:
+                            # Import des fonctions nécessaires du moteur
+                            from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
+                            
+                            # A. Préparation des flux (Fusion Récurrents + Spécifiques)
+                            st.write(f"📊 Préparation des flux pour le {jour_simule}...")
+                            df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_simule)
+                            
+                            # B. Appel du Tunnel (Fragmentation -> Tournées imposées -> Arbitrage solitaires)
+                            st.write("🔍 Consolidation et arbitrage des camions...")
+                            liste_globale_sj = tunnel_consolidation_flux(
+                                df_complet_jour, 
+                                df_vehicules, 
+                                df_contenants, 
+                                df_sites, 
                                 matrice_duree
                             )
-                        
-                        # 2. STOCKAGE DU RESULTAT
-                        if postes_chauffeurs:
-                            st.session_state['planning_detaille'] = postes_chauffeurs
-                            st.success(f"✅ Simulation terminée : {len(postes_chauffeurs)} chauffeurs planifiés.")
                             
-                            # Petit aperçu rapide sous forme de métriques
-                            m1, m2, m3 = st.columns(3)
-                            m1.metric("Chauffeurs", len(postes_chauffeurs))
-                            amp_moy = sum(p['amplitude'] for p in postes_chauffeurs) / len(postes_chauffeurs)
-                            m2.metric("Amplitude Moy.", f"{int(amp_moy)} min")
-                            total_nettoyages = sum(p['total_nettoyages'] for p in postes_chauffeurs)
-                            m3.metric("Désinfections (HSJ)", total_nettoyages)
+                            # C. Stockage du résultat pour les étapes futures (Lissage / Ordonnancement)
+                            st.session_state['liste_super_jobs_consolides'] = liste_globale_sj
                             
+                            # D. Affichage du succès
+                            st.success(f"✅ Consolidation terminée : {len(liste_globale_sj)} SuperJobs (camions) générés.")
+                            
+                            # Construction d'un DataFrame pour visualiser le résultat
+                            recap_data = []
+                            for i, sj in enumerate(liste_globale_sj):
+                                recap_data.append({
+                                    "ID Camion": i + 1,
+                                    "Véhicule": sj.liste_jobs[0].vehicule_type,
+                                    "Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
+                                    "Nb Arrêts": len(set(sj.points_depart + sj.points_arrivee)),
+                                    "Temps Mobilisation": f"{round(sj.calculer_poids_mobilisation(), 0)} min"
+                                })
+                            
+                            st.dataframe(pd.DataFrame(recap_data), use_container_width=True)
+                            status.update(label="Simulation de consolidation terminée !", state="complete")
+
                     except Exception as e:
                         st.error(f"Erreur lors de la simulation : {e}")
-                        st.exception(e) # Pour voir la trace complète en débug
-"""
+                        st.exception(e)
     else:
-        st.warning("⚠️ Veuillez générer la 'Séquence Type' dans l'onglet précédent avant de lancer le séquençage.")
+        st.warning("⚠️ Veuillez générer la 'Séquence Type' dans l'onglet précédent avant de lancer la synthèse.")
 
 
     if st.session_state.get('planning_detaille'):
