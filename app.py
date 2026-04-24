@@ -239,9 +239,17 @@ elif selected == "Synthèse transport":
         df_sites = st.session_state['data']['param_sites']
         matrice_duree = st.session_state['data'].get('matrice_duree')
 
-        st.info("💡 Lancez la simulation pour générer le planning de la semaine.")
-        
-        # Bouton principal
+        # Petite fonction de secours pour l'affichage des heures
+        def fmt_heure_safe(val):
+            try:
+                if pd.isna(val) or val is None: return "--:--"
+                if isinstance(val, str): return val
+                h = int(val // 60)
+                m = int(val % 60)
+                return f"{h:02d}:{m:02d}"
+            except:
+                return "Err"
+
         if st.button("🚀 Lancer la simulation hebdomadaire", type="primary", use_container_width=True):
             if matrice_duree is None:
                 st.error("⚠️ Matrice de temps introuvable.")
@@ -249,7 +257,7 @@ elif selected == "Synthèse transport":
                 try:
                     jours_semaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
                     resultats_hebdo = []
-                    detail_par_jour = {} # Pour stocker les listes de SuperJobs
+                    detail_par_jour = {} 
                     
                     with st.status("Simulation de la semaine en cours...", expanded=True) as status:
                         from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
@@ -262,10 +270,8 @@ elif selected == "Synthèse transport":
                                 df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree
                             )
                             
-                            # Stockage du détail pour le selectbox
                             detail_par_jour[jour] = liste_globale_sj
                             
-                            # Compilation pour le tableau récap
                             comptage_jour = {"Jour": jour}
                             total_temps_jour = 0
                             for sj in liste_globale_sj:
@@ -277,83 +283,63 @@ elif selected == "Synthèse transport":
                             comptage_jour["Temps Total (h)"] = round(total_temps_jour / 60, 1)
                             resultats_hebdo.append(comptage_jour)
                         
-                        # Sauvegarde en session_state pour interaction sans re-calcul
                         st.session_state['df_recap_hebdo'] = pd.DataFrame(resultats_hebdo).fillna(0)
                         st.session_state['dict_detail_sj'] = detail_par_jour
                         status.update(label="✅ Simulation terminée !", state="complete")
-
                 except Exception as e:
                     st.error(f"Erreur simulation : {e}")
-                    st.exception(e)
 
-        # --- AFFICHAGE DES RÉSULTATS (Si existants en session) ---
         if 'df_recap_hebdo' in st.session_state:
             st.divider()
             st.subheader("📊 Récapitulatif Hebdomadaire")
             st.dataframe(st.session_state['df_recap_hebdo'], use_container_width=True)
 
             st.divider()
-            # --- SELECTBOX POUR DÉTAIL JOURNALIER ---
             st.subheader("🔍 Détail opérationnel par jour")
-            jour_selectionne = st.selectbox("Choisir un jour pour voir les tournées camions :", 
-                                          ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
+            jour_sel = st.selectbox("Choisir un jour :", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
             
-            # Récupération de la liste des SJ stockée pour ce jour
-            liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_selectionne, [])
+            liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_sel, [])
             
             if liste_sj_jour:
+                # Tableau des SuperJobs
                 recap_sj = []
                 for i, sj in enumerate(liste_sj_jour):
                     recap_sj.append({
-                        "Camion ID": f"{jour_selectionne[:3]}_{i+1:02d}",
+                        "Camion ID": f"{jour_sel[:3]}_{i+1:02d}",
                         "Type Véhicule": sj.liste_jobs[0].vehicule_type,
                         "Taux Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
-                        "Nombre de Flux": len(sj.liste_jobs),
-                        "Temps (min)": int(sj.calculer_poids_mobilisation())
+                        "Nb Flux": len(sj.liste_jobs),
+                        "Temps (min)": int(sj.calculer_poids_mobilisation()),
+                        "Taux_Brut": sj.taux_occupation_total # Caché pour le tri
                     })
+                df_sj = pd.DataFrame(recap_sj)
+                st.dataframe(df_sj.drop(columns=['Taux_Brut']), use_container_width=True)
+
+                # --- FOCUS SUR LES 10 PIRES REMPLISSAGES ---
+                st.subheader(f"⚠️ Focus : Les 10 camions les moins remplis du {jour_sel}")
+                top_10_pires = df_sj.nsmallest(10, 'Taux_Brut')
                 
-                st.write(f"**{len(liste_sj_jour)} camions (SuperJobs)** prévus pour le {jour_selectionne} :")
-                st.dataframe(pd.DataFrame(recap_sj), use_container_width=True)
-            else:
-                st.info(f"Aucun SuperJob généré pour le {jour_selectionne}.")
-
-            # --- ANALYSE DES MAUVAIS REMPLISSAGES ---
-            st.divider()
-            st.subheader("⚠️ Focus sur les 10 SuperJobs les moins remplis")
-            st.write("Ce tableau détaille les flux (Jobs) contenus dans les camions à faible taux d'occupation pour comprendre les blocages.")
-
-            if liste_sj_jour:
-                # 1. On trie pour avoir les 10 pires taux
-                sj_tries = sorted(liste_sj_jour, key=lambda x: x.taux_occupation_total)
-                top_10_pires = sj_tries[:10]
-
-                details_jobs = []
-                for sj_idx, sj in enumerate(top_10_pires):
-                    for job in sj.liste_jobs:
-                        details_jobs.append({
-                            "ID SuperJob": f"Top_{sj_idx+1} (Taux: {round(sj.taux_occupation_total*100,1)}%)",
-                            "Flux ID": job.flux_id,
+                details_top = []
+                for _, row in top_10_pires.iterrows():
+                    # On retrouve l'objet SuperJob original via son index
+                    idx_original = int(row['Camion ID'].split('_')[1]) - 1
+                    sj_obj = liste_sj_jour[idx_original]
+                    
+                    for job in sj_obj.liste_jobs:
+                        details_top.append({
+                            "Camion": row['Camion ID'],
+                            "Occupation": row['Taux Remplissage'],
                             "Origine": job.origin,
                             "Destination": job.destination,
-                            "Dispo": job.h_dispo if isinstance(job.h_dispo, str) else f"{int(job.h_dispo//60):02d}:{int(job.h_dispo%60):02d}",
-                            "Deadline": job.h_deadline if isinstance(job.h_deadline, str) else f"{int(job.h_deadline//60):02d}:{int(job.h_deadline%60):02d}",
-                            "Quantité": job.quantite,
-                            "Contenant": job.contenant,
-                            "Type": job.type_propre_sale,
-                            "A/R": job.aller_retour
+                            "Dispo": fmt_heure_safe(job.h_dispo),
+                            "Deadline": fmt_heure_safe(job.h_deadline),
+                            "Qté": job.quantite,
+                            "Type": job.type_propre_sale
                         })
-
-                if details_jobs:
-                    df_details = pd.DataFrame(details_jobs)
-                    st.dataframe(df_details, use_container_width=True)
-                    
-                    st.info("""
-                    **Comment lire ce tableau ?**
-                    - Si la fenêtre **[Dispo - Deadline]** est très courte, le camion ne pouvait pas être groupé.
-                    - Si le **Type** est différent des autres flux du secteur, une désinfection ou un camion séparé était nécessaire.
-                    - Si la **Quantité** est faible mais que le flux est loin, le camion est sacrifié pour un petit volume.
-                    """)
-
+                
+                st.dataframe(pd.DataFrame(details_top), use_container_width=True)
+            else:
+                st.info("Aucune donnée pour ce jour.")
     else:
         st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
 
