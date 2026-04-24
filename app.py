@@ -251,124 +251,120 @@ elif selected == "Synthèse transport":
             except:
                 return "Err"
 
-        if st.button("🚀 Lancer la simulation hebdomadaire", type="primary", use_container_width=True):
-            if matrice_duree is None:
-                st.error("⚠️ Matrice de temps introuvable.")
-            else:
-                try:
-                    jours_semaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
-                    resultats_hebdo = []
-                    detail_par_jour = {} 
+    if st.button("🚀 Lancer la simulation hebdomadaire", type="primary", use_container_width=True):
+        if matrice_duree is None:
+            st.error("⚠️ Matrice de temps introuvable.")
+        else:
+            try:
+                jours_semaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
+                resultats_hebdo = []
+                detail_par_jour = {} 
+                
+                with st.status("Simulation de la semaine en cours...", expanded=True) as status:
+                    from modules.sim_engine import (
+                        preparer_flux_complets_du_jour, 
+                        tunnel_consolidation_flux, 
+                        calculer_nmax_par_type,
+                        calculer_nmax_theorique
+                    )
                     
-                    with st.status("Simulation de la semaine en cours...", expanded=True) as status:
-                        from modules.sim_engine import preparer_flux_complets_du_jour, tunnel_consolidation_flux
+                    for jour in jours_semaine:
+                        st.write(f"⏳ Analyse du **{jour}**...")
+                        df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
                         
-                        for jour in jours_semaine:
-                            st.write(f"⏳ Analyse du **{jour}**...")
-                            df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
-                            
-                            liste_globale_sj = tunnel_consolidation_flux(
-                                df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree
-                            )
-                            
-                            detail_par_jour[jour] = liste_globale_sj
-
-
-                            # Calcul du pic de charge pour le récapitulatif
-                            n_max_j, intensite_j = calculer_nmax_theorique(liste_globale_sj)
-                            comptage_jour = {"Jour": jour, "Nmax": n_max_j}
-                            
-                            total_temps_jour = 0
-                            for sj in liste_globale_sj:
-                                v_type = sj.v_type
-                                col_name = f"SJ - {v_type}"
-                                comptage_jour[col_name] = comptage_jour.get(col_name, 0) + 1
-                                total_temps_jour += sj.poids_total
-                            
-                            comptage_jour["Temps Total (h)"] = round(total_temps_jour / 60, 1)
-                            resultats_hebdo.append(comptage_jour)
+                        liste_globale_sj = tunnel_consolidation_flux(
+                            df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree
+                        )
                         
-                        st.session_state['df_recap_hebdo'] = pd.DataFrame(resultats_hebdo).fillna(0)
-                        st.session_state['dict_detail_sj'] = detail_par_jour
-                        status.update(label="✅ Simulation terminée !", state="complete")
-                except Exception as e:
-                    st.error(f"Erreur simulation : {e}")
-
-        if 'df_recap_hebdo' in st.session_state:
-            st.divider()
-            st.subheader("📊 Récapitulatif Hebdomadaire")
-            st.dataframe(st.session_state['df_recap_hebdo'], use_container_width=True)
-
-            st.divider()
-            st.subheader("🔍 Détail opérationnel par jour")
-            jour_sel = st.selectbox("Choisir un jour :", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
+                        detail_par_jour[jour] = liste_globale_sj
+    
+                        # Calcul du Nmax global pour le tableau récapitulatif
+                        n_max_j, _ = calculer_nmax_theorique(liste_globale_sj)
+                        comptage_jour = {"Jour": jour, "Nmax": n_max_j}
+                        
+                        total_temps_jour = 0
+                        for sj in liste_globale_sj:
+                            # Utilisation directe des attributs de la classe SuperJob
+                            col_name = f"SJ - {sj.v_type}"
+                            comptage_jour[col_name] = comptage_jour.get(col_name, 0) + 1
+                            total_temps_jour += sj.poids_total
+                        
+                        comptage_jour["Temps Total (h)"] = round(total_temps_jour / 60, 1)
+                        resultats_hebdo.append(comptage_jour)
+                    
+                    st.session_state['df_recap_hebdo'] = pd.DataFrame(resultats_hebdo).fillna(0)
+                    st.session_state['dict_detail_sj'] = detail_par_jour
+                    status.update(label="✅ Simulation terminée !", state="complete")
+            except Exception as e:
+                st.error(f"Erreur simulation : {e}")
+    
+    if 'df_recap_hebdo' in st.session_state:
+        st.divider()
+        st.subheader("📊 Récapitulatif Hebdomadaire")
+        st.dataframe(st.session_state['df_recap_hebdo'], use_container_width=True)
+    
+        st.divider()
+        st.subheader("🔍 Détail opérationnel par jour")
+        jour_sel = st.selectbox("Choisir un jour :", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
+        
+        liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_sel, [])
+        
+        if liste_sj_jour:
+            # --- ÉTAPE 1 : GRAPHIQUE VENTILÉ ---
+            from modules.sim_engine import calculer_nmax_par_type
+            intensite_dict = calculer_nmax_par_type(liste_sj_jour)
             
-            liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_sel, [])
+            st.write(f"**📈 Courbe de charge ventilée du {jour_sel}**")
+            labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
+            df_graph = pd.DataFrame(intensite_dict, index=labels_h)
+            st.area_chart(df_graph)
+    
+            # --- ÉTAPE 2 : MÉTRIQUES NMAX ---
+            st.write("**Besoin max détecté par catégorie :**")
+            cols_nmax = st.columns(len(intensite_dict))
+            for i, (v_type, intensites) in enumerate(intensite_dict.items()):
+                pic = max(intensites)
+                n_max_v = math.ceil(pic * 1.20)
+                with cols_nmax[i]:
+                    st.metric(f"Nmax {v_type}", f"{n_max_v} véh.")
             
-            if liste_sj_jour:
-                # --- ÉTAPE 1 : CALCUL VENTILÉ PAR TYPE (Nouvelle Logique) ---
-                from modules.sim_engine import calculer_nmax_par_type
-                
-                # On récupère le dictionnaire {Type: [48 créneaux]}
-                intensite_dict = calculer_nmax_par_type(liste_sj_jour)
-                
-                st.write(f"**📈 Courbe de charge ventilée du {jour_sel}**")
-                
-                # Préparation du DataFrame pour le graphique empilé
-                labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
-                df_graph = pd.DataFrame(intensite_dict, index=labels_h)
-                
-                # L'affichage devient un graphique d'aire empilé par couleur
-                st.area_chart(df_graph)
-
-                # --- ÉTAPE 2 : INDICATEURS NMAX PAR TYPE ---
-                st.write("**Besoin max détecté par catégorie :**")
-                cols_nmax = st.columns(len(intensite_dict))
-                for i, (v_type, intensites) in enumerate(intensite_dict.items()):
-                    pic = max(intensites)
-                    n_max_v = math.ceil(pic * 1.20)
-                    with cols_nmax[i]:
-                        st.metric(f"Nmax {v_type}", f"{n_max_v} véh.")
-                
-                # Tableau des SuperJobs
-                recap_sj = []
-                for i, sj in enumerate(liste_sj_jour):
-                    recap_sj.append({
-                        "Camion ID": f"{jour_sel[:3]}_{i+1:02d}",
-                        "Type Véhicule": sj.liste_jobs[0].vehicule_type,
-                        "Taux Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
-                        "Nb Flux": len(sj.liste_jobs),
-                        "Temps (min)": int(sj.calculer_poids_mobilisation()),
-                        "Taux_Brut": sj.taux_occupation_total # Caché pour le tri
+            # --- ÉTAPE 3 : TABLEAU DÉTAILLÉ ---
+            recap_sj = []
+            for i, sj in enumerate(liste_sj_jour):
+                recap_sj.append({
+                    "Camion ID": f"{jour_sel[:3]}_{i+1:02d}",
+                    "Type Véhicule": sj.v_type,
+                    "Taux Remplissage": f"{round(sj.taux_occupation_total * 100, 1)}%",
+                    "Nb Flux": len(sj.liste_jobs),
+                    "Temps (min)": int(sj.poids_total), # Utilisation du poids déjà calculé
+                    "Taux_Brut": sj.taux_occupation_total 
+                })
+            
+            df_sj = pd.DataFrame(recap_sj)
+            st.dataframe(df_sj.drop(columns=['Taux_Brut']), use_container_width=True)
+    
+            # --- FOCUS PIRES REMPLISSAGES ---
+            st.subheader(f"⚠️ Focus : Les 10 camions les moins remplis ({jour_sel})")
+            top_10_pires = df_sj.nsmallest(10, 'Taux_Brut')
+            
+            details_top = []
+            for _, row in top_10_pires.iterrows():
+                idx_original = int(row['Camion ID'].split('_')[1]) - 1
+                sj_obj = liste_sj_jour[idx_original]
+                for job in sj_obj.liste_jobs:
+                    details_top.append({
+                        "Camion": row['Camion ID'],
+                        "Occupation": row['Taux Remplissage'],
+                        "Origine": job.origin,
+                        "Destination": job.destination,
+                        "Dispo": fmt_heure_safe(job.h_dispo),
+                        "Deadline": fmt_heure_safe(job.h_deadline),
+                        "Qté": job.quantite,
+                        "Type": job.type_propre_sale
                     })
-                df_sj = pd.DataFrame(recap_sj)
-                st.dataframe(df_sj.drop(columns=['Taux_Brut']), use_container_width=True)
-
-                # --- FOCUS SUR LES 10 PIRES REMPLISSAGES ---
-                st.subheader(f"⚠️ Focus : Les 10 camions les moins remplis du {jour_sel}")
-                top_10_pires = df_sj.nsmallest(10, 'Taux_Brut')
-                
-                details_top = []
-                for _, row in top_10_pires.iterrows():
-                    # On retrouve l'objet SuperJob original via son index
-                    idx_original = int(row['Camion ID'].split('_')[1]) - 1
-                    sj_obj = liste_sj_jour[idx_original]
-                    
-                    for job in sj_obj.liste_jobs:
-                        details_top.append({
-                            "Camion": row['Camion ID'],
-                            "Occupation": row['Taux Remplissage'],
-                            "Origine": job.origin,
-                            "Destination": job.destination,
-                            "Dispo": fmt_heure_safe(job.h_dispo),
-                            "Deadline": fmt_heure_safe(job.h_deadline),
-                            "Qté": job.quantite,
-                            "Type": job.type_propre_sale
-                        })
-                
-                st.dataframe(pd.DataFrame(details_top), use_container_width=True)
-            else:
-                st.info("Aucune donnée pour ce jour.")
+            st.dataframe(pd.DataFrame(details_top), use_container_width=True)
+        else:
+            st.info("Aucune donnée pour ce jour.")
     else:
         st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
 
