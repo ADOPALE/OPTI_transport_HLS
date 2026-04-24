@@ -251,54 +251,65 @@ def trouver_meilleure_configuration_journee(liste_sj, intensite_par_type, df_veh
 
 
 
+
 def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
     """
     Affiche le planning GANTT pour les objets PosteChauffeur.
+    Compatible avec la structure SuperJob (poids_total).
     """
     if not postes:
-        st.warning("Aucun poste à afficher.")
+        st.warning("Aucun poste à afficher (liste vide).")
         return
 
     data = []
-    # CORRECTION : Accès par attribut .vehicule_type et non .get()
+    
+    # CORRECTION : On accède à l'attribut .vehicule_type (objet) et non .get() (dict)
     postes_filtres = [p for p in postes if p.vehicule_type == v_type_selectionne]
 
     if not postes_filtres:
-        st.info(f"Aucune activité pour le type de véhicule : {v_type_selectionne}")
+        st.info(f"Aucune activité enregistrée pour le type de véhicule : {v_type_selectionne}")
         return
 
     for p in postes_filtres:
-        for ev in p.historique:
-            # On calcule la fin de l'événement. 
-            # Si c'est le dernier événement, on lui donne une durée minimale pour l'affichage
-            minute_debut = ev["Minute_Debut"]
+        if not p.historique:
+            continue
             
-            # Pour le Gantt, on cherche le début de l'événement suivant pour définir la fin de celui-ci
-            # Ou on utilise un pas fixe de 5 minutes si c'est le dernier point connu
+        for ev in p.historique:
+            # On définit une durée visuelle pour chaque bloc dans le Gantt
+            # L'historique enregistre le DEBUT de chaque état.
+            # Pour l'affichage, on estime la fin à Minute_Debut + 5 (le pas) 
+            # ou on laisse Plotly gérer la continuité.
+            
             data.append({
                 "Poste": p.id_poste,
-                "Début": minute_debut,
-                "Fin": minute_debut + 5, # Valeur par défaut, Plotly ajustera les blocs adjacents
+                "Début": ev["Minute_Debut"],
+                "Fin": ev["Minute_Debut"] + 5, # Pas par défaut pour la visualisation
                 "Activité": ev["Activite"],
                 "SJ_ID": ev.get("SJ_ID", "N/A"),
+                "Origine": ev.get("Origine", ""),
+                "Destination": ev.get("Destination", ""),
                 "Détails": ev.get("Details", ""),
-                "Heure": ev["Heure_Debut"]
+                "Heure_Debut": ev["Heure_Debut"]
             })
+
+    if not data:
+        st.info("L'historique des postes sélectionnés est vide.")
+        return
 
     df = pd.DataFrame(data)
 
-    # Création du graphique
+    # Création du graphique Gantt via Plotly
     fig = px.timeline(
         df, 
         x_start="Début", 
         x_end="Fin", 
         y="Poste", 
         color="Activité",
-        hover_data=["Heure", "SJ_ID", "Détails"],
-        title=f"Planning détaillé - {v_type_selectionne}",
+        hover_data=["Heure_Debut", "SJ_ID", "Origine", "Destination", "Détails"],
+        title=f"Planning Chronologique - {v_type_selectionne}",
         color_discrete_map={
-            "EN_MISSION": "#1f77b4",      # Bleu
-            "EN_TRAJET_VIDE": "#ff7f0e",  # Orange
+            "EN_MISSION": "#1f77b4",      # Bleu (SuperJob en cours)
+            "EN_TRAJET_VIDE": "#ff7f0e",  # Orange (Approche ou retour dépôt)
             "DISPONIBLE": "#2ca02c",      # Vert
             "EN_PAUSE": "#d62728",        # Rouge
             "PRISE_POSTE": "#9467bd",     # Violet
@@ -306,8 +317,15 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
         }
     )
 
-    # Ajustement des axes pour afficher les minutes/heures correctement
+    # Inverser l'axe Y pour avoir le premier camion en haut
     fig.update_yaxes(autorange="reversed")
-    fig.update_layout(xaxis_title="Minutes de la journée", showlegend=True)
+    
+    # Configuration de l'axe X pour qu'il soit lisible (minutes de la journée)
+    fig.update_layout(
+        xaxis_title="Minutes écoulées depuis le début de journée",
+        xaxis=dict(type='linear'),
+        showlegend=True,
+        height=400 + (len(postes_filtres) * 20) # Taille dynamique
+    )
     
     st.plotly_chart(fig, use_container_width=True)
