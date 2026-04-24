@@ -500,16 +500,12 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree):
 
 def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matrice):
     """
-    Simule une combinaison basée sur un axe (origine_group ou dest_group).
-    Calcule le SuperJob résultant et son poids de mobilisation total.
+    CORRIGÉ : Stratégie vorace pour maximiser le remplissage.
+    On force le regroupement tant qu'on est sous le seuil de remplissage cible.
     """
-    # On récupère la valeur de l'axe (ex: 'HUB_HSJ' ou 'SITE_NORD')
     valeur_groupe = getattr(job_pivot, attribut_groupe)
     
-    # 1. Filtrage des partenaires potentiels :
-    # - Même groupe sur l'axe choisi
-    # - Même type de véhicule (on ne mélange pas un 19t et un VL)
-    # - Même nature sanitaire (Propre avec Propre, Sale avec Sale)
+    # 1. Filtrage des partenaires potentiels
     partenaires = [
         j for j in candidats_pool 
         if getattr(j, attribut_groupe) == valeur_groupe 
@@ -517,30 +513,39 @@ def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matr
         and j.type_propre_sale == job_pivot.type_propre_sale
     ]
     
-    # 2. Stratégie de remplissage :
-    # On trie par taux d'occupation décroissant pour maximiser le remplissage de la "boîte"
+    # 2. On trie par occupation DÉCROISSANTE pour remplir les gros morceaux d'abord
     partenaires.sort(key=lambda x: x.taux_occupation, reverse=True)
     
     groupe_retenu = [job_pivot]
     cumul_occ = job_pivot.taux_occupation
     
-    # 3. Construction du groupe :
-    # On limite souvent à 3 ou 4 jobs max par camion pour rester sur des tournées réalistes
-    # et on respecte strictement le taux_max (taux de sécurité)
+    # --- MODIFICATION ICI : REMPLISSAGE FORCÉ ---
+    # On définit un seuil de "remplissage satisfaisant" (ex: Taux Max - 20%)
+    seuil_remplissage_cible = max(0, taux_max - 0.20) 
+
     for p in partenaires:
-        if len(groupe_retenu) < 4 and (cumul_occ + p.taux_occupation <= taux_max + 0.0001):
-            groupe_retenu.append(p)
-            cumul_occ += p.taux_occupation
+        # Condition de sortie : si on a déjà atteint le taux max, on arrête
+        if cumul_occ >= taux_max - 0.0001:
+            break
             
-    # 4. Création du SuperJob de test :
-    # C'est ici que la classe SuperJob calcule automatiquement :
-    # - L'itinéraire
-    # - Le temps de trajet total
-    # - Les pénalités de changement de quai
+        # On vérifie si le partenaire rentre physiquement
+        if (cumul_occ + p.taux_occupation) <= (taux_max + 0.0001):
+            # On augmente la limite de "nb jobs" (on passe de 4 à 8 par exemple)
+            # pour autoriser les tournées de ramassage plus denses
+            if len(groupe_retenu) < 8: 
+                groupe_retenu.append(p)
+                cumul_occ += p.taux_occupation
+
+    # 3. Création du SuperJob résultant
     sj_temp = SuperJob(groupe_retenu, matrice)
     
-    # On retourne le SuperJob, son poids (score à minimiser) et la liste des membres
-    return sj_temp, sj_temp.calculer_poids_mobilisation(), groupe_retenu
+    # Arbitrage : si le groupe est trop "pauvre" en remplissage, 
+    # on lui donne un malus de score pour que l'algo préfère d'autres combinaisons
+    score = sj_temp.calculer_poids_mobilisation()
+    if cumul_occ < seuil_remplissage_cible:
+        score += 500  # "Pénalité de vide" pour inciter l'algo à chercher mieux
+    
+    return sj_temp, score, groupe_retenu
 
 
 def convertir_complets_en_super_jobs(jobs_complets, matrice_duree):
