@@ -45,6 +45,25 @@ def afficher_parametres_logistique():
         st.subheader("3. Optimisation")
         taux_remplissage = st.slider("Taux de remplissage max cible (%)", 50, 100, 85)
 
+
+        st.subheader("⚙️ Stratégie de mutualisation")
+
+        # Cette clé doit correspondre exactement à celle utilisée dans preparer_pile_optimisation
+        st.session_state["params_logistique"]["optimiser_reliquats_tournees"] = st.checkbox(
+            "🔄 Autoriser la réinjection des reliquats de tournées",
+            value=True,
+            help="Si coché, les camions des tournées imposées qui sont presque vides seront 'cassés' pour être regroupés avec d'autres flux solitaires allant dans la même direction."
+        )
+        
+        # Optionnel : Ajout d'un curseur pour définir le seuil de "vide"
+        st.session_state["params_logistique"]["seuil_rupture_reliquat"] = st.slider(
+            "Seuil de remplissage pour réinjection (%)",
+            min_value=10,
+            max_value=90,
+            value=80,
+            help="En dessous de ce taux, le camion de la tournée imposée est considéré comme 'sous-optimisé' et sera envoyé au mélange."
+        )
+
         # --- BOUTON D'ENREGISTREMENT ---
         submit_button = st.form_submit_button("💾 Enregistrer les paramètres")
 
