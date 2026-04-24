@@ -28,7 +28,7 @@ from modules.sim_engine import (
     preparer_flux_complets_du_jour, # Ajoutez celle-ci
     tunnel_consolidation_flux       # Ajoutez celle-ci
 )
-from modules.sequencage_engine import trouver_meilleure_configuration_journee, afficher_gantt_chauffeur_detaille
+from modules.sequencage_engine import trouver_meilleure_configuration_journee
 import modules.Resultats_simul_flux as res_flux
 
 # --------- FONCTIONS UI ------------
