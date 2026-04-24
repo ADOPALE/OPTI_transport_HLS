@@ -14,19 +14,17 @@ def to_decimal_minutes(t):
 def sont_dans_le_meme_couloir(sj1, sj2):
     """
     Vérifie si deux SuperJobs appartiennent au même axe (Aller ou Retour).
-    Basé sur les attributs .origin et .destination des jobs contenus.
+    Accès via la liste_jobs interne de tes SuperJobs.
     """
-    if not sj1 or not sj2:
+    if not sj1 or not sj2 or not sj1.liste_jobs or not sj2.liste_jobs:
         return False
     
-    # Extraction des points de passage du SuperJob
-    o1, d1 = sj1.origin, sj1.destination
-    o2, d2 = sj2.origin, sj2.destination
+    # Origine du SJ = origine de son premier job
+    # Destination du SJ = destination de son dernier job
+    o1, d1 = sj1.liste_jobs[0].origin, sj1.liste_jobs[-1].destination
+    o2, d2 = sj2.liste_jobs[0].origin, sj2.liste_jobs[-1].destination
     
-    condition_aller = (o1 == o2 and d1 == d2)
-    condition_retour = (o1 == d2 and d1 == o2)
-    
-    return condition_aller or condition_retour
+    return (o1 == o2 and d1 == d2) or (o1 == d2 and d1 == o2)
 
 # =================================================================
 # 2. CLASSE POSTE CHAUFFEUR
@@ -40,8 +38,8 @@ class PosteChauffeur:
         self.position_actuelle = site_initial
         
         self.etat = 'INACTIF'
-        self.job_en_cours = None
-        self.job_precedent = None  # Mémoire pour le couloir dynamique
+        self.job_en_cours = None # Stockera un SuperJob
+        self.job_precedent = None 
         
         self.temps_restant_etat = 0
         self.temps_service_total = 0   
@@ -53,14 +51,14 @@ class PosteChauffeur:
         self.historique = []
 
     def enregistrer_evenement(self, minute_actuelle, activite, sj=None, details=""):
-        destination_visu = self.position_actuelle
+        dest_visuelle = self.position_actuelle
         sj_id = "N/A"
-        if sj:
-            sj_id = getattr(sj, 'flux_id', 'SJ')
+        if sj and sj.liste_jobs:
+            sj_id = getattr(sj, 'flux_id', 'SJ_LOURD')
             if activite in ['EN_TRAJET_PLEIN', 'EN_DECHARGEMENT']:
-                destination_visu = sj.destination
+                dest_visuelle = sj.liste_jobs[-1].destination
             elif activite in ['EN_TRAJET_VIDE', 'EN_MANOEUVRE_QUAI']:
-                destination_visu = sj.origin
+                dest_visuelle = sj.liste_jobs[0].origin
 
         self.historique.append({
             "Poste": self.id_poste,
@@ -69,7 +67,7 @@ class PosteChauffeur:
             "Heure_Debut": f"{int(minute_actuelle//60):02d}:{int(minute_actuelle%60):02d}",
             "Activite": activite,
             "Origine": self.position_actuelle,
-            "Destination": destination_visu,
+            "Destination": dest_visuelle,
             "SJ_ID": sj_id,
             "Details": details
         })
@@ -92,39 +90,41 @@ class PosteChauffeur:
         return self.etat == 'DISPONIBLE' and self.temps_restant_etat == 0
 
 # =================================================================
-# 3. LOGIQUE DE SELECTION (SUPERJOBS)
+# 3. LOGIQUE DE SCORING
 # =================================================================
 
 def calculer_score_stress(sj, temps_actuel):
-    """Utilise h_deadline_min et poids_total de la classe SuperJob"""
+    # Attribut correct : h_deadline_min dans SuperJob
     temps_restant = sj.h_deadline_min - temps_actuel
     if temps_restant <= 0: return 999999
-    
     ratio = sj.poids_total / temps_restant
     return ratio * (1 / max(0.001, (1.1 - ratio)))
 
 def trouver_meilleur_job(poste, jobs_dispos, matrice_duree):
-    # Filtrage par type de véhicule (v_type)
+    # On filtre les SuperJobs par le v_type (attribut présent dans SuperJob)
     candidats = [j for j in jobs_dispos if j.v_type == poste.vehicule_type]
     if not candidats: return None
     
     candidats.sort(key=lambda x: x.score_stress, reverse=True)
     top_candidats = candidats[:5]
     
-    # 1. Priorité : Même couloir dynamique + déjà sur place
+    # 1. Couloir + Sur place
     for j in top_candidats:
-        if sont_dans_le_meme_couloir(poste.job_precedent, j) and j.origin == poste.position_actuelle:
+        orig_j = j.liste_jobs[0].origin
+        if sont_dans_le_meme_couloir(poste.job_precedent, j) and orig_j == poste.position_actuelle:
             return j
             
-    # 2. Priorité : Départ sur place (évite trajet vide)
+    # 2. Uniquement sur place
     for j in top_candidats:
-        if j.origin == poste.position_actuelle:
+        orig_j = j.liste_jobs[0].origin
+        if orig_j == poste.position_actuelle:
             return j
             
-    # 3. Proche voisin géographique
+    # 3. Proximité
     scored = []
     for idx, j in enumerate(top_candidats):
-        dist = matrice_duree.get(poste.position_actuelle, {}).get(j.origin, 999)
+        orig_j = j.liste_jobs[0].origin
+        dist = matrice_duree.get(poste.position_actuelle, {}).get(orig_j, 999)
         scored.append(((idx + (dist / 10)), j))
     scored.sort(key=lambda x: x[0])
     return scored[0][1]
@@ -138,15 +138,11 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
     rh_params = params_logistique.get('rh', {})
     h_prise = to_decimal_minutes(rh_params.get('h_prise_min', time(6, 0)))
     h_fin = to_decimal_minutes(rh_params.get('h_fin_max', time(21, 0)))
-    
-    # Nom de colonne spécifique fourni par l'utilisateur
     nom_col_man = "Temps de mise à quai - manœuvre, contact/admin (minutes)"
     
     postes = []
     for v_type, n_veh in n_max_dict.items():
         if n_veh <= 0: continue
-        
-        # Accès par la colonne 'Types' (avec un s)
         df_f = df_vehicules[df_vehicules['Types'] == v_type]
         if df_f.empty: continue
         row_v = df_f.iloc[0]
@@ -173,28 +169,30 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 elif p.etat == 'EN_TRAJET_VIDE':
                     if sj:
                         p.etat = 'EN_MANOEUVRE_QUAI'; p.temps_restant_etat = p.t_manoeuvre
-                        p.position_actuelle = sj.origin
+                        p.position_actuelle = sj.liste_jobs[0].origin
                         p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", sj, "Mise à quai")
                     else:
                         p.position_actuelle = p.stationnement_initial; p.etat = 'DISPONIBLE'
                 
                 elif p.etat == 'EN_MANOEUVRE_QUAI':
-                    if sj and p.position_actuelle == sj.origin:
+                    if sj and p.position_actuelle == sj.liste_jobs[0].origin:
                         p.etat = 'EN_CHARGEMENT'; p.temps_restant_etat = sj.temps_chargement
                         p.enregistrer_evenement(heure_actuelle, "EN_CHARGEMENT", sj)
                     else:
+                        # On est arrivé à la destination finale du SJ
                         p.etat = 'EN_DECHARGEMENT'; p.temps_restant_etat = sj.temps_dechargement
                         p.enregistrer_evenement(heure_actuelle, "EN_DECHARGEMENT", sj)
                 
                 elif p.etat == 'EN_CHARGEMENT':
                     p.etat = 'EN_TRAJET_PLEIN'
-                    dist = matrice_duree.get(sj.origin, {}).get(sj.destination, 30)
+                    # Distance entre le premier et le dernier site du SuperJob
+                    dist = matrice_duree.get(sj.liste_jobs[0].origin, {}).get(sj.liste_jobs[-1].destination, 30)
                     p.temps_restant_etat = dist
                     p.enregistrer_evenement(heure_actuelle, "EN_TRAJET_PLEIN", sj)
                 
                 elif p.etat == 'EN_TRAJET_PLEIN':
                     p.etat = 'EN_MANOEUVRE_QUAI'; p.temps_restant_etat = p.t_manoeuvre
-                    p.position_actuelle = sj.destination
+                    p.position_actuelle = sj.liste_jobs[-1].destination
                     p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", sj, "Mise à quai")
                 
                 elif p.etat == 'EN_DECHARGEMENT':
@@ -206,7 +204,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 elif p.etat == 'EN_PAUSE':
                     p.etat = 'DISPONIBLE'; p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
 
-        # Affectation
+        # Sélection des jobs dispos
         jobs_dispos = [j for j in jobs_restants if j.h_dispo_min <= heure_actuelle]
         for j in jobs_dispos: j.score_stress = calculer_score_stress(j, heure_actuelle)
 
@@ -227,16 +225,18 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                         p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist_depot
                         p.enregistrer_evenement(heure_actuelle, "EN_TRAJET_VIDE", details="Retour Dépôt")
                 else:
-                    job = trouver_meilleur_job(p, jobs_dispos, matrice_duree)
-                    if job:
-                        p.job_en_cours = job; jobs_restants.remove(job); jobs_dispos.remove(job)
-                        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(job.origin, 0)
+                    sj_choisi = trouver_meilleur_job(p, jobs_dispos, matrice_duree)
+                    if sj_choisi:
+                        p.job_en_cours = sj_choisi
+                        jobs_restants.remove(sj_choisi); jobs_dispos.remove(sj_choisi)
+                        orig_sj = sj_choisi.liste_jobs[0].origin
+                        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(orig_sj, 0)
                         if dist_approche > 0:
                             p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist_approche
-                            p.enregistrer_evenement(heure_actuelle, "EN_TRAJET_VIDE", job)
+                            p.enregistrer_evenement(heure_actuelle, "EN_TRAJET_VIDE", sj_choisi)
                         else:
                             p.etat = 'EN_MANOEUVRE_QUAI'; p.temps_restant_etat = p.t_manoeuvre
-                            p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", job)
+                            p.enregistrer_evenement(heure_actuelle, "EN_MANOEUVRE_QUAI", sj_choisi)
         heure_actuelle += pas
 
     return {"succes": len(jobs_restants) == 0, "postes": postes, "reliquat": len(jobs_restants)}
