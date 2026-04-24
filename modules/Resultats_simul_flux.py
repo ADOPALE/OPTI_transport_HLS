@@ -3,146 +3,81 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import streamlit as st
 
+
 def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
     """
-    Génère un diagramme de Gantt détaillé avec affichage cumulé des contenants 
-    sous la forme : "12 ROLLS + 4 ARMOIRES"
+    Affiche le planning GANTT pour les objets PosteChauffeur.
+    Compatible avec la structure SuperJob (poids_total).
     """
     if not postes:
-        st.warning(f"Aucune donnée à afficher pour le type {v_type_selectionne}")
+        st.warning("Aucun poste à afficher (liste vide).")
         return
 
-    data_gantt = []
+    data = []
     
-    # Filtrer les postes pour le type sélectionné
-    postes_filtres = [p for p in postes if p.get('v_type') == v_type_selectionne]
+    # CORRECTION : On accède à l'attribut .vehicule_type (objet) et non .get() (dict)
+    postes_filtres = [p for p in postes if p.vehicule_type == v_type_selectionne]
 
     if not postes_filtres:
-        st.info(f"Aucun planning généré pour {v_type_selectionne}")
+        st.info(f"Aucune activité enregistrée pour le type de véhicule : {v_type_selectionne}")
         return
 
     for p in postes_filtres:
-        ch_id = p['id_chauffeur']
-        camion_id = p.get('id_camion', 'N/A')
-        
-        # 1. Prise de service
-        h_prise = p['h_debut_service']
-        data_gantt.append(dict(
-            Chauffeur=ch_id,
-            Start=h_prise,
-            Finish=h_prise + 15,
-            Type="🔧 Prise de service",
-            Description=f"Camion: {camion_id}<br>Préparation et briefing",
-            Volume=""
-        ))
-
-        curr_h = h_prise + 15
-
-        # 2. Missions et Trajets/Attentes
-        for m in p['missions']:
-            sj = m['sj']
-            h_dep = m['h_dep']
-            h_fin = m['h_fin']
+        if not p.historique:
+            continue
             
-            # Gestion de l'intervalle (Attente/Trajet à vide)
-            if h_dep > curr_h:
-                data_gantt.append(dict(
-                    Chauffeur=ch_id,
-                    Start=curr_h,
-                    Finish=h_dep,
-                    Type="⏳ Attente/Trajet Vide",
-                    Description=f"Liaison vers {sj['jobs'][0].origin}",
-                    Volume=""
-                ))
-
-            # --- LOGIQUE D'AGRÉGATION DÉTAILLÉE ---
-            dict_volumes = {}
-            itineraires = []
+        for ev in p.historique:
+            # On définit une durée visuelle pour chaque bloc dans le Gantt
+            # L'historique enregistre le DEBUT de chaque état.
+            # Pour l'affichage, on estime la fin à Minute_Debut + 5 (le pas) 
+            # ou on laisse Plotly gérer la continuité.
             
-            for j in sj['jobs']:
-                # On récupère l'itinéraire
-                iti = f"{j.origin} → {j.destination}"
-                if iti not in itineraires:
-                    itineraires.append(iti)
-                
-                # On cumule les quantités par nom de contenant
-                # On met en majuscule pour l'uniformité
-                c_nom = str(j.contenant).upper().strip()
-                qty = j.quantite
-                dict_volumes[c_nom] = dict_volumes.get(c_nom, 0) + qty
+            data.append({
+                "Poste": p.id_poste,
+                "Début": ev["Minute_Debut"],
+                "Fin": ev["Minute_Debut"] + 5, # Pas par défaut pour la visualisation
+                "Activité": ev["Activite"],
+                "SJ_ID": ev.get("SJ_ID", "N/A"),
+                "Origine": ev.get("Origine", ""),
+                "Destination": ev.get("Destination", ""),
+                "Détails": ev.get("Details", ""),
+                "Heure_Debut": ev["Heure_Debut"]
+            })
 
-            # Formatage spécifique : "12 ROLLS + 4 ARMOIRES"
-            parts = []
-            for c_nom, q in dict_volumes.items():
-                # On affiche l'entier si possible, sinon le décimal
-                val = int(q) if q == int(q) else round(q, 1)
-                parts.append(f"{val} {c_nom}")
-            
-            volume_final = " + ".join(parts)
-            
-            details_iti = " | ".join(itineraires)
-            nature = sj.get('type_combinaison', 'DIRECT')
+    if not data:
+        st.info("L'historique des postes sélectionnés est vide.")
+        return
 
-            data_gantt.append(dict(
-                Chauffeur=ch_id,
-                Start=h_dep,
-                Finish=h_fin,
-                Type="🚛 MISSION",
-                Description=f"<b>Itinéraires :</b> {details_iti}<br><b>Nature :</b> {nature}",
-                Volume=volume_final
-            ))
-            
-            curr_h = h_fin
+    df = pd.DataFrame(data)
 
-        # 3. Fin de service
-        data_gantt.append(dict(
-            Chauffeur=ch_id,
-            Start=curr_h,
-            Finish=curr_h + 15,
-            Type="🏁 Fin de service",
-            Description="Retour dépôt et administratif",
-            Volume=""
-        ))
-
-    # --- Création du Graphique ---
-    df = pd.DataFrame(data_gantt)
-    def to_dt(minutes):
-        return datetime(2026, 1, 1) + timedelta(minutes=minutes)
-
-    df['StartDT'] = df['Start'].apply(to_dt)
-    df['FinishDT'] = df['Finish'].apply(to_dt)
-
+    # Création du graphique Gantt via Plotly
     fig = px.timeline(
         df, 
-        x_start="StartDT", 
-        x_end="FinishDT", 
-        y="Chauffeur", 
-        color="Type",
-        hover_data={
-            "Type": True,
-            "Description": True, 
-            "Volume": True, # Affichera "12 ROLLS + 4 ARMOIRES"
-            "StartDT": False, 
-            "FinishDT": False,
-            "Chauffeur": False
-        },
+        x_start="Début", 
+        x_end="Fin", 
+        y="Poste", 
+        color="Activité",
+        hover_data=["Heure_Debut", "SJ_ID", "Origine", "Destination", "Détails"],
+        title=f"Planning Chronologique - {v_type_selectionne}",
         color_discrete_map={
-            "🚛 MISSION": "#00CC96",
-            "⏳ Attente/Trajet Vide": "#EF553B",
-            "🔧 Prise de service": "#636EFA",
-            "🏁 Fin de service": "#AB63FA"
+            "EN_MISSION": "#1f77b4",      # Bleu (SuperJob en cours)
+            "EN_TRAJET_VIDE": "#ff7f0e",  # Orange (Approche ou retour dépôt)
+            "DISPONIBLE": "#2ca02c",      # Vert
+            "EN_PAUSE": "#d62728",        # Rouge
+            "PRISE_POSTE": "#9467bd",     # Violet
+            "FIN_POSTE": "#7f7f7f"        # Gris
         }
     )
 
+    # Inverser l'axe Y pour avoir le premier camion en haut
     fig.update_yaxes(autorange="reversed")
+    
+    # Configuration de l'axe X pour qu'il soit lisible (minutes de la journée)
     fig.update_layout(
-        title=f"Planning opérationnel détaillé - {v_type_selectionne}",
-        xaxis_tickformat="%H:%M",
-        height=400 + (len(postes_filtres) * 40),
-        xaxis_title="Heure",
-        yaxis_title=None,
-        legend_title="Légende",
-        hoverlabel=dict(bgcolor="black", font_size=12)
+        xaxis_title="Minutes écoulées depuis le début de journée",
+        xaxis=dict(type='linear'),
+        showlegend=True,
+        height=400 + (len(postes_filtres) * 20) # Taille dynamique
     )
-
+    
     st.plotly_chart(fig, use_container_width=True)
