@@ -338,7 +338,9 @@ elif selected == "Synthèse transport":
             postes_jour = st.session_state.get('dict_postes_par_jour', {}).get(jour_sel)
             if postes_jour:
                 st.write(f"**📅 Planning Gantt des chauffeurs ({jour_sel})**")
-                res_flux.afficher_gantt_chauffeur_detaille(postes_jour, jour_sel)
+                type_choisi = st.selectbox("Choisir un type", df_vehicules['Types'].unique())
+                res_flux.afficher_gantt_chauffeur_detaille(postes_jour, type_choisi)
+                
             
             # --- 3. Tableau des SuperJobs ---
             with st.expander(f"Voir le détail des {len(liste_sj_jour)} SuperJobs"):
