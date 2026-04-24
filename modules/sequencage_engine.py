@@ -7,6 +7,7 @@ from datetime import time, datetime
 # =================================================================
 
 def to_decimal_minutes(t):
+    """Convertit Time, Timedelta ou Float en minutes décimales."""
     if isinstance(t, (time, datetime)):
         return t.hour * 60 + t.minute
     if isinstance(t, (int, float)):
@@ -16,12 +17,12 @@ def to_decimal_minutes(t):
 def sont_dans_le_meme_couloir(sj1, sj2):
     """
     Vérifie si deux SuperJobs sont sur le même axe.
-    Utilise les listes de points_depart et points_arrivee de SuperJob.
+    Utilise les listes points_depart et points_arrivee de SuperJob.
     """
-    if not sj1 or not sj2:
+    if not sj1 or not sj2 or not sj1.liste_jobs or not sj2.liste_jobs:
         return False
     
-    # On compare les premiers points de départ et derniers points d'arrivée
+    # On compare le premier point du trajet du SJ1 avec le trajet du SJ2
     o1, d1 = sj1.points_depart[0], sj1.points_arrivee[-1]
     o2, d2 = sj2.points_depart[0], sj2.points_arrivee[-1]
     
@@ -39,13 +40,14 @@ class PosteChauffeur:
         self.position_actuelle = site_initial
         
         self.etat = 'INACTIF'
-        self.job_en_cours = None  # Stockera un objet SuperJob
+        self.job_en_cours = None  # Stockera l'objet SuperJob
         self.job_precedent = None 
         
         self.temps_restant_etat = 0
         self.temps_service_total = 0   
         self.is_pause_faite = False
         
+        # Paramètres RH convertis en minutes
         self.amplitude_max = to_decimal_minutes(params_rh.get('v_duree', 450))
         self.duree_pause = to_decimal_minutes(params_rh.get('v_pause', 45))
         self.historique = []
@@ -54,6 +56,7 @@ class PosteChauffeur:
         dest_visuelle = self.position_actuelle
         sj_id = "N/A"
         if sj:
+            # On prend le flux_id du premier job contenu dans le SuperJob
             sj_id = getattr(sj.liste_jobs[0], 'flux_id', 'SJ')
             if activite == 'EN_MISSION':
                 dest_visuelle = sj.points_arrivee[-1]
@@ -94,31 +97,34 @@ class PosteChauffeur:
 # =================================================================
 
 def calculer_score_stress(sj, temps_actuel):
-    # h_deadline_min est bien dans SuperJob
+    """Utilise h_deadline_min et poids_total de SuperJob."""
     temps_restant = sj.h_deadline_min - temps_actuel
     if temps_restant <= 0: return 999999
-    # poids_total est le temps de mission calculé par SuperJob
+    # Le poids_total est le temps de mission (camion mobilisé)
     ratio = sj.poids_total / temps_restant
     return ratio * (1 / max(0.001, (1.1 - ratio)))
 
 def trouver_meilleur_job(poste, jobs_dispos, matrice_duree):
-    # On filtre par v_type (présent dans SuperJob)
+    # Filtrage par v_type (attribut de SuperJob)
     candidats = [j for j in jobs_dispos if j.v_type == poste.vehicule_type]
     if not candidats: return None
     
     candidats.sort(key=lambda x: x.score_stress, reverse=True)
     top_candidats = candidats[:5]
     
+    # 1. Priorité : Même couloir + déjà sur place
     for j in top_candidats:
         orig_sj = j.points_depart[0]
         if sont_dans_le_meme_couloir(poste.job_precedent, j) and orig_sj == poste.position_actuelle:
             return j
             
+    # 2. Priorité : Sur place (évite trajet vide)
     for j in top_candidats:
         orig_sj = j.points_depart[0]
         if orig_sj == poste.position_actuelle:
             return j
             
+    # 3. Géographie (plus proche voisin)
     scored = []
     for idx, j in enumerate(top_candidats):
         orig_sj = j.points_depart[0]
@@ -161,18 +167,20 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 
                 elif p.etat == 'EN_TRAJET_VIDE':
                     if sj:
-                        # Arrivée au premier point de collecte du SuperJob
+                        # Arrivée au point de départ du SuperJob -> On lance la mission (poids_total)
                         p.etat = 'EN_MISSION'
                         p.temps_restant_etat = sj.poids_total
                         p.position_actuelle = sj.points_depart[0]
-                        p.enregistrer_evenement(heure_actuelle, "EN_MISSION", sj, "Début tournée")
+                        p.enregistrer_evenement(heure_actuelle, "EN_MISSION", sj, "Exécution SuperJob")
                     else:
+                        # Retour dépôt terminé
                         p.position_actuelle = p.stationnement_initial; p.etat = 'DISPONIBLE'
                 
                 elif p.etat == 'EN_MISSION':
-                    # Fin de la mission complète (inclut trajets et manutention)
+                    # Mission terminée (inclut manutention et trajets internes)
                     if heure_actuelle > sj.h_deadline_min:
                         return {"succes": False, "erreur": f"Retard SJ {sj.liste_jobs[0].flux_id}"}
+                    
                     p.position_actuelle = sj.points_arrivee[-1]
                     p.etat = 'DISPONIBLE'; p.job_precedent = sj; p.job_en_cours = None
                     p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
@@ -180,7 +188,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                 elif p.etat == 'EN_PAUSE':
                     p.etat = 'DISPONIBLE'; p.enregistrer_evenement(heure_actuelle, "DISPONIBLE")
 
-        # Affectation
+        # Mise à jour des scores et sélection des nouveaux jobs
         jobs_dispos = [j for j in jobs_restants if j.h_dispo_min <= heure_actuelle]
         for j in jobs_dispos: j.score_stress = calculer_score_stress(j, heure_actuelle)
 
@@ -190,6 +198,7 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                     p.etat = 'PRISE_POSTE'; p.temps_restant_etat = 15; p.enregistrer_evenement(heure_actuelle, "PRISE_POSTE")
             
             elif p.est_disponible():
+                # Vérification Pause / Fin de service
                 if p.verifier_fin_service() or p.verifier_besoin_pause():
                     if p.position_actuelle == p.stationnement_initial:
                         if p.verifier_fin_service():
@@ -198,14 +207,18 @@ def ordonnancer_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, param
                             p.etat = 'EN_PAUSE'; p.temps_restant_etat = p.duree_pause
                             p.is_pause_faite = True; p.enregistrer_evenement(heure_actuelle, "EN_PAUSE")
                     else:
+                        # Besoin de rentrer au dépôt pour pause ou fin
                         dist_depot = matrice_duree.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                         p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist_depot
                         p.enregistrer_evenement(heure_actuelle, "EN_TRAJET_VIDE", details="Retour Dépôt")
                 else:
+                    # Recherche de mission
                     sj_choisi = trouver_meilleur_job(p, jobs_dispos, matrice_duree)
                     if sj_choisi:
                         p.job_en_cours = sj_choisi
-                        jobs_restants.remove(sj_choisi); jobs_dispos.remove(sj_choisi)
+                        jobs_restants.remove(sj_choisi)
+                        jobs_dispos.remove(sj_choisi)
+                        
                         orig_sj = sj_choisi.points_depart[0]
                         dist_approche = matrice_duree.get(p.position_actuelle, {}).get(orig_sj, 0)
                         
@@ -231,4 +244,3 @@ def trouver_meilleure_configuration_journee(liste_sj, intensite_par_type, df_veh
     else:
         n_max_safe = {v: count + 1 for v, count in n_max_initial.items()}
         return ordonnancer_journee(liste_sj, n_max_safe, df_vehicules, matrice_duree, params_logistique)
-        
