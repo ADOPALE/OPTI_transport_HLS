@@ -255,7 +255,7 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
     postes_complets = []
     for v_type, val_max in n_max_dict.items():
         # Règle : Max théorique + 20%
-        n_max_calc = math.ceil(max(val_max) * 1,2) if isinstance(val_max, list) else math.ceil(val_max * 1,2)
+        n_max_calc = math.ceil(max(val_max) * 1.2) if isinstance(val_max, list) else math.ceil(val_max * 1.2)
         st.info(f"Analyse **{v_type}** : Recherche d'optimisation (Max: {n_max_calc} camions)")
         
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
