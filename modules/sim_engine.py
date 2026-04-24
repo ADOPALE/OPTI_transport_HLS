@@ -101,7 +101,50 @@ def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avan
 # =================================================================
 # MOTEUR DE SÉQUENÇAGE ET ORDONNANCEMENT
 # =================================================================
+def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
+    """
+    Cherche le nombre minimal de véhicules (de 1 à N) en utilisant 
+    la logique de chaînage prioritaire.
+    """
+    if "params_logistique" not in st.session_state:
+        return None
 
+    params = st.session_state["params_logistique"]
+    rh = params["rh"]
+    h_prise_min = to_decimal_minutes(rh["h_prise_min"])
+    h_fin_max = to_decimal_minutes(rh["h_fin_max"])
+    max_poste = rh["amplitude_totale"]
+    t_prepa = rh["temps_fixes"] / 2
+    t_fin = rh["temps_fixes"] / 2
+    depot = params.get("stationnement_initial", "HLS").upper()
+
+    tous_les_jobs = []
+    for sens_dict in couloirs.values():
+        for liste in sens_dict.values():
+            tous_les_jobs.extend(liste)
+
+    if not tous_les_jobs:
+        return {"succes": True, "n_camions": 0, "postes": []}
+
+    # --- TA BOUCLE ITÉRATIVE ---
+    for n_test in range(1, len(tous_les_jobs) + 1):
+        res = tenter_sequencage(
+            n_test, tous_les_jobs, depot, matrice_duree, 
+            h_prise_min, h_fin_max, max_poste, t_prepa, t_fin, v_type
+        )
+        
+        if res["succes"]:
+            tous_les_postes = []
+            for c in res['camions']:
+                for p in c['postes']:
+                    p['id_camion'] = c['id_camion']
+                    p['v_type'] = v_type
+                    tous_les_postes.append(p)
+            return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
+
+    return {"succes": False}
+
+"""
 def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
     """
     Cherche le nombre minimal de véhicules pour un type spécifique.
@@ -146,6 +189,7 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
             return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
 
     return {"succes": False}
+    """
 
 def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
     """
