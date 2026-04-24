@@ -102,10 +102,10 @@ def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avan
 # MOTEUR DE SÉQUENÇAGE ET ORDONNANCEMENT
 # =================================================================
 
-def ordonnancer_flotte_optimale(couloirs, matrice_duree):
+def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
     """
-    Cherche le nombre minimal de CAMIONS nécessaires en autorisant la relève de chauffeurs.
-    Conserve les éléments de débogage et adapte la structure Camion -> Postes.
+    Cherche le nombre minimal de CAMIONS nécessaires pour un segment spécifique (v_type)
+    en autorisant la relève de chauffeurs sur un même véhicule.
     """
     if "params_logistique" not in st.session_state:
         st.error("❌ Paramètres logistiques introuvables dans la session.")
@@ -114,7 +114,7 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
     params = st.session_state["params_logistique"]
     rh = params["rh"]
 
-    # --- ADAPTATION DES PARAMÈTRES ---
+    # --- 1. ADAPTATION DES PARAMÈTRES RH & EXPLOITATION ---
     try:
         h_prise_min = to_decimal_minutes(rh["h_prise_min"])
         h_fin_max = to_decimal_minutes(rh["h_fin_max"])
@@ -129,8 +129,9 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
         st.error(f"❌ Erreur : La clé {e} est absente de params_logistique.")
         return None
 
-    # --- MISE À PLAT DES JOBS ---
+    # --- 2. MISE À PLAT DES JOBS DU SEGMENT ---
     tous_les_jobs = []
+    # Extraction depuis la structure en couloirs (frozenset)
     if isinstance(couloirs, dict):
         for sens_dict in couloirs.values():
             if isinstance(sens_dict, dict):
@@ -142,77 +143,65 @@ def ordonnancer_flotte_optimale(couloirs, matrice_duree):
         tous_les_jobs = couloirs
 
     if not tous_les_jobs:
-        st.warning("⚠️ Aucun job à ordonnancer.")
-        return None
+        return {"succes": True, "n_camions": 0, "postes": []}
 
-    # Tri par heure de départ prévue (important pour la logique greedy)
+    # Tri chronologique par lissage (ou dispo par défaut)
     tous_les_jobs.sort(key=lambda x: x.get('h_depart_actuelle', x.get('h_dispo_max', 0)))
 
-    # --- STATISTIQUES DE DÉBOGGAGE ---
-    df_debug = pd.DataFrame([
-        {
-            "ID": sj['id_super_job'],
-            "Type Véhicule": sj['jobs'][0].vehicule_type,
-            "Poids (min)": sj['poids_total'],
-            "Dispo": sj['h_dispo_max'],
-            "Deadline": sj['h_deadline_min']
-        } for sj in tous_les_jobs
-    ])
-    
-    st.write("### 📊 Récapitulatif des Super Jobs à ordonnancer")
-    st.dataframe(df_debug.groupby("Type Véhicule").size().reset_index(name='Nombre de Jobs'))
-
-    # --- ANALYSE DE FAISABILITÉ AVANT BOUCLE ---
+    # --- 3. ANALYSE PRÉALABLE DE FAISABILITÉ ---
     impossibles = []
     for sj in tous_les_jobs:
-        if sj['poids_total'] > duree_poste_max:
-            impossibles.append(f"❌ {sj['id_super_job']} : Trop long ({sj['poids_total']} min > {duree_poste_max} min)")
+        # Vérification amplitude
+        if sj['poids_total'] > (duree_poste_max - rh["temps_fixes"]):
+            impossibles.append(f"❌ {sj['id_super_job']} : Trop long pour un seul chauffeur.")
         
+        # Vérification deadline stricte
         h_fin_theorique = sj['h_depart_actuelle'] + sj['poids_total']
         if h_fin_theorique > sj['h_deadline_min']:
-            impossibles.append(f"❌ {sj['id_super_job']} : Deadline impossible (Finit à {h_fin_theorique:.1f} min, Max {sj['h_deadline_min']} min)")
+            impossibles.append(f"❌ {sj['id_super_job']} : Dépasse la deadline à {h_fin_theorique:.1f} min.")
     
     if impossibles:
-        st.error("### 🚨 Jobs impossibles détectés (l'ordonnancement va échouer) !")
-        for msg in impossibles:
-            st.write(msg)
+        st.error(f"### 🚨 {len(impossibles)} Jobs impossibles pour le type {v_type}")
+        with st.expander("Détails des échecs critiques"):
+            for msg in impossibles: st.write(msg)
         return {"succes": False, "impossibles": impossibles}
 
-    # --- BOUCLE DE RECHERCHE DU NOMBRE DE CAMIONS ---
-    # On commence à 1 et on monte jusqu'à ce que ça passe (plus rapide que de descendre)
+    # --- 4. RECHERCHE ITÉRATIVE DU NOMBRE DE VÉHICULES ---
+    # On teste de 1 à N camions jusqu'à trouver la première solution viable
     solution_interne = None
     n_max = len(tous_les_jobs)
-    st.info(f"🔄 Recherche du nombre minimal de camions (Max théorique : {n_max})...")
+    
+    # Barre de progression pour le suivi utilisateur
+    with st.status(f"🔃 Calcul du dimensionnement pour {v_type}...") as status:
+        for n_test in range(1, n_max + 1):
+            res = tenter_sequencage(
+                n_test, tous_les_jobs, depot, matrice_duree, 
+                h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste,
+                v_type
+            )
+            
+            if res["succes"]:
+                solution_interne = res
+                status.update(label=f"✅ {v_type} : Solution trouvée avec {n_test} camions.", state="complete")
+                break 
 
-    for n_test in range(1, n_max + 1):
-        res = tenter_sequencage(
-            n_test, tous_les_jobs, depot, matrice_duree, 
-            h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste
-        )
-        
-        if res["succes"]:
-            st.success(f"✅ Solution trouvée avec {n_test} camions !")
-            solution_interne = res
-            break 
-
-    # --- FORMATAGE DU RÉSULTAT POUR L'INTERFACE ---
+    # --- 5. FORMATAGE FINAL DES POSTES ---
     if solution_interne:
         tous_les_postes = []
-        # On extrait chaque chauffeur (poste) de chaque camion
         for c in solution_interne['camions']:
             for p in c['postes']:
-                # On enrichit le poste avec l'ID du camion pour le Gantt / Tableaux
+                # On marque chaque poste avec le type de véhicule pour le reporting final
                 p['id_camion'] = c['id_camion']
+                p['v_type'] = v_type
                 tous_les_postes.append(p)
         
         return {
             "succes": True,
             "n_camions": len(solution_interne['camions']),
-            "postes": tous_les_postes,
-            "details_camions": solution_interne['camions']
+            "postes": tous_les_postes
         }
 
-    st.error("❌ Aucun ordonnancement n'a pu être trouvé, même avec un camion par job.")
+    st.error(f"❌ Aucun ordonnancement trouvé pour {v_type}.")
     return {"succes": False}
 
 
