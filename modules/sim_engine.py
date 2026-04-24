@@ -648,10 +648,15 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
     return tous_les_super_jobs_du_jour
 
+
+
+
+
 def calculer_nmax_theorique(liste_super_jobs):
     """
-    Calcule l'intensité de charge en étalant systématiquement le poids total
-    sur l'amplitude (h_dispo -> h_deadline).
+    Calcule l'intensité de charge avec lissage conditionnel :
+    - Si ratio <= 1 : Lissage uniforme sur l'amplitude.
+    - Si ratio > 1 : Saturation à 1.0 et débordement (overflow) sur les créneaux suivants.
     """
     import math
     nb_creneaux = 48
@@ -661,34 +666,42 @@ def calculer_nmax_theorique(liste_super_jobs):
     for sj in liste_super_jobs:
         t_debut = sj.h_dispo_min
         t_fin_autorisee = sj.h_deadline_min
-        poids_a_placer = sj.poids_total
+        poids_total = sj.poids_total
+        amplitude = max(1, t_fin_autorisee - t_debut) # Sécurité 1min min
         
-        # Calcul de l'amplitude (en minutes)
-        amplitude = t_fin_autorisee - t_debut
-        
-        # Sécurité pour éviter la division par zéro si dispo == deadline
-        if amplitude <= 0:
-            amplitude = 1  # On évite le crash, le poids se met sur 1 min
-        
-        # CALCUL DU RATIO SYSTÉMATIQUE
-        # Le job occupe (poids / amplitude) % d'un camion sur chaque minute
-        ratio_occupation = poids_a_placer / amplitude
+        ratio_theorique = poids_total / amplitude
 
-        curr = t_debut
-        while curr < t_fin_autorisee:
-            idx = int((curr % 1440) // pas)
-            fin_creneau = (idx + 1) * pas
-            
-            # Temps (en minutes) que le job passe dans ce créneau de 30 min
-            temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
-            
-            # Ajout de la charge lissée
-            # (Minutes dans le créneau / 30 min) * ratio d'occupation
-            intensite_par_creneau[idx] += (temps_dans_ce_creneau / pas) * ratio_occupation
-            
-            curr += temps_dans_ce_creneau
+        # --- CAS A : BESOIN FLUIDE (Ratio <= 1) -> Lissage uniforme ---
+        if ratio_theorique <= 1:
+            curr = t_debut
+            while curr < t_fin_autorisee:
+                idx = int((curr % 1440) // pas)
+                fin_creneau = (idx + 1) * pas
+                temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
+                
+                # On applique le ratio lissé (ex: 0.4 camion sur toute la durée)
+                intensite_par_creneau[idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
+                curr += temps_dans_ce_creneau
 
-    # Pic d'intensité et calcul Nmax avec marge de 20%
+        # --- CAS B : TENSION (Ratio > 1) -> Saturation et Débordement ---
+        else:
+            poids_restant = poids_total
+            curr = t_debut
+            while poids_restant > 0 and curr < 1440:
+                idx = int((curr % 1440) // pas)
+                fin_creneau = (idx + 1) * pas
+                temps_dispo_creneau = fin_creneau - curr
+                
+                # On consomme le max possible (saturation à 100% du temps restant)
+                consommation = min(poids_restant, temps_dispo_creneau)
+                
+                # Ici on ajoute la part du créneau occupée à 100%
+                intensite_par_creneau[idx] += (consommation / pas)
+                
+                poids_restant -= consommation
+                curr += consommation
+
+    # Pic d'intensité et Nmax avec marge de 20%
     pic_intensite = max(intensite_par_creneau)
     n_max_theorique = math.ceil(pic_intensite * 1.20)
     
