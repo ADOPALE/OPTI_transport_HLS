@@ -109,6 +109,8 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
     top_3.sort(key=lambda x: matrice_duree.get(p.position_actuelle, {}).get(x.points_depart[0], 999))
     return top_3[0]
 """
+
+
 def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
     """
     Sélectionne le job le plus stressé parmi les candidats physiquement réalisables.
