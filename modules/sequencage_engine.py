@@ -90,11 +90,12 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
             candidats_possibles.append(j)
 
     if not candidats_possibles:
+        st.error(f"à {minute/60} heure on a aucun candidat possible du fait du stress des jobs")
         return None
 
     # Tri par stress, puis priorités métiers
     candidats_possibles.sort(key=lambda x: x.stress_temp, reverse=True)
-    top_3 = candidats_possibles[:3]
+    top_3 = candidats_possibles[:15]
 
     for j in top_3:
         if get_couloir_id(j) == p.couloir_actuel and j.points_depart[0] == p.position_actuelle:
