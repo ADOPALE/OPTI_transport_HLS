@@ -78,6 +78,67 @@ def preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_nom):
     return df_complet
 
 
+import math
+import pandas as pd
+import streamlit as st
+
+def Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites):
+    """
+    Etape 2 : Utilise les fonctions métiers pour affecter le meilleur véhicule 
+    et calculer la capacité utile réelle.
+    """
+    # 1. RÉCUPÉRATION DES PARAMÈTRES
+    params = st.session_state.get("params_logistique", {})
+    vehicules_autorises = params.get("vehicules_selectionnes", [])
+    taux_remplissage = params.get("securite_remplissage", 1.0)
+    
+    # Filtrage de la flotte sur celle sélectionnée par l'utilisateur
+    col_nom_v = df_vehicules.columns[0]
+    df_v_actifs = df_vehicules[df_vehicules[col_nom_v].isin(vehicules_autorises)].copy()
+
+    # Nettoyage des noms de colonnes sites (comme dans tes fonctions)
+    df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
+    col_libelle = next((c for c in df_sites.columns if "LIBEL" in c or "SITE" in c), None)
+
+    resultats = []
+
+    for index, flux in df_complet_jour.iterrows():
+        site_dep = str(flux['Point de départ']).strip().upper()
+        site_arr = str(flux['Point de destination']).strip().upper()
+        type_cont = str(flux['Nature de contenant']).strip().upper()
+
+        # 2. APPEL À TA FONCTION : identifier_meilleur_vehicule
+        # Elle vérifie l'accessibilité (est_accessible) et cherche la meilleure capacité au sol
+        v_elu, capa_max_theorique = identifier_meilleur_vehicule(
+            site_dep, 
+            site_arr, 
+            type_cont, 
+            df_v_actifs, 
+            df_contenants, 
+            df_sites, 
+            col_libelle
+        )
+
+        if v_elu is not None and capa_max_theorique > 0:
+            # 3. CALCUL DE LA CAPACITÉ UTILE (avec ton taux de remplissage)
+            # On applique le floor car on ne transporte pas de fractions de contenants
+            capa_utile = math.floor(capa_max_theorique * taux_remplissage)
+            
+            # Sécurité : au moins 1 si le véhicule est compatible
+            capa_utile = max(1, capa_utile)
+            
+            v_nom = v_elu[col_nom_v]
+        else:
+            v_nom = "NON_COMPATIBLE_OU_PAS_SELECTIONNE"
+            capa_utile = 0
+
+        # Mise à jour de la ligne
+        flux_maj = flux.to_dict()
+        flux_maj['Vehicule_Affecte'] = v_nom
+        flux_maj['Capa_Max_Transport'] = capa_utile
+        resultats.append(flux_maj)
+
+    return pd.DataFrame(resultats)
 
 
 
