@@ -24,7 +24,8 @@ from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_
 from modules.sim_engine import (
     traitement_flux_recurrents, 
     ordonnancer_flotte_optimale,
-    tunnel_consolidation_flux  # <-- Ajout de la nouvelle fonction
+    preparer_flux_complets_du_jour, # Ajoutez celle-ci
+    tunnel_consolidation_flux       # Ajoutez celle-ci
 )
 import modules.Resultats_simul_flux as res_flux
 
