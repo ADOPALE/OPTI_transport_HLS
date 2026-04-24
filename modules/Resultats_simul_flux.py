@@ -5,8 +5,8 @@ import streamlit as st
 
 def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
     """
-    Génère un diagramme de Gantt détaillé pour les chauffeurs d'un type de véhicule.
-    Affiche tous les contenants et itinéraires pour les jobs combinés.
+    Génère un diagramme de Gantt détaillé avec affichage cumulé des contenants 
+    sous la forme : "12 ROLLS + 4 ARMOIRES"
     """
     if not postes:
         st.warning(f"Aucune donnée à afficher pour le type {v_type_selectionne}")
@@ -44,7 +44,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
             h_dep = m['h_dep']
             h_fin = m['h_fin']
             
-            # --- Gestion de l'intervalle avant mission ---
+            # Gestion de l'intervalle (Attente/Trajet à vide)
             if h_dep > curr_h:
                 data_gantt.append(dict(
                     Chauffeur=ch_id,
@@ -55,22 +55,31 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
                     Volume=""
                 ))
 
-            # --- LOGIQUE D'AGRÉGATION MULTI-JOBS ---
+            # --- LOGIQUE D'AGRÉGATION DÉTAILLÉE ---
             dict_volumes = {}
             itineraires = []
             
             for j in sj['jobs']:
-                # On ajoute l'itinéraire du job s'il n'est pas déjà dans la liste
+                # On récupère l'itinéraire
                 iti = f"{j.origin} → {j.destination}"
                 if iti not in itineraires:
                     itineraires.append(iti)
                 
-                # On cumule les quantités par type de contenant
-                c_type = j.contenant
-                dict_volumes[c_type] = dict_volumes.get(c_type, 0) + j.quantite
+                # On cumule les quantités par nom de contenant
+                # On met en majuscule pour l'uniformité
+                c_nom = str(j.contenant).upper().strip()
+                qty = j.quantite
+                dict_volumes[c_nom] = dict_volumes.get(c_nom, 0) + qty
 
-            # Formatage du texte pour le volume (ex: "12 ROLLS, 4 PALETTES")
-            volume_str = ", ".join([f"{int(q)} {str(c).upper()}" for c, q in dict_volumes.items()])
+            # Formatage spécifique : "12 ROLLS + 4 ARMOIRES"
+            parts = []
+            for c_nom, q in dict_volumes.items():
+                # On affiche l'entier si possible, sinon le décimal
+                val = int(q) if q == int(q) else round(q, 1)
+                parts.append(f"{val} {c_nom}")
+            
+            volume_final = " + ".join(parts)
+            
             details_iti = " | ".join(itineraires)
             nature = sj.get('type_combinaison', 'DIRECT')
 
@@ -80,7 +89,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
                 Finish=h_fin,
                 Type="🚛 MISSION",
                 Description=f"<b>Itinéraires :</b> {details_iti}<br><b>Nature :</b> {nature}",
-                Volume=volume_str
+                Volume=volume_final
             ))
             
             curr_h = h_fin
@@ -95,51 +104,44 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
             Volume=""
         ))
 
-    # Conversion en DataFrame
+    # --- Création du Graphique ---
     df = pd.DataFrame(data_gantt)
-
-    # Conversion des minutes en format Datetime pour Plotly
     def to_dt(minutes):
         return datetime(2026, 1, 1) + timedelta(minutes=minutes)
 
     df['StartDT'] = df['Start'].apply(to_dt)
     df['FinishDT'] = df['Finish'].apply(to_dt)
 
-    # Création du graphique Plotly
     fig = px.timeline(
         df, 
         x_start="StartDT", 
         x_end="FinishDT", 
         y="Chauffeur", 
         color="Type",
-        # On ajoute 'Volume' et 'Description' dans les données de survol
         hover_data={
             "Type": True,
             "Description": True, 
-            "Volume": True, 
+            "Volume": True, # Affichera "12 ROLLS + 4 ARMOIRES"
             "StartDT": False, 
             "FinishDT": False,
             "Chauffeur": False
         },
         color_discrete_map={
-            "🚛 MISSION": "#00CC96",          # Vert
-            "⏳ Attente/Trajet Vide": "#EF553B", # Rouge/Orange
-            "🔧 Prise de service": "#636EFA",    # Bleu
-            "🏁 Fin de service": "#AB63FA"       # Violet
+            "🚛 MISSION": "#00CC96",
+            "⏳ Attente/Trajet Vide": "#EF553B",
+            "🔧 Prise de service": "#636EFA",
+            "🏁 Fin de service": "#AB63FA"
         }
     )
 
-    # Inverser l'axe Y pour avoir le Chauffeur 1 en haut
     fig.update_yaxes(autorange="reversed")
-    
-    # Mise en forme des axes et de la légende
     fig.update_layout(
         title=f"Planning opérationnel détaillé - {v_type_selectionne}",
         xaxis_tickformat="%H:%M",
-        height=400 + (len(postes_filtres) * 40), # Hauteur dynamique selon le nombre de chauffeurs
-        xaxis_title="Heure de la journée",
+        height=400 + (len(postes_filtres) * 40),
+        xaxis_title="Heure",
         yaxis_title=None,
-        legend_title="Activité",
+        legend_title="Légende",
         hoverlabel=dict(bgcolor="white", font_size=12)
     )
 
