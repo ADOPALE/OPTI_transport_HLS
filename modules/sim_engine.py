@@ -536,83 +536,105 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     return True
 
 
-def regrouper_tournees_imposees(jobs_incomplets, matrice_duree):
+def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df_sites):
     """
-    ÉTAPE 1 : Regroupement des jobs partiels ayant une tournée de rattachement commune.
-    Respecte strictement la limite du TAUX D'OCCUPATION MAX paramétré.
+    Regroupe les jobs par tournée imposée en utilisant une stratégie de 'Pivot' (le plus lourd d'abord)
+    et vérifie la compatibilité dynamique (temps, espace, hygiène).
     """
-    # Récupération directe (supposée existante car enregistrée au préalable)
     params = st.session_state["params_logistique"]
-    taux_max_cible = params["securite_remplissage"]
+    taux_max_cible = params.get("securite_remplissage", 0.9)
     
     super_jobs_tournees = []
     jobs_solitaires = []
     
-    # 1. Tri : Séparation entre tournées imposées et jobs libres
+    # 1. Groupement initial par nom de tournée
     groupes_tournees = {}
-    
     for j in jobs_incomplets:
-        nom_t = j.tournee_rattachement
-        # On vérifie si une tournée est spécifiée dans le Excel
-        if pd.notna(nom_t) and str(nom_t).strip() != "":
-            nom_t = str(nom_t).strip().upper()
-            if nom_t not in groupes_tournees:
-                groupes_tournees[nom_t] = []
-            groupes_tournees[nom_t].append(j)
+        nom_t = str(j.tournee_rattachement).strip().upper() if pd.notna(j.tournee_rattachement) else None
+        if nom_t and nom_t != "":
+            groupes_tournees.setdefault(nom_t, []).append(j)
         else:
-            # Si pas de nom de tournée, le job part dans la pile des "solitaires"
             jobs_solitaires.append(j)
 
-    # 2. Création des SuperJobs pour chaque groupe de tournée
+    # 2. Construction des SuperJobs par tournée
     for nom_t, liste_j in groupes_tournees.items():
-        # On trie par taux d'occupation décroissant pour remplir au mieux l'enveloppe cible
+        # On trie la liste de la tournée par taux d'occupation décroissant (le pivot sera en tête)
         liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
         
-        current_sj_list = []
-        cumul_occ = 0
-        
-        for job in liste_j:
-            # Vérification par rapport au taux de sécurité utilisateur (ex: 0.8)
-            # On ajoute une petite tolérance flottante (0.0001) pour éviter les arrondis capricieux
-            if cumul_occ + job.taux_occupation <= (taux_max_cible + 0.0001):
-                current_sj_list.append(job)
-                cumul_occ += job.taux_occupation
-            else:
-                # La limite de gestion est atteinte : on clôture ce camion
-                new_sj = SuperJob(current_sj_list, matrice_duree)
-                new_sj.nom_tournee_origine = nom_t 
-                super_jobs_tournees.append(new_sj)
+        while liste_j:
+            # On sort le job le plus lourd pour en faire le pivot du nouveau SuperJob
+            current_sj_jobs = [liste_j.pop(0)]
+            
+            # On essaie de compléter ce SuperJob avec les jobs restants dans la liste
+            idx = 0
+            while idx < len(liste_j):
+                candidat = liste_j[idx]
                 
-                # On ouvre le camion suivant de la même tournée avec le job actuel
-                current_sj_list = [job]
-                cumul_occ = job.taux_occupation
-        
-        # On ferme le dernier camion du groupe
-        if current_sj_list:
-            last_sj = SuperJob(current_sj_list, matrice_duree)
-            last_sj.nom_tournee_origine = nom_t
-            super_jobs_tournees.append(last_sj)
+                # Utilisation de la fonction de compatibilité robuste
+                compatible, heure_fin = est_compatible_sj_et_job(
+                    current_sj_jobs, 
+                    candidat, 
+                    matrice_duree, 
+                    df_vehicules, 
+                    df_sites, 
+                    taux_max_cible
+                )
+                
+                if compatible:
+                    # Le job est compatible (Temps, Contenant, Propre/Sale, Capacité)
+                    current_sj_jobs.append(liste_j.pop(idx))
+                    # On ne随incrémente pas idx car l'élément suivant a glissé à la place de l'actuel
+                    
+                    # Optionnel : Si on est déjà très proche du taux_max_cible, on peut stopper
+                    if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
+                        break
+                else:
+                    # Non compatible, on passe au candidat suivant dans la liste
+                    idx += 1
+            
+            # Une fois qu'on a parcouru toute la liste pour ce pivot, on crée l'objet SuperJob
+            new_sj = SuperJob(
+                super_job_id=f"TOURNEE_{nom_t}_{len(super_jobs_tournees) + 1}",
+                v_type=current_sj_jobs[0].vehicule_type,
+                liste_jobs=current_sj_jobs,
+                matrice_duree=matrice_duree,
+                df_vehicules=df_vehicules,
+                df_sites=df_sites
+            )
+            new_sj.nom_tournee_origine = nom_t
+            super_jobs_tournees.append(new_sj)
             
     return super_jobs_tournees, jobs_solitaires
 
-
 def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
     """
-    Décide quels jobs vont être envoyés à l'arbitrage (Etape 2).
-    Seuil strict basé sur les paramètres enregistrés.
+    Décide quels SuperJobs issus des tournées imposées sont assez pleins 
+    pour être 'scellés' et lesquels doivent être dégroupés pour optimisation.
     """
     params = st.session_state["params_logistique"]
-    autoriser_melange = params["optimiser_reliquats_tournees"]
-    seuil_rupture = params["seuil_rupture_reliquat"] / 100 
+    autoriser_melange = params.get("optimiser_reliquats_tournees", False)
+    # On compare au remplissage MAX instantané pour ne pas casser les chaînages
+    seuil_rupture = params.get("seuil_rupture_reliquat", 70) / 100 
 
     super_jobs_scelles = []
     pile_a_optimiser = jobs_solitaires_initiaux.copy()
 
     for sj in super_jobs_tournees:
-        # Si le mélange est autorisé et que le taux est strictement inférieur au seuil
-        if autoriser_melange and sj.taux_occupation_total < seuil_rupture:
+        # 1. On détermine le remplissage réel (le pic de charge pendant la mission)
+        # Pour un imbriqué, c'est la somme. Pour un chaînage, c'est le max d'un des jobs.
+        if sj.type_logistique in ["GROUPAGE_PUR", "DISTRIBUTION", "RAMASSAGE", "TOURNEE_MIXTE"]:
+            remplissage_reel = sum(j.taux_occupation for j in sj.liste_jobs)
+        else:
+            # Pour le chaînage, on regarde le job le plus lourd de la séquence
+            remplissage_reel = max(j.taux_occupation for j in sj.liste_jobs)
+
+        # 2. Arbitrage
+        if autoriser_melange and remplissage_reel < seuil_rupture:
+            # Le camion est jugé "trop vide" : on renvoie les jobs à la pile commune
+            # pour essayer de les marier avec des solitaires à l'étape 2
             pile_a_optimiser.extend(sj.liste_jobs)
         else:
+            # Le camion est assez plein ou on n'a pas le droit de mélanger
             super_jobs_scelles.append(sj)
 
     return super_jobs_scelles, pile_a_optimiser
