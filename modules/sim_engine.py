@@ -66,104 +66,136 @@ class Job:
 
 
 class SuperJob:
-    """
-    Représente un groupe de jobs mutualisés.
-    Calcule la mobilisation (Temps Camion) avec recherche insensible à la casse.
-    """
-    def __init__(self, liste_jobs, matrice_duree):
+    def __init__(self, super_job_id, v_type, liste_jobs, matrice_duree, df_vehicules, df_sites, est_imbrique=False):
+        self.super_job_id = super_job_id
+        self.v_type = v_type
         self.liste_jobs = liste_jobs
-        self.matrice_duree = matrice_duree
         
-        # 1. Infos de base
-        self.taux_occupation_total = sum(j.taux_occupation for j in liste_jobs)
-        self.v_type = self.liste_jobs[0].vehicule_type
+        self.points_depart = [j.origin for j in liste_jobs]
+        self.points_arrivee = [j.destination for j in liste_jobs]
         
-        # 2. Points de passage
-        self.points_depart = list(set(j.origin for j in liste_jobs))
-        self.points_arrivee = list(set(j.destination for j in liste_jobs))
+        # Identification du type logistique
+        self.type_logistique = self._determiner_type_logistique()
         
-        # 3. Temps (Minutes décimales depuis 00:00)
-        # Nécessite la fonction to_decimal_minutes définie dans ton code
-        self.h_dispo_min = max(to_decimal_minutes(j.h_dispo) for j in liste_jobs)
-        self.h_deadline_min = min(to_decimal_minutes(j.h_deadline) for j in liste_jobs)
-        
-        # 4. Calcul du poids (Temps Camion)
-        self.poids_total = self.calculer_poids_mobilisation()
+        # Calcul avec les vrais paramètres
+        self.poids_total = self.calculer_duree_operationnelle(matrice_duree, df_vehicules, df_sites)
 
-    def _to_minutes(self, val_excel):
-        """ Convertit Time, Timedelta ou Float en minutes. 'NC' ou vide = 0. """
-        if pd.isna(val_excel) or str(val_excel).strip().upper() == "NC" or val_excel == "":
-            return 0.0
-        if isinstance(val_excel, time):
-            return (val_excel.hour * 3600 + val_excel.minute * 60 + val_excel.second) / 60
-        if isinstance(val_excel, (pd.Timedelta, timedelta)):
-            return val_excel.total_seconds() / 60
-        try:
-            return float(val_excel) / 60
-        except:
-            return 0.0
-
-    def calculer_poids_mobilisation(self):
-        """ Récupère les paramètres en Colonne 0 (insensible à la casse/espaces) """
-        df_v = st.session_state["data"]["param_vehicules"]
-        df_s = st.session_state["data"]["param_sites"]
+    def _determiner_type_logistique(self):
+        origins = self.points_depart
+        destinations = self.points_arrivee
         
-        def get_col_name(df, keyword):
-            for c in df.columns:
-                if keyword.upper() in str(c).upper(): return c
-            return None
-
-        col_v_id = df_v.columns[0]
-        col_man = get_col_name(df_v, "MANŒUVRE")
-        col_sq  = get_col_name(df_v, "SANS QUAI")
-        col_aq  = get_col_name(df_v, "AVEC QUAI")
-
-        # --- RECHERCHE VÉHICULE ---
-        # Nettoyage : minuscules + suppression espaces
-        v_type_recherche = str(self.v_type).strip().lower()
-        v_col_clean = df_v[col_v_id].astype(str).str.strip().str.lower()
+        # Test 1 : Groupage Pur (Même A -> Même B)
+        if len(set(origins)) == 1 and len(set(destinations)) == 1:
+            self.est_imbrique = True
+            return "GROUPAGE_PUR"
         
-        v_data = df_v[v_col_clean == v_type_recherche]
+        # Test 2 : Détection d'imbrication physique
+        # On regarde si on rencontre un point de départ alors qu'on n'est pas encore "vide"
+        # Pour simplifier ici : si on a plusieurs origines AVANT de finir toutes les destinations
+        # ou si le volume max transporté à un instant T dépasse la capacité d'un seul job.
         
-        if v_data.empty:
-            st.error(f"❌ Véhicule '{self.v_type}' introuvable dans la colonne '{col_v_id}'.")
-            st.info(f"Valeurs détectées dans l'Excel : {df_v[col_v_id].unique().tolist()}")
-            st.stop()
+        # Logique simplifiée : Est-ce une tournée de type Ramassage ou Distribution ?
+        if len(set(origins)) == 1 and len(set(destinations)) > 1:
+            self.est_imbrique = True
+            return "DISTRIBUTION"
+        if len(set(origins)) > 1 and len(set(destinations)) == 1:
+            self.est_imbrique = True
+            return "RAMASSAGE"
             
-        ligne_v = v_data.iloc[0]
-        t_man = self._to_minutes(ligne_v[col_man]) if col_man else 0
-        t_sq  = self._to_minutes(ligne_v[col_sq]) if col_sq else 0
-        t_aq  = self._to_minutes(ligne_v[col_aq]) if col_aq else 0
+        # Si c'est un enchaînement A->B, B->C ou A->B, C->D
+        self.est_imbrique = False
+        return "CHAINAGE_SUCCESSION"
 
+    def _get_params_manutention(self, site, df_vehicules, df_sites):
+        """Récupère les temps T_QUAI et T_CONT spécifiques au couple Véhicule/Site."""
+        # 1. Infos Véhicule
+        v_info = df_vehicules[df_vehicules.iloc[:, 0] == self.v_type]
+        if v_info.empty:
+            return 15, 2 # Valeurs de secours
+        
+        t_quai_base = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0]
+        
+        # 2. Infos Site (Présence de quai)
+        site_info = df_sites[df_sites.iloc[:, 0] == site]
+        a_un_quai = False
+        if not site_info.empty:
+            # On gère l'espace dans "Présence de quai "
+            val_quai = str(site_info["Présence de quai "].values[0]).upper()
+            a_un_quai = "OUI" in val_quai or "1" in val_quai
+
+        # 3. Sélection du T_CONT (Chargement/Déchargement)
+        # Si quai -> temps avec quai, sinon temps avec hayon
+        col_t_cont = "Manutention avec quai (minutes / contenants)" if a_un_quai \
+                     else "Manutention sans quai (minutes / contenants)"
+        
+        t_cont = v_info[col_t_cont].values[0]
+        
+        return t_quai_base, t_cont
+
+    def calculer_duree_operationnelle(self, matrice_duree, df_vehicules, df_sites):
         total_min = 0
         
-        # --- TRAJET ---
-        itineraire = self.points_depart + self.points_arrivee
-        for i in range(len(itineraire) - 1):
-            total_min += self.matrice_duree.get((itineraire[i], itineraire[i+1]), 0)
+        if self.type_logistique == "GROUPAGE_PUR":
+            orig, dest = self.points_depart[0], self.points_arrivee[0]
+            t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
+            t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
+            
+            nb_total = sum(j.quantite for j in self.liste_jobs)
+            trajet = matrice_duree.get(orig, {}).get(dest, 30)
+            
+            total_min = (t_q_o + nb_total * t_c_o) + trajet + (t_q_d + nb_total * t_c_d)
 
-        # --- SITES & MANUTENTION ---
-        col_s_id = df_s.columns[0]
-        col_quai = get_col_name(df_s, "QUAI")
+        elif self.type_logistique == "DISTRIBUTION":
+            # Un seul chargement au départ
+            orig = self.points_depart[0]
+            t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
+            nb_total = sum(j.quantite for j in self.liste_jobs)
+            total_min = t_q_o + (nb_total * t_c_o)
+            
+            pos_actuelle = orig
+            for j in self.liste_jobs:
+                total_min += matrice_duree.get(pos_actuelle, {}).get(j.destination, 20)
+                t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
+                total_min += t_q_d + (j.quantite * t_c_d)
+                pos_actuelle = j.destination
 
-        for site in list(set(itineraire)):
-            total_min += t_man 
+        elif self.type_logistique == "RAMASSAGE":
+            pos_actuelle = self.points_depart[0]
+            for j in self.liste_jobs:
+                # Trajet vers le point de collecte
+                total_min += matrice_duree.get(pos_actuelle, {}).get(j.origin, 15)
+                t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
+                total_min += t_q_o + (j.quantite * t_c_o)
+                pos_actuelle = j.origin
             
-            site_recherche = str(site).strip().lower()
-            s_col_clean = df_s[col_s_id].astype(str).str.strip().str.lower()
-            site_data = df_s[s_col_clean == site_recherche]
-            
-            has_quai = False
-            if not site_data.empty and col_quai:
-                val_q = str(site_data.iloc[0][col_quai]).upper()
-                has_quai = any(x in val_q for x in ["OUI", "X", "VRAI", "1"])
-            
-            ratio = t_aq if has_quai else t_sq
-            qte = sum(j.quantite for j in self.liste_jobs if j.origin == site or j.destination == site)
-            total_min += (qte * ratio)
+            # Trajet final et un seul déchargement
+            dest = self.points_arrivee[0]
+            total_min += matrice_duree.get(pos_actuelle, {}).get(dest, 20)
+            t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
+            total_min += t_q_d + (sum(j.quantite for j in self.liste_jobs) * t_c_d)
+
+        else: # CHAINAGE_SUCCESSION
+            for i, j in enumerate(self.liste_jobs):
+                t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
+                t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
+                
+                duree_job = (t_q_o + j.quantite * t_c_o) + \
+                            matrice_duree.get(j.origin, {}).get(j.destination, 20) + \
+                            (t_q_d + j.quantite * t_c_d)
+                total_min += duree_job
+                
+                if i < len(self.liste_jobs) - 1:
+                    total_min += matrice_duree.get(j.destination, {}).get(self.liste_jobs[i+1].origin, 0)
 
         return total_min
 
+    def obtenir_details_contenants(self, minute_relative):
+        """Utile pour l'affichage : liste ce qui est dans le camion à l'instant T."""
+        if self.type_logistique in ["GROUPAGE_PUR", "DISTRIBUTION", "RAMASSAGE", "TOURNEE_MIXTE"]:
+            return f"Charge cumulée : {sum(j.quantite for j in self.liste_jobs)} contenants"
+        else:
+            return "Charge successive (Missions point-à-point)"
+        
     def __repr__(self):
         """ Affichage détaillé pour le débug et le graphe d'intensité """
         h_start = f"{int(self.h_dispo_min // 60):02d}h{int(self.h_dispo_min % 60):02d}"
@@ -376,6 +408,132 @@ def fragmenter_en_jobs(df_eclate_v, v_type_str, df_vehicules, df_contenants):
             jobs_incomplets.append(job_i)
             
     return jobs_complets, jobs_incomplets
+
+
+
+def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, df_sites, taux_max_cible):
+    """
+    Vérifie la faisabilité technique et temporelle.
+    Critère : Fenêtre de tir commune pour l'imbriqué, succession pour le chaînage.
+    """
+    temp_list = sj_jobs + [nouveau_job]
+    origins = [j.origin for j in temp_list]
+    destinations = [j.destination for j in temp_list]
+    v_type = nouveau_job.vehicule_type
+
+    # --- 1. DÉTERMINATION DE LA NATURE ---
+    is_groupage = len(set(origins)) == 1 and len(set(destinations)) == 1
+    is_distrib = len(set(origins)) == 1 and len(set(destinations)) > 1
+    is_ramasse = len(set(origins)) > 1 and len(set(destinations)) == 1
+    is_imbrique = is_groupage or is_distrib or is_ramasse
+
+    # --- 2. VÉRIFICATION CAPACITÉ ---
+    if is_imbrique:
+        if sum(j.taux_occupation for j in temp_list) > taux_max_cible:
+            return False, None
+    else:
+        if nouveau_job.taux_occupation > taux_max_cible:
+            return False, None
+
+    # --- 2bis. VÉRIFICATION COMPATIBILITE PROPRE/SALE ---
+    # Vérification Propre / Sale (Protocole)
+    # On s'assure que tous les jobs ont la même étiquette (ex: tous 'PROPRE' ou tous 'SALE')
+    types_flux_presents = set(j.type_propre_sale for j in temp_list)
+    if len(types_flux_presents) > 1:
+        # Incompatible : on ne mélange pas le propre et le sale dans le même SuperJob
+        return False, None
+    
+    # --- 3. SIMULATION TEMPORELLE ---
+    
+    def get_manut(site):
+        v_info = df_vehicules[df_vehicules.iloc[:, 0] == v_type]
+        t_q = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0] if not v_info.empty else 15
+        s_info = df_sites[df_sites.iloc[:, 0] == site]
+        has_q = "OUI" in str(s_info["Présence de quai "].values[0]).upper() if not s_info.empty else True
+        col = "Manutention avec quai (minutes / contenants)" if has_q else "Manutention sans quai (minutes / contenants)"
+        t_c = v_info[col].values[0] if not v_info.empty else 2
+        return t_q, t_c
+
+
+    # --- 4. SÉCURITÉ APPROCHE DYNAMIQUE ---
+    # On récupère la plus longue distance possible dans le réseau pour garantir 
+    # que le camion peut atteindre le point de départ peu importe où il était avant.
+    toutes_distances = []
+    for depart in matrice_duree.values():
+        toutes_distances.extend(depart.values())
+    temps_approche_max = max(toutes_distances) if toutes_distances else 60
+
+    duree_totale = 0
+    h_dispo_max = max(to_min(j.h_dispo) for j in temp_list)
+    h_deadline_min = min(to_min(j.h_deadline) for j in temp_list)
+
+    if is_groupage:
+        # A -> B : Somme manut départs + Trajet + Somme manut arrivées
+        t_q_o, t_c_o = get_manut(origins[0])
+        t_q_d, t_c_d = get_manut(destinations[0])
+        qte_totale = sum(j.quantite for j in temp_list)
+        
+        duree_totale = (t_q_o + qte_totale * t_c_o) + \
+                       matrice_duree.get(origins[0], {}).get(destinations[0], 30) + \
+                       (t_q_d + qte_totale * t_c_d)
+        
+        # Condition : La durée doit tenir dans la fenêtre la plus serrée
+        if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
+            return False, None
+
+    elif is_distrib:
+        # 1 Pick (A) -> Multi Drops (B, C...)
+        t_q_o, t_c_o = get_manut(origins[0])
+        qte_totale = sum(j.quantite for j in temp_list)
+        duree_totale = t_q_o + (qte_totale * t_c_o) # Chargement initial unique
+        
+        current_pos = origins[0]
+        # On suit l'ordre des destinations (ici l'ordre d'ajout)
+        for j in temp_list:
+            duree_totale += matrice_duree.get(current_pos, {}).get(j.destination, 20)
+            t_q_d, t_c_d = get_manut(j.destination)
+            duree_totale += t_q_d + (j.quantite * t_c_d)
+            # Vérification : est-ce que ce drop respecte SA deadline ?
+            if h_dispo_max + duree_totale + temps_approche_max > to_min(j.h_deadline):
+                return False, None
+            current_pos = j.destination
+
+    elif is_ramasse:
+        # Multi Picks (A, B...) -> 1 Drop (C)
+        current_pos = origins[0]
+        for j in temp_list:
+            duree_totale += matrice_duree.get(current_pos, {}).get(j.origin, 15)
+            t_q_o, t_c_o = get_manut(j.origin)
+            duree_totale += t_q_o + (j.quantite * t_c_o)
+            current_pos = j.origin
+        
+        # Trajet final vers destination unique
+        duree_totale += matrice_duree.get(current_pos, {}).get(destinations[0], 20)
+        t_q_d, t_c_d = get_manut(destinations[0])
+        duree_totale += t_q_d + (sum(j.quantite for j in temp_list) * t_c_d)
+        
+        if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
+            return False, None
+
+    else: # CHAINAGE (A->B puis C->D)
+        # On garde la simulation séquentielle mais avec vérification à chaque étape
+        temps_simule = to_min(temp_list[0].h_dispo)
+        current_pos = temp_list[0].origin
+        for j in temp_list:
+            t_q_o, t_c_o = get_manut(j.origin)
+            t_q_d, t_c_d = get_manut(j.destination)
+            
+            temps_simule += matrice_duree.get(current_pos, {}).get(j.origin, 10)
+            temps_simule = max(temps_simule, to_min(j.h_dispo))
+            temps_simule += (t_q_o + j.quantite * t_c_o) + \
+                            matrice_duree.get(j.origin, {}).get(j.destination, 20) + \
+                            (t_q_d + j.quantite * t_c_d)
+            
+            if temps_simule > to_min(j.h_deadline):
+                return False, None
+            current_pos = j.destination
+        
+    return True
 
 
 def regrouper_tournees_imposees(jobs_incomplets, matrice_duree):
