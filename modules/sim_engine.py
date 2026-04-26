@@ -114,6 +114,7 @@ class SuperJob:
             return 15, 2 # Valeurs de secours
         
         t_quai_base = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0]
+        t_quai_base = to_min(t_quai_base)
         
         # 2. Infos Site (Présence de quai)
         site_info = df_sites[df_sites.iloc[:, 0] == site]
@@ -129,6 +130,7 @@ class SuperJob:
                      else "Manutention sans quai (minutes / contenants)"
         
         t_cont = v_info[col_t_cont].values[0]
+        t_cont = to_min(t_cont)
         
         return t_quai_base, t_cont
 
