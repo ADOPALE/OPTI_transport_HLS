@@ -19,9 +19,10 @@ def afficher_parametres_logistique():
         v_remplissage = int(p.get("securite_remplissage", 0.85) * 100)
         v_opt_rel = p.get("optimiser_reliquats_tournees", True)
         v_seuil_rel = p.get("seuil_rupture_reliquat", 80)
-        # Nouvelles variables récupérées du state
         v_marge_inter = p.get("marge_inter_job", 5)
         v_alea = int(p.get("alea_circulation", 0.15) * 100)
+        # Récupération de la durée max d'un SJ (défaut à 50% de l'amplitude si absent)
+        v_duree_max_sj = p.get("duree_max_superjob", int(v_duree / 2))
         config_existe = True
     else:
         v_flotte = [] 
@@ -32,9 +33,9 @@ def afficher_parametres_logistique():
         v_remplissage = 85
         v_opt_rel = True
         v_seuil_rel = 80
-        # Valeurs par défaut
         v_marge_inter = 5
         v_alea = 15
+        v_duree_max_sj = 225 # 450 / 2
         config_existe = False
 
     df_vehicules = st.session_state["data"]["param_vehicules"].copy()
@@ -83,6 +84,12 @@ def afficher_parametres_logistique():
                 value=v_marge_inter, 
                 help="Temps de sécurité ajouté entre deux missions consécutives."
             )
+            # --- NOUVEAU PARAMÈTRE ---
+            duree_max_sj = st.number_input(
+                "Durée max d'une tournée (min)", 
+                value=v_duree_max_sj,
+                help="Limite la taille des regroupements pour garantir que le bloc est insérable dans un planning. Conseil : Amplitude de poste / 2,5."
+            )
         with col_opti_2:
             alea_circul = st.slider(
                 "Coefficient d'aléa circulation (%)", 
@@ -124,6 +131,7 @@ def afficher_parametres_logistique():
                 },
                 "securite_remplissage": taux_remplissage / 100,
                 "marge_inter_job": marge_inter,
+                "duree_max_superjob": duree_max_sj, # Sauvegarde du paramètre
                 "alea_circulation": alea_circul / 100,
                 "optimiser_reliquats_tournees": opt_reliquats,
                 "seuil_rupture_reliquat": seuil_reliquat,
