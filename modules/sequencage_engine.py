@@ -64,37 +64,62 @@ def est_sj_disponible_dynamique(sj, minute_actuelle, matrice_duree):
 
 def calculer_stress_maillon_critique(sj, minute_actuelle, matrice_duree, p_position_actuelle):
     """
-    Calcule la tension sur le maillon le plus 'en retard' du SuperJob.
+    Calcule le stress basé sur la 'marge de départ' (LST).
+    Stress = (Départ au plus tard possible) - (Heure actuelle + Approche).
+    Un score élevé (proche de 1000 ou plus) signifie qu'on est proche de l'impossibilité.
     """
-    scores_stress = []
-    temps_cumule = minute_actuelle
     
-    # 1. Approche initiale du camion vers le début du SJ
+    # 1. TEMPS D'APPROCHE (Indispensable pour savoir quand on peut réellement commencer)
     dist_approche = matrice_duree.get(p_position_actuelle, {}).get(sj.points_depart[0], 0)
-    temps_cumule += dist_approche
     
-    pos_simulee = sj.points_depart[0]
-    
-    for job in sj.liste_jobs:
-        # Trajet vers le point de collecte de ce job
-        trajet_interne = matrice_duree.get(pos_simulee, {}).get(job.origin, 0)
-        temps_cumule += trajet_interne
-        
-        # Temps de fin estimé pour ce maillon (Manut + Livraison)
-        duree_mission = (job.poids_total if hasattr(job, 'poids_total') else 30)
-        heure_fin_estimee = temps_cumule + duree_mission
-        
-        deadline_job = to_min(job.h_deadline)
-        marge = deadline_job - heure_fin_estimee
-        
-        # Score de stress (plus la marge est faible, plus le score est élevé)
-        scores_stress.append(1000 - marge)
-        
-        # On met à jour pour le maillon suivant
-        temps_cumule = heure_fin_estimee
-        pos_simulee = job.destination
+    # 2. CALCUL DU DÉPART AU PLUS TARD (LST - Latest Start Time)
+    lst_sj = 0
 
-    return max(scores_stress)
+    # --- CAS A : LOGIQUE BLOC (GROUPAGE OU RAMASSAGE) ---
+    # Le stress est global : on doit avoir fini le bloc avant la deadline la plus courte.
+    if sj.type_logistique in ['GROUPAGE_PUR', 'RAMASSAGE']:
+        h_deadline_min = min(to_min(j.h_deadline) for j in sj.liste_jobs)
+        # Départ au plus tard = Deadline min - Durée totale de la mission
+        lst_sj = h_deadline_min - sj.poids_total
+
+    # --- CAS B : LOGIQUE FILAIRE (DISTRIBUTION OU CHAINAGE) ---
+    # On calcule le stress pour chaque job et on prend le plus contraignant (le plus tôt).
+    else:
+        lst_candidats = []
+        temps_cumule_trajets = 0
+        pos_precedente = sj.points_depart[0]
+        
+        for job in sj.liste_jobs:
+            # On cumule le trajet depuis le début jusqu'à ce job spécifique
+            trajet_interne = matrice_duree.get(pos_precedente, {}).get(job.origin, 0)
+            temps_cumule_trajets += trajet_interne
+            
+            # Pour respecter la deadline de CE job, à quelle heure au plus tard 
+            # le camion doit-il avoir quitté le point de départ du SJ ?
+            # LST_job = Deadline - (Somme trajets cumulés + durée propre du job)
+            duree_propre = (job.poids_total if hasattr(job, 'poids_total') else 30)
+            lst_job = to_min(job.h_deadline) - (temps_cumule_trajets + duree_propre)
+            
+            lst_candidats.append(lst_job)
+            
+            # On avance la position pour le maillon suivant
+            pos_precedente = job.destination
+            # On ajoute la durée du job au cumul pour le suivant
+            temps_cumule_trajets += duree_propre
+            
+        # Le départ au plus tard du SJ est dicté par le job le plus "serré"
+        lst_sj = min(lst_candidats)
+
+    # 3. CALCUL DU SCORE DE STRESS FINAL
+    # Marge réelle = Temps restant avant l'heure fatidique de départ
+    # On soustrait l'approche car le camion doit encore voyager vers le SJ.
+    marge_depart = lst_sj - (minute_actuelle + dist_approche)
+    
+    # Score : Plus la marge est petite (ou négative), plus le score est élevé.
+    # On utilise 1000 comme base pour rester cohérent avec ton moteur de sélection.
+    score_stress = 1000 - marge_depart
+    
+    return score_stress
 
 # =================================================================
 # 2. CLASSE POSTE CHAUFFEUR (Inchangée mais nécessaire)
