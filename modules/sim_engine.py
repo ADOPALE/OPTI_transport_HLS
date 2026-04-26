@@ -778,15 +778,11 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicule
         super_jobs_optimises.append(new_sj)
 
     return super_jobs_optimises
+
+
 """
 def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites):
-    """
-    """
-    Regroupe les jobs solitaires (et reliquats) selon une logique de Pivot :
-    1. Priorité au Temps Total du SJ minimal (Efficacité trajet)
-    2. Priorité au Remplissage 'Pic' maximal (Optimisation volume)
-    """
-    """
+    
     params = st.session_state["params_logistique"]
     taux_max_cible = params.get("securite_remplissage", 0.9)
     
