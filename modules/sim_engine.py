@@ -75,18 +75,56 @@ class SuperJob:
         
         # Identification du type logistique
         self.type_logistique = self._determiner_type_logistique()
-
-        # 1. Heure de disponibilité du SuperJob (le MAX des h_dispo)
-        # On ne peut démarrer que quand TOUS les jobs sont prêts
-        self.h_dispo_min = max(to_min(j.h_dispo) for j in liste_jobs) if liste_jobs else 0
-        
-        # 2. Deadline du SuperJob (le MIN des h_deadline)
-        # On doit avoir fini avant la contrainte la plus stricte
-        self.h_deadline_min = min(to_min(j.h_deadline) for j in liste_jobs) if liste_jobs else 1440
-
         
         # Calcul avec les vrais paramètres
         self.poids_total = self.calculer_duree_operationnelle(matrice_duree, df_vehicules, df_sites)
+
+        # --- CALCULS DYNAMIQUES ---
+        self.h_dispo_min = self._simuler_heure_depart_minimale(matrice_duree)
+        # La deadline reste le verrou le plus strict pour l'ensemble
+        self.h_deadline_min = min(to_min(j.h_deadline) for j in liste_jobs) if liste_jobs else 1440
+
+    def _simuler_heure_depart_minimale(self, matrice_duree):
+        """
+        Calcule l'heure de départ (minute_actuelle) minimale pour que 
+        est_sj_disponible_dynamique devienne True.
+        """
+        if not self.liste_jobs:
+            return 0
+
+        # CAS 1 : GROUPAGE / DISTRIBUTION
+        # Le départ est bloqué par le job le plus tardif
+        if self.type_logistique in ['GROUPAGE_PUR', 'DISTRIBUTION']:
+            return max(to_min(j.h_dispo) for j in self.liste_jobs)
+
+        # CAS 2 : CHAINAGE / RAMASSAGE (Logique progressive)
+        # On doit trouver la minute_actuelle la plus basse qui valide tout le flux
+        # On commence par la dispo du premier job
+        t_depart_candidat = to_min(self.liste_jobs[0].h_dispo)
+        
+        # On simule le parcours pour ajuster t_depart_candidat si nécessaire
+        temps_cumule = t_depart_candidat
+        position_actuelle = self.points_depart[0]
+        
+        for i, job in enumerate(self.liste_jobs):
+            if i > 0:
+                # Trajet entre destination précédente et origine actuelle
+                trajet = matrice_duree.get(position_actuelle, {}).get(job.origin, 0)
+                temps_cumule += trajet
+                
+                # Si on arrive trop tôt par rapport à la dispo du job actuel, 
+                # il faut "décaler" l'heure de départ initiale du camion
+                if temps_cumule < to_min(job.h_dispo):
+                    decalage = to_min(job.h_dispo) - temps_cumule
+                    t_depart_candidat += decalage
+                    temps_cumule += decalage # On recalibre le temps cumulé
+            
+            # Avancement normal du temps pour le job en cours
+            duree_job = job.poids_total if hasattr(job, 'poids_total') else 30
+            temps_cumule += duree_job
+            position_actuelle = job.destination
+            
+        return t_depart_candidat
 
     def _determiner_type_logistique(self):
         origins = self.points_depart
