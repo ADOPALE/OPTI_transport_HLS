@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 
+
 def afficher_parametres_logistique():
     # 1. Vérification des données sources
     if "data" not in st.session_state or "param_vehicules" not in st.session_state["data"]:
