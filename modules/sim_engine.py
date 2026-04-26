@@ -467,16 +467,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
 
     # Pour obtenir le maximum global proprement avec Pandas :
     temps_approche_max = valeurs_numeriques.max().max()
-    """   
-    if hasattr(matrice_duree, 'iloc'): 
-        m_dict = matrice_duree.set_index(matrice_duree.columns[0]).to_dict('index')
-    else:
-        m_dict = matrice_duree # C'est déjà un dict ou un objet compatible
-        
-    for depart in m_dict.values():
-        toutes_distances.extend(depart.values())
-    temps_approche_max = max(toutes_distances) if toutes_distances else 60
-    """
+
     duree_totale = 0
     h_dispo_max = max(to_min(j.h_dispo) for j in temp_list)
     h_deadline_min = min(to_min(j.h_deadline) for j in temp_list)
@@ -585,7 +576,8 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
                 candidat = liste_j[idx]
                 
                 # Utilisation de la fonction de compatibilité robuste
-                compatible, variable_innutile = est_compatible_sj_et_job(
+                """
+                compatible = est_compatible_sj_et_job(
                     current_sj_jobs, 
                     candidat, 
                     matrice_duree, 
@@ -593,8 +585,8 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
                     df_sites, 
                     taux_max_cible
                 )
-                
-                if compatible:
+                """
+                if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible):
                     # Le job est compatible (Temps, Contenant, Propre/Sale, Capacité)
                     current_sj_jobs.append(liste_j.pop(idx))
                     # On ne随incrémente pas idx car l'élément suivant a glissé à la place de l'actuel
