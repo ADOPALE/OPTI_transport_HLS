@@ -120,7 +120,7 @@ class SuperJob:
         a_un_quai = False
         if not site_info.empty:
             # On gère l'espace dans "Présence de quai "
-            val_quai = str(site_info['Présence de quai'].values[0]).upper()
+            val_quai = str(site_info['PRÉSENCE DE QUAI'].values[0]).upper()
             a_un_quai = "OUI" in val_quai or "1" in val_quai
 
         # 3. Sélection du T_CONT (Chargement/Déchargement)
@@ -449,7 +449,6 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
         v_info = df_vehicules[df_vehicules.iloc[:, 0] == v_type]
         t_q = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0] if not v_info.empty else 15
         s_info = df_sites[df_sites.iloc[:, 0] == site]
-        st.error(f"🚨 La colonne 'Présence de quai' est introuvable. Colonnes dispo : {list(s_info.columns)}")
         has_q = "OUI" in str(s_info['PRÉSENCE DE QUAI'].values[0]).upper() if not s_info.empty else True
         col = "Manutention avec quai (minutes / contenants)" if has_q else "Manutention sans quai (minutes / contenants)"
         t_c = v_info[col].values[0] if not v_info.empty else 2
