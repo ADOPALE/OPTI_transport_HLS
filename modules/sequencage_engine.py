@@ -146,133 +146,7 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
     candidats_evalues.sort(key=lambda x: x['score'], reverse=True)
     return candidats_evalues[0]['job']
 
-def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
-    """
-    Simule l'affectation des SuperJobs pour un nombre I de véhicules.
-    Retourne la liste des postes si tous les jobs sont casés, sinon None.
-    """
-    rh = params_logistique.get('rh', {})
-    h_start = to_min(rh.get('h_prise_min', 360))
-    h_end = to_min(rh.get('h_fin_max', 1380)) 
-    pas = 5
-    
-    try:
-        depot_initial = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
-    except:
-        depot_initial = "DEPOT"
 
-    postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I)]
-    jobs_restants = list(liste_sj_type)
-    minute = h_start
-    
-    # Dictionnaire pour tracker les raisons des blocages par Job ID
-    rapport_blocages = {} 
-
-    while minute <= h_end:
-        # 1. Mise à jour des temps restants et transitions d'états pour chaque véhicule
-        for p in postes:
-            if p.temps_restant_etat > 0:
-                p.temps_restant_etat -= pas
-                continue
-            
-            if p.etat == 'PRISE_POSTE':
-                p.etat = 'DISPONIBLE'
-            elif p.etat == 'EN_TRAJET_VIDE':
-                if p.job_en_cours:
-                    p.position_actuelle = p.job_en_cours.points_depart[0]
-                    p.etat = 'EN_MISSION'
-                    p.temps_restant_etat = p.job_en_cours.poids_total
-                    p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
-                else:
-                    p.position_actuelle = p.stationnement_initial
-                    p.etat = 'TRANSITION'
-            elif p.etat == 'EN_MISSION':
-                p.position_actuelle = p.job_en_cours.points_arrivee[-1]
-                p.couloir_actuel = get_couloir_id(p.job_en_cours)
-                p.etat = 'DISPONIBLE'
-                p.job_en_cours = None
-            elif p.etat == 'TRANSITION':
-                temps_travaille = minute - p.h_debut_service_actuel
-                if temps_travaille >= p.amplitude_max:
-                    p.etat = 'PASSATION_POSTE'; p.temps_restant_etat = p.temps_passation
-                    p.enregistrer(minute, "PASSATION_POSTE")
-                else:
-                    p.etat = 'EN_PAUSE'; p.temps_restant_etat = p.duree_pause
-                    p.pause_faite = True
-                    p.enregistrer(minute, "EN_PAUSE")
-            elif p.etat in ['EN_PAUSE', 'PASSATION_POSTE']:
-                if p.etat == 'PASSATION_POSTE': p.h_debut_service_actuel = minute; p.pause_faite = False
-                p.etat = 'DISPONIBLE'
-
-        # 2. Tentative d'affectation des SuperJobs disponibles
-        # Utilisation de h_dispo_min calculé dynamiquement dans le SuperJob
-        dispos = [j for j in jobs_restants if j.h_dispo_min <= minute]
-        
-        for p in postes:
-            if p.temps_restant_etat > 0: continue
-            
-            if p.etat == 'INACTIF' and dispos:
-                p.etat = 'PRISE_POSTE'; p.temps_restant_etat = 15
-                p.h_debut_service_actuel = minute
-                p.enregistrer(minute, "PRISE_POSTE")
-            
-            elif p.etat == 'DISPONIBLE':
-                temps_travaille = minute - p.h_debut_service_actuel
-                # Calcul de la distance de retour au dépôt depuis la position actuelle
-                dist_retour_depot = matrice_duree.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
-
-                # Sécurité Amplitude : Si le chauffeur est proche de sa fin de service
-                if (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite) or (temps_travaille >= p.amplitude_max - 45):
-                    p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist_retour_depot
-                    p.enregistrer(minute, "EN_TRAJET_VIDE", details="Retour Dépôt (Fin de service/Pause)")
-                    continue
-
-                if not dispos: continue
-                
-                # Sélection du meilleur candidat selon stress et proximité
-                best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_duree)
-                
-                if best_sj:
-                    # Simulation des temps pour validation
-                    dist_approche = matrice_duree.get(p.position_actuelle, {}).get(best_sj.points_depart[0], 0)
-                    dist_fin_vers_depot = matrice_duree.get(best_sj.points_arrivee[-1], {}).get(p.stationnement_initial, 30)
-                    
-                    heure_fin_estimee = minute + dist_approche + best_sj.poids_total + dist_fin_vers_depot
-                    limite_amplitude = p.h_debut_service_actuel + p.amplitude_max + 15 # Marge de 15min
-                    
-                    # VALIDATION CRITIQUE : Le job + le retour dépôt rentrent-ils dans l'amplitude ?
-                    if heure_fin_estimee <= limite_amplitude:
-                        p.job_en_cours = best_sj
-                        jobs_restants.remove(best_sj)
-                        dispos.remove(best_sj)
-                        p.etat = 'EN_TRAJET_VIDE'; p.temps_restant_etat = dist_approche
-                        p.enregistrer(minute, "EN_TRAJET_VIDE", best_sj, "Approche Mission")
-                    else:
-                        # Log de la raison du refus pour le débug
-                        raison = f"Refusé: Fin à {int(heure_fin_estimee//60)}h{int(heure_fin_estimee%60):02d} > Limite Chauffeur {int(limite_amplitude//60)}h{int(limite_amplitude%60):02d}"
-                        rapport_blocages[best_sj.super_job_id] = raison
-
-        # Si tous les jobs sont affectés, on sort avec succès
-        if not jobs_restants: return postes
-        minute += pas
-
-    # 3. Si on arrive ici, certains jobs n'ont pas pu être placés
-    if jobs_restants:
-        with st.expander(f"🔍 Détails des échecs - {v_type} ({len(jobs_restants)} restants)"):
-            for sj in jobs_restants:
-                cause = rapport_blocages.get(sj.super_job_id, "Aucun véhicule n'était libre ou à proximité durant sa fenêtre de disponibilité")
-                st.write(f"**{sj.super_job_id}**")
-                st.write(f"- Statut : {cause}")
-                st.write(f"- Fenêtre : {int(sj.h_dispo_min//60)}h{int(sj.h_dispo_min%60):02d} → {int(sj.h_deadline_min//60)}h{int(sj.h_deadline_min%60):02d}")
-                st.write(f"- Durée mission : {sj.poids_total} min")
-                st.divider()
-
-    return None
-
-
-
-
-"""
 def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
@@ -363,7 +237,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
         minute += pas
 
     return None
-"""
+
 # =================================================================
 # 4. FONCTION D'ENTRÉE PRINCIPALE
 # =================================================================
