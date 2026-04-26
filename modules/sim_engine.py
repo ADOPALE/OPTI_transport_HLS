@@ -430,10 +430,10 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     # --- 2. VÉRIFICATION CAPACITÉ ---
     if is_imbrique:
         if sum(j.taux_occupation for j in temp_list) > taux_max_cible:
-            return False, None
+            return False
     else:
         if nouveau_job.taux_occupation > taux_max_cible:
-            return False, None
+            return False
 
     # --- 2bis. VÉRIFICATION COMPATIBILITE PROPRE/SALE ---
     # Vérification Propre / Sale (Protocole)
@@ -441,7 +441,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     types_flux_presents = set(j.type_propre_sale for j in temp_list)
     if len(types_flux_presents) > 1:
         # Incompatible : on ne mélange pas le propre et le sale dans le même SuperJob
-        return False, None
+        return False
     
     # --- 3. SIMULATION TEMPORELLE ---
     
@@ -479,7 +479,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
         
         # Condition : La durée doit tenir dans la fenêtre la plus serrée
         if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
-            return False, None
+            return False
 
     elif is_distrib:
         # 1 Pick (A) -> Multi Drops (B, C...)
@@ -495,7 +495,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
             duree_totale += t_q_d + (j.quantite * t_c_d)
             # Vérification : est-ce que ce drop respecte SA deadline ?
             if h_dispo_max + duree_totale + temps_approche_max > to_min(j.h_deadline):
-                return False, None
+                return False
             current_pos = j.destination
 
     elif is_ramasse:
@@ -513,7 +513,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
         duree_totale += t_q_d + (sum(j.quantite for j in temp_list) * t_c_d)
         
         if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
-            return False, None
+            return False
 
     else: # CHAINAGE (A->B puis C->D)
         # On garde la simulation séquentielle mais avec vérification à chaque étape
@@ -530,7 +530,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
                             (t_q_d + j.quantite * t_c_d)
             
             if temps_simule > to_min(j.h_deadline):
-                return False, None
+                return False
             current_pos = j.destination
         
     return True
@@ -639,158 +639,128 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
 
     return super_jobs_scelles, pile_a_optimiser
 
-def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree):
+
+def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites):
     """
-    Arbitre entre les différentes stratégies de regroupement.
-    Utilise strictement les paramètres chargés en session_state.
+    Regroupe les jobs solitaires (et reliquats) selon une logique de Pivot :
+    1. Priorité au Temps Total du SJ minimal (Efficacité trajet)
+    2. Priorité au Remplissage 'Pic' maximal (Optimisation volume)
     """
-    # Récupération sécurisée (doit exister dans l'onglet Paramètres)
     params = st.session_state["params_logistique"]
-    taux_max_cible = params["securite_remplissage"]
-    
-    # Seuil métier pour valider un trajet direct
-    seuil_remplissage_minimum = max(0, taux_max_cible - 0.20)
+    taux_max_cible = params.get("securite_remplissage", 0.9)
     
     super_jobs_optimises = []
     restants = jobs_solitaires.copy()
 
-    # Tri chronologique
-    restants.sort(key=lambda x: x.h_dispo)
+    # On commence par les jobs les plus lourds (Pivots)
+    restants.sort(key=lambda x: x.taux_occupation, reverse=True)
 
-    while len(restants) > 0:
+    while restants:
+        # --- 1. SÉLECTION DU PIVOT ---
         job_pivot = restants.pop(0)
+        current_jobs = [job_pivot]
         
-        # --- PRIORITÉ 1 : COUPLES PARFAITS (Même trajet exact) ---
-        couples_parfaits = [
-            j for j in restants 
-            if j.origin == job_pivot.origin 
-            and j.destination == job_pivot.destination
-            and j.vehicule_type == job_pivot.vehicule_type 
-            and j.type_propre_sale == job_pivot.type_propre_sale
-        ]
-        
-        if couples_parfaits:
-            comb_directe = [job_pivot]
-            occ_directe = job_pivot.taux_occupation
-            for c in couples_parfaits:
-                if occ_directe + c.taux_occupation <= taux_max_cible + 0.0001:
-                    comb_directe.append(c)
-                    occ_directe += c.taux_occupation
+        continuer_remplissage = True
+        while continuer_remplissage:
+            simulations = []
             
-            # Si le direct est "rentable" ou vide la pile massivement
-            if occ_directe >= seuil_remplissage_minimum or len(comb_directe) >= 5:
-                sj_direct = SuperJob(comb_directe, matrice_duree)
-                super_jobs_optimises.append(sj_direct)
+            # --- 2. SIMULATION MASSIVE ---
+            for i, candidat in enumerate(restants):
+                # Utilisation de la fonction de compatibilité (Renvoie True/False)
+                if est_compatible_sj_et_job(current_jobs, candidat, matrice_duree, 
+                                            df_vehicules, df_sites, taux_max_cible):
+                    
+                    # On crée virtuellement le SuperJob pour mesurer les métriques
+                    sj_simul = SuperJob(
+                        super_job_id="SIMUL",
+                        v_type=current_jobs[0].vehicule_type,
+                        liste_jobs=current_jobs + [candidat],
+                        matrice_duree=matrice_duree,
+                        df_vehicules=df_vehicules,
+                        df_sites=df_sites
+                    )
+                    
+                    # --- CALCUL DU TAUX D'OCCUPATION "PIC DE CHARGE" PAR SEGMENT ---
+                    # On groupe les jobs qui partagent le même trajet exact (Segment)
+                    segments = {}
+                    for j in sj_simul.liste_jobs:
+                        cle_segment = (j.origin, j.destination)
+                        segments.setdefault(cle_segment, []).append(j)
+                    
+                    # Le pic est la somme max sur un segment donné (physique du camion)
+                    occ_pic = max(sum(j.taux_occupation for j in j_list) for j_list in segments.values())
+                    
+                    simulations.append({
+                        'index': i,
+                        'temps': sj_simul.poids_total, # Priorité 1 : Temps minimal
+                        'occupation': occ_pic        # Priorité 2 : Remplissage maximal
+                    })
+            
+            # --- 3. ARBITRAGE PARETO ---
+            if simulations:
+                # Tri : Temps croissant, puis Occupation décroissante (-)
+                simulations.sort(key=lambda x: (x['temps'], -x['occupation']))
                 
-                ids_elus = [j.job_id for j in comb_directe if j.job_id != job_pivot.job_id]
-                restants = [j for j in restants if j.job_id not in ids_elus]
-                continue 
-
-        # --- PRIORITÉ 2 : ARBITRAGE COMPLEXE (Multi-Pick / Multi-Drop) ---
-        # On délègue à evaluer_strategie avec le taux_max dynamique
-        sj_dest, score_dest, membres_dest = evaluer_strategie(
-            job_pivot, restants, "dest_group", taux_max_cible, matrice_duree
-        )
-        sj_dep, score_dep, membres_dep = evaluer_strategie(
-            job_pivot, restants, "origin_group", taux_max_cible, matrice_duree
-        )
-
-        # ARBITRAGE PAR LE SCORE :
-        # Le score inclut déjà la pénalité de remplissage et le temps de trajet.
-        # On choisit le score le plus FAIBLE (coût minimal).
-        if score_dest <= score_dep:
-            meilleur_sj, elus = sj_dest, membres_dest
-        else:
-            meilleur_sj, elus = sj_dep, membres_dep
-
-        # Si aucun regroupement n'a été trouvé (camion solo)
-        if len(elus) <= 1:
-            meilleur_sj = SuperJob([job_pivot], matrice_duree)
-            elus = [job_pivot]
-
-        super_jobs_optimises.append(meilleur_sj)
+                meilleur = simulations[0]
+                
+                # On valide l'ajout du meilleur candidat
+                current_jobs.append(restants.pop(meilleur['index']))
+                
+                # Vérification du seuil de sortie (si le pic de charge atteint le seuil)
+                if meilleur['occupation'] >= (taux_max_cible - 0.005):
+                    continuer_remplissage = False
+            else:
+                # Aucun candidat compatible trouvé
+                continuer_remplissage = False
         
-        # Nettoyage
-        ids_elus = [j.job_id for j in elus if j.job_id != job_pivot.job_id]
-        restants = [j for j in restants if j.job_id not in ids_elus]
+        # --- 4. FINALISATION DU SUPERJOB ---
+        new_sj = SuperJob(
+            super_job_id=f"OPT_SOL_{len(super_jobs_optimises)+1}",
+            v_type=current_jobs[0].vehicule_type,
+            liste_jobs=current_jobs,
+            matrice_duree=matrice_duree,
+            df_vehicules=df_vehicules,
+            df_sites=df_sites
+        )
+        super_jobs_optimises.append(new_sj)
 
     return super_jobs_optimises
 
 
-
-
-def evaluer_strategie(job_pivot, candidats_pool, attribut_groupe, taux_max, matrice):
-    """
-    Explore une stratégie de regroupement (par Origine ou par Destination).
-    Optimisée pour maximiser le remplissage (vorace).
-    """
-    valeur_groupe = getattr(job_pivot, attribut_groupe)
-    
-    # 1. Filtrage des partenaires compatibles (Même groupe + Même type véhicule + Hygiène)
-    partenaires = [
-        j for j in candidats_pool 
-        if getattr(j, attribut_groupe) == valeur_groupe 
-        and j.vehicule_type == job_pivot.vehicule_type
-        and j.type_propre_sale == job_pivot.type_propre_sale
-    ]
-    
-    # Tri vorace : on essaie de caser les plus gros volumes d'abord
-    partenaires.sort(key=lambda x: x.taux_occupation, reverse=True)
-    
-    groupe_retenu = [job_pivot]
-    cumul_occ = job_pivot.taux_occupation
-    
-    # Paramètres basés sur le taux_max dynamique de l'interface
-    SEUIL_CIBLE = max(0, taux_max - 0.20)
-    LIMITE_NB_JOBS = 15 
-
-    for p in partenaires:
-        # Vérification de la capacité physique
-        if (cumul_occ + p.taux_occupation) <= (taux_max + 0.0001):
-            if len(groupe_retenu) < LIMITE_NB_JOBS:
-                groupe_retenu.append(p)
-                cumul_occ += p.taux_occupation
-        
-        # Sortie anticipée si le camion est quasi-plein
-        if cumul_occ >= taux_max - 0.01:
-            break
-
-    # 2. Création du SuperJob pour calcul de l'itinéraire et du temps
-    sj_temp = SuperJob(groupe_retenu, matrice)
-    
-    # 3. Calcul du Score avec pénalité de vide
-    # On utilise la méthode de la classe SuperJob pour le temps de trajet
-    score = sj_temp.calculer_poids_mobilisation()
-    
-    if cumul_occ < SEUIL_CIBLE:
-        # Si on est sous le seuil de rentabilité, on dégrade le score
-        # pour favoriser une autre stratégie qui remplirait mieux le camion
-        score += (SEUIL_CIBLE - cumul_occ) * 1000 
-    
-    return sj_temp, score, groupe_retenu
-
-
-def convertir_complets_en_super_jobs(jobs_complets, matrice_duree):
+def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules, df_sites):
     """
     Transforme chaque Job complet en un SuperJob unique.
-    Cela permet d'unifier la suite du traitement (lissage, ordonnancement).
+    Indispensable pour l'unification du traitement (ordonnancement et lissage).
     """
     super_jobs_complets = []
     
-    for j in jobs_complets:
-        # On crée un SuperJob contenant un seul job
-        sj = SuperJob([j], matrice_duree)
+    for i, j in enumerate(jobs_complets):
+        # On crée un SuperJob avec les paramètres requis par le __init__
+        sj = SuperJob(
+            super_job_id=f"DIRECT_COMPLET_{i+1}",
+            v_type=j.vehicule_type,
+            liste_jobs=[j],
+            matrice_duree=matrice_duree,
+            df_vehicules=df_vehicules,
+            df_sites=df_sites
+        )
         
-        # On lui donne un tag spécifique pour le suivi dans les logs
+        # On marque l'origine pour la traçabilité
         sj.type_combinaison = "DIRECT_COMPLET"
+        
+        # Le type_logistique sera automatiquement "GROUPAGE_PUR" 
+        # (puisque 1 seul couple origine/destination)
         
         super_jobs_complets.append(sj)
         
     return super_jobs_complets
 
+
+
 def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree):
     """
     Transforme les flux bruts du jour en une liste de SuperJobs optimisés.
+    Architecture mise à jour avec les nouveaux paramètres d'instanciation.
     """
     # ETAPE 1 : Choix du véhicule et calcul capacité utile
     df_eclate = Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites)
@@ -810,16 +780,20 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         jobs_c, jobs_i = fragmenter_en_jobs(df_v, v_type, df_vehicules, df_contenants)
         
         # ETAPE 3 : Conversion des complets en SuperJobs
-        sj_complets = convertir_complets_en_super_jobs(jobs_c, matrice_duree)
+        # AJOUT : df_vehicules et df_sites pour l'init de SuperJob
+        sj_complets = convertir_complets_en_super_jobs(jobs_c, matrice_duree, df_vehicules, df_sites)
         
         # ETAPE 4 : Gestion des tournées imposées
-        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree)
+        # AJOUT : df_vehicules et df_sites
+        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree, df_vehicules, df_sites)
         
         # ETAPE 5 : Préparation de la pile (Reliquats + Solitaires)
+        # Cette fonction utilise sj.type_logistique pour l'arbitrage
         sj_scelles, pile_a_optimiser = preparer_pile_optimisation(sj_imposes, solitaires_initiaux)
         
         # ETAPE 6 : Arbitrage et optimisation des solitaires
-        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree)
+        # AJOUT : df_vehicules et df_sites
+        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree, df_vehicules, df_sites)
         
         # Fusion pour ce type de véhicule
         tous_les_super_jobs_du_jour.extend(sj_complets)
@@ -830,49 +804,52 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
 
 
 
-
-
 def calculer_nmax_par_type(liste_super_jobs):
     """
-    Calcule l'intensité de charge ventilée par type de véhicule.
-    Retourne un dictionnaire {type_v: [intensités]} et le Nmax global.
+    Calcule l'intensité de charge (besoin en camions) ventilée par type de véhicule.
+    Retourne un dictionnaire { 'TYPE_V': [48 intensités (1 par 30min)] }.
     """
     import math
     nb_creneaux = 48
     pas = 30
     
-    # Dictionnaire pour stocker l'intensité par type : { 'SEMI': [0.0]*48, 'VL': [0.0]*48 }
     intensite_par_type = {}
 
     for sj in liste_super_jobs:
+        # On utilise le type de véhicule affecté au SuperJob
         v_type = sj.v_type
         if v_type not in intensite_par_type:
             intensite_par_type[v_type] = [0.0] * nb_creneaux
             
+        # h_dispo_min et h_deadline_min sont calculés dans le __init__ du SuperJob
         t_debut = sj.h_dispo_min
         t_fin_autorisee = sj.h_deadline_min
-        poids_total = sj.poids_total
-        amplitude = max(1, t_fin_autorisee - t_debut)
+        poids_total = sj.poids_total # Durée de la mission en minutes
         
+        amplitude = max(1, t_fin_autorisee - t_debut)
         ratio_theorique = poids_total / amplitude
 
-        # --- CAS A : Lissage ---
+        # --- CAS A : Lissage (La mission est plus courte que la fenêtre disponible) ---
         if ratio_theorique <= 1:
             curr = t_debut
             while curr < t_fin_autorisee:
                 idx = int((curr % 1440) // pas)
+                if idx >= nb_creneaux: break
                 fin_creneau = (idx + 1) * pas
                 temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
+                # On répartit la charge proportionnellement
                 intensite_par_type[v_type][idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
                 curr += temps_dans_ce_creneau
 
-        # --- CAS B : Débordement ---
+        # --- CAS B : Débordement / Saturation (La mission est plus longue que la fenêtre) ---
         else:
             poids_restant = poids_total
             curr = t_debut
             while poids_restant > 0 and curr < 1440:
                 idx = int((curr % 1440) // pas)
+                if idx >= nb_creneaux: break
                 fin_creneau = (idx + 1) * pas
+                # On consomme 100% de la capacité du créneau jusqu'à épuisement du poids_total
                 consommation = min(poids_restant, fin_creneau - curr)
                 intensite_par_type[v_type][idx] += (consommation / pas)
                 poids_restant -= consommation
@@ -883,8 +860,8 @@ def calculer_nmax_par_type(liste_super_jobs):
 
 def calculer_nmax_theorique(liste_super_jobs):
     """
-    Calcule l'intensité de charge globale (tous types confondus).
-    Retourne (Nmax_arrondi, liste_intensites_48_creneaux).
+    Calcule l'intensité de charge globale pour déterminer le nombre de chauffeurs requis.
+    Retourne (Nmax_final_arrondi, liste_des_48_creneaux).
     """
     import math
     nb_creneaux = 48
@@ -896,11 +873,10 @@ def calculer_nmax_theorique(liste_super_jobs):
         t_fin_autorisee = sj.h_deadline_min
         poids_total = sj.poids_total
         
-        # Amplitude de la fenêtre de tir
         amplitude = max(1, t_fin_autorisee - t_debut)
         ratio_theorique = poids_total / amplitude
 
-        # --- CAS A : Lissage (Charge répartie sur toute la fenêtre) ---
+        # On applique la même logique de répartition que dans la fonction précédente
         if ratio_theorique <= 1:
             curr = t_debut
             while curr < t_fin_autorisee:
@@ -910,8 +886,6 @@ def calculer_nmax_theorique(liste_super_jobs):
                 temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
                 intensite_creneaux[idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
                 curr += temps_dans_ce_creneau
-
-        # --- CAS B : Saturation (Le job prend 100% du temps camions dès le début) ---
         else:
             poids_restant = poids_total
             curr = t_debut
@@ -924,12 +898,14 @@ def calculer_nmax_theorique(liste_super_jobs):
                 poids_restant -= consommation
                 curr += consommation
 
-    # Calcul du Nmax avec une marge de sécurité (ex: 20%)
+    # Récupération du pic maximum sur 24h
     pic_max = max(intensite_creneaux) if intensite_creneaux else 0
+    
+    # On applique une marge de sécurité (ici 20%) pour absorber les aléas de route
+    # et on arrondit à l'entier supérieur (on ne peut pas avoir 4.5 chauffeurs)
     n_max_theorique = math.ceil(pic_max * 1.20)
     
     return n_max_theorique, intensite_creneaux
-
 
 
 def lancer_simulation(liste_super_jobs):
