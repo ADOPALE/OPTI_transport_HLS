@@ -460,6 +460,11 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     # que le camion peut atteindre le point de départ peu importe où il était avant.
     toutes_distances = []
 
+    valeurs_numeriques = matrice_duree.iloc[:, 1:]
+
+    # Pour obtenir le maximum global proprement avec Pandas :
+    temps_approche_max = valeurs_numeriques.max().max()
+    """   
     if hasattr(matrice_duree, 'iloc'): 
         m_dict = matrice_duree.set_index(matrice_duree.columns[0]).to_dict('index')
     else:
@@ -468,7 +473,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     for depart in m_dict.values():
         toutes_distances.extend(depart.values())
     temps_approche_max = max(toutes_distances) if toutes_distances else 60
-
+    """
     duree_totale = 0
     h_dispo_max = max(to_min(j.h_dispo) for j in temp_list)
     h_deadline_min = min(to_min(j.h_deadline) for j in temp_list)
