@@ -450,7 +450,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
         t_q = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0] if not v_info.empty else 15
         s_info = df_sites[df_sites.iloc[:, 0] == site]
         st.error(f"🚨 La colonne 'Présence de quai' est introuvable. Colonnes dispo : {list(s_info.columns)}")
-        has_q = "OUI" in str(s_info['Présence de quai'].values[0]).upper() if not s_info.empty else True
+        has_q = "OUI" in str(s_info['PRÉSENCE DE QUAI'].values[0]).upper() if not s_info.empty else True
         col = "Manutention avec quai (minutes / contenants)" if has_q else "Manutention sans quai (minutes / contenants)"
         t_c = v_info[col].values[0] if not v_info.empty else 2
         return t_q, t_c
