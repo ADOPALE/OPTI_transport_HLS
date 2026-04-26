@@ -249,7 +249,7 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         n_depart = max(1, math.floor(pic_charge * 0.8)) # On tente d'abord avec un peu moins que le pic
         n_limite = math.ceil(pic_charge * 1.5) # Limite haute de recherche
         
-        st.info(f"Analyse **{v_type}** : Tentative d'optimisation des ressources...")
+        st.info(f"Analyse **{v_type}** : Tentative d'optimisation des ressources avec **{n_limite}** véhicules max...")
         
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
         if not jobs_v: continue
