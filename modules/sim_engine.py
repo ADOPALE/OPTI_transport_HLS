@@ -120,7 +120,7 @@ class SuperJob:
         a_un_quai = False
         if not site_info.empty:
             # On gère l'espace dans "Présence de quai "
-            val_quai = str(site_info["Présence de quai "].values[0]).upper()
+            val_quai = str(site_info['Présence de quai'].values[0]).upper()
             a_un_quai = "OUI" in val_quai or "1" in val_quai
 
         # 3. Sélection du T_CONT (Chargement/Déchargement)
