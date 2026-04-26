@@ -282,6 +282,10 @@ elif selected == "Synthèse transport":
                             
                             # B. Calcul Intensité (Besoin théorique)
                             intensite_dict = calculer_nmax_par_type(liste_globale_sj)
+
+                            st.write(f"**📈 Courbe d'intensité théorique ({jour_sel})**")
+                            labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
+                            st.area_chart(pd.DataFrame(intensite_dict, index=labels_h))
                             
                             # C. Séquençage Optimisé (Recherche du minimum de camions réels)
                             st.write(f"  ↳ 🧠 Optimisation de l'ordonnancement...")
