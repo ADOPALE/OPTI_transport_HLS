@@ -452,6 +452,8 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
         has_q = "OUI" in str(s_info['PRÉSENCE DE QUAI'].values[0]).upper() if not s_info.empty else True
         col = "Manutention avec quai (minutes / contenants)" if has_q else "Manutention sans quai (minutes / contenants)"
         t_c = v_info[col].values[0] if not v_info.empty else 2
+        t_q = to_min(t_q)
+        t_c = to_min(t_c)
         return t_q, t_c
 
 
