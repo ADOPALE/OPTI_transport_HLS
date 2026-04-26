@@ -18,49 +18,7 @@ def get_couloir_id(sj):
     pts = sorted([sj.points_depart[0], sj.points_arrivee[-1]])
     return f"{pts[0]}--{pts[1]}"
 
-def est_sj_disponible_dynamique(sj, minute_actuelle, matrice_duree):
-    """
-    Vérifie la disponibilité du SuperJob selon sa typologie logistique.
-    - GROUPAGE / DISTRIBUTION : Tous les jobs doivent être prêts immédiatement.
-    - CHAINAGE / RAMASSAGE : Disponibilité progressive (juste-à-temps).
-    """
-    
-    # --- CAS 1 : LOGIQUE "TOUT OU RIEN" (Groupage Pur ou Distribution) ---
-    # Si c'est du groupage, le camion charge tout au même endroit au début.
-    # Si c'est de la distribution, tout doit être chargé avant de partir en tournée.
-    if sj.type_logistique in ['GROUPAGE_PUR', 'DISTRIBUTION']:
-        for job in sj.liste_jobs:
-            if to_min(job.h_dispo) > minute_actuelle:
-                return False # Un des éléments du lot n'est pas encore prêt
-        return True
 
-    # --- CAS 2 : LOGIQUE "FLUX TENDU" (Chainage ou Ramassage) ---
-    # Ici, on valide si le timing permet de récupérer chaque maillon au bon moment.
-    
-    # Le premier job doit au moins être prêt pour démarrer
-    if to_min(sj.liste_jobs[0].h_dispo) > minute_actuelle:
-        return False
-    
-    temps_cumule = minute_actuelle
-    position_simulee = sj.points_depart[0]
-    
-    for i, job in enumerate(sj.liste_jobs):
-        # Pour les jobs suivants (i > 0), on calcule l'heure d'arrivée estimée
-        if i > 0:
-            # Trajet entre la destination du job précédent et l'origine du job actuel
-            trajet_interne = matrice_duree.get(position_simulee, {}).get(job.origin, 0)
-            temps_cumule += trajet_interne
-            
-            # Le job est-il prêt au moment de l'arrivée estimée ?
-            if temps_cumule < to_min(job.h_dispo):
-                return False # Rupture de flux : le camion arriverait trop tôt
-        
-        # Le temps avance : Manutention + Trajet de livraison du job en cours
-        duree_job = job.poids_total if hasattr(job, 'poids_total') else 30
-        temps_cumule += duree_job
-        position_simulee = job.destination
-        
-    return True
 
 def calculer_stress_maillon_critique(sj, minute_actuelle, matrice_duree, p_position_actuelle):
     """
@@ -156,21 +114,69 @@ class PosteChauffeur:
 # 3. MOTEUR DE SIMULATION (Ajusté pour SuperJob)
 # =================================================================
 
-def selectionner_meilleur_job(p, dispos, minute, matrice_duree):
-    candidats_evalues = []
-    for j in dispos:
-        if est_sj_disponible_dynamique(j, minute, matrice_duree):
-            stress_max = calculer_stress_maillon_critique(j, minute, matrice_duree, p.position_actuelle)
-            dist_approche = matrice_duree.get(p.position_actuelle, {}).get(j.points_depart[0], 0)
-            bonus_couloir = 50 if get_couloir_id(j) == p.couloir_actuel else 0
-            
-            # Arbitrage Pareto : Stress (Priorité) vs Proximité
-            score = stress_max + bonus_couloir - (dist_approche * 1.5)
-            candidats_evalues.append({'job': j, 'score': score})
+def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule):
+    """
+    Sélectionne le meilleur SuperJob pour le chauffeur 'p'.
+    Logique : 
+    1. Top N jobs les plus stressés.
+    2. Priorité : Même couloir/Sur place > Sur place > Même zone.
+    3. Sinon : Le plus proche parmi le Top N.
+    """
+    if not dispos:
+        return None
 
-    if not candidats_evalues: return None
-    candidats_evalues.sort(key=lambda x: x['score'], reverse=True)
-    return candidats_evalues[0]['job']
+    # --- 1. CALCUL DU STRESS ET TRI INITIAL ---
+    liste_candidats = []
+    for sj in dispos:
+        # Calcul de l'urgence (LST)
+        stress = calculer_stress_maillon_critique(sj, minute, matrice_duree, p.position_actuelle)
+        liste_candidats.append({'sj': sj, 'stress': stress})
+    
+    # Tri par stress décroissant (le plus urgent en premier)
+    liste_candidats.sort(key=lambda x: x['stress'], reverse=True)
+
+    # --- 2. RESTRICTION AU TOP N (N = I_simule) ---
+    # On ne travaille que sur les 'I' missions les plus urgentes
+    top_n_jobs = [item['sj'] for item in liste_candidats[:I_simule]]
+
+    # Récupération du couloir du dernier job effectué par le chauffeur
+    couloir_precedent = getattr(p, 'couloir_actuel', None)
+
+    # --- 3. LOGIQUE DE DÉCISION (SI / ALORS) ---
+
+    # RÈGLE 1 : Même couloir ET sur place (Origine = Position actuelle)
+    if couloir_precedent:
+        for sj in top_n_jobs:
+            if get_couloir_id(sj) == couloir_precedent:
+                if sj.points_depart[0] == p.position_actuelle:
+                    return sj
+
+    # RÈGLE 2 : Sur place uniquement (Origine = Position actuelle)
+    for sj in top_n_jobs:
+        if sj.points_depart[0] == p.position_actuelle:
+            return sj
+
+    # RÈGLE 3 : Proximité de zone (Même groupe/ville)
+    # Comparaison des 3 premières lettres du code site
+    for sj in top_n_jobs:
+        if sj.points_depart[0][:3] == p.position_actuelle[:3]:
+            return sj
+
+    # --- 4. RÈGLE FINALE : LE PLUS PROCHE PARMI LE TOP N ---
+    # Si aucune règle de proximité immédiate n'est remplie, 
+    # on choisit le job qui a la distance d'approche la plus courte.
+    
+    best_sj_proximite = None
+    dist_min = float('inf')
+
+    for sj in top_n_jobs:
+        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+        
+        if dist_approche < dist_min:
+            dist_min = dist_approche
+            best_sj_proximite = sj
+            
+    return best_sj_proximite
 
 
 def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
