@@ -7,6 +7,7 @@ from datetime import time, datetime, timedelta
 # 1. UTILITAIRES & LOGIQUE DE SÉLECTION (MISES À JOUR)
 # =================================================================
 
+
 def to_min(t):
     if isinstance(t, (time, datetime)):
         return t.hour * 60 + t.minute
