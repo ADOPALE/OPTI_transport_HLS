@@ -239,7 +239,9 @@ elif selected == "Synthèse transport":
         df_vehicules = st.session_state['data']['param_vehicules']
         df_contenants = st.session_state['data']['param_contenants']
         df_sites = st.session_state['data']['param_sites']
-        matrice_duree = st.session_state['data'].get('matrice_duree')
+        # On récupère, on définit la 1ère colonne comme index, et on convertit en dictionnaire
+        matrice_duree = st.session_state['data']['matrice_duree'].set_index(st.session_state['data']['matrice_duree'].columns[0]).to_dict('index')
+        #matrice_duree = st.session_state['data'].get('matrice_duree')
         params_logistique = st.session_state.get('params_logistique')
 
         # Fonction utilitaire pour l'affichage
