@@ -963,11 +963,10 @@ def lancer_simulation(liste_super_jobs):
 
 
 
-
-
-
-
-
+def to_min(t):
+    if isinstance(t, (time, datetime)):
+        return t.hour * 60 + t.minute
+    return float(t)
 
 
 
