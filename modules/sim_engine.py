@@ -75,6 +75,15 @@ class SuperJob:
         
         # Identification du type logistique
         self.type_logistique = self._determiner_type_logistique()
+
+        # 1. Heure de disponibilité du SuperJob (le MAX des h_dispo)
+        # On ne peut démarrer que quand TOUS les jobs sont prêts
+        self.h_dispo_min = max(to_min(j.h_dispo) for j in liste_jobs) if liste_jobs else 0
+        
+        # 2. Deadline du SuperJob (le MIN des h_deadline)
+        # On doit avoir fini avant la contrainte la plus stricte
+        self.h_deadline_min = min(to_min(j.h_deadline) for j in liste_jobs) if liste_jobs else 1440
+
         
         # Calcul avec les vrais paramètres
         self.poids_total = self.calculer_duree_operationnelle(matrice_duree, df_vehicules, df_sites)
