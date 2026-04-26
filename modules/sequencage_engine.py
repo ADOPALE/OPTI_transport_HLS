@@ -184,7 +184,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
-    pas = 5
+    pas = 1
     
     try:
         depot_initial = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
