@@ -585,7 +585,7 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
                 candidat = liste_j[idx]
                 
                 # Utilisation de la fonction de compatibilité robuste
-                compatible = est_compatible_sj_et_job(
+                compatible, variable_innutile = est_compatible_sj_et_job(
                     current_sj_jobs, 
                     candidat, 
                     matrice_duree, 
