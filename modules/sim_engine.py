@@ -459,7 +459,13 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     # On récupère la plus longue distance possible dans le réseau pour garantir 
     # que le camion peut atteindre le point de départ peu importe où il était avant.
     toutes_distances = []
-    for depart in matrice_duree.values():
+
+    if hasattr(matrice_duree, 'iloc'): 
+        m_dict = matrice_duree.set_index(matrice_duree.columns[0]).to_dict('index')
+    else:
+        m_dict = matrice_duree # C'est déjà un dict ou un objet compatible
+        
+    for depart in m_dict.values():
         toutes_distances.extend(depart.values())
     temps_approche_max = max(toutes_distances) if toutes_distances else 60
 
