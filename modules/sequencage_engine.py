@@ -19,34 +19,45 @@ def get_couloir_id(sj):
 
 def est_sj_disponible_dynamique(sj, minute_actuelle, matrice_duree):
     """
-    Vérifie si le SJ est 'exécutable' sans attente excessive.
-    On vérifie que pour CHAQUE segment, le camion n'arrive pas avant h_dispo.
+    Vérifie la disponibilité du SuperJob selon sa typologie logistique.
+    - GROUPAGE / DISTRIBUTION : Tous les jobs doivent être prêts immédiatement.
+    - CHAINAGE / RAMASSAGE : Disponibilité progressive (juste-à-temps).
     """
-    # 1. Le camion doit au moins pouvoir démarrer le premier job
-    if to_min(sj.h_dispo_min) > minute_actuelle:
+    
+    # --- CAS 1 : LOGIQUE "TOUT OU RIEN" (Groupage Pur ou Distribution) ---
+    # Si c'est du groupage, le camion charge tout au même endroit au début.
+    # Si c'est de la distribution, tout doit être chargé avant de partir en tournée.
+    if sj.type_logistique in ['GROUPAGE_PUR', 'DISTRIBUTION']:
+        for job in sj.liste_jobs:
+            if to_min(job.h_dispo) > minute_actuelle:
+                return False # Un des éléments du lot n'est pas encore prêt
+        return True
+
+    # --- CAS 2 : LOGIQUE "FLUX TENDU" (Chainage ou Ramassage) ---
+    # Ici, on valide si le timing permet de récupérer chaque maillon au bon moment.
+    
+    # Le premier job doit au moins être prêt pour démarrer
+    if to_min(sj.liste_jobs[0].h_dispo) > minute_actuelle:
         return False
     
     temps_cumule = minute_actuelle
-    # On simule le trajet interne du SuperJob
-    # Note : Le SuperJob contient déjà la logique de trajet dans sj.poids_total,
-    # mais ici on vérifie la synchronisation avec les h_dispo de chaque maillon.
-    
-    pos_actuelle = sj.points_depart[0]
+    position_simulee = sj.points_depart[0]
     
     for i, job in enumerate(sj.liste_jobs):
-        # Trajet pour aller au point de collecte du job i
-        trajet_vers_collecte = matrice_duree.get(pos_actuelle, {}).get(job.origin, 0)
-        temps_cumule += trajet_vers_collecte
+        # Pour les jobs suivants (i > 0), on calcule l'heure d'arrivée estimée
+        if i > 0:
+            # Trajet entre la destination du job précédent et l'origine du job actuel
+            trajet_interne = matrice_duree.get(position_simulee, {}).get(job.origin, 0)
+            temps_cumule += trajet_interne
+            
+            # Le job est-il prêt au moment de l'arrivée estimée ?
+            if temps_cumule < to_min(job.h_dispo):
+                return False # Rupture de flux : le camion arriverait trop tôt
         
-        # Si le camion arrive avant que le job ne soit prêt :
-        # On considère que le SJ n'est pas encore 'disponible' pour garantir la fluidité
-        if temps_cumule < to_min(job.h_dispo):
-            return False
-        
-        # Le temps avance : Manutention + Trajet vers livraison
-        # On utilise ici une estimation simplifiée ou le poids du job
-        temps_cumule += (job.poids_total if hasattr(job, 'poids_total') else 30)
-        pos_actuelle = job.destination
+        # Le temps avance : Manutention + Trajet de livraison du job en cours
+        duree_job = job.poids_total if hasattr(job, 'poids_total') else 30
+        temps_cumule += duree_job
+        position_simulee = job.destination
         
     return True
 
