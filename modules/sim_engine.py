@@ -874,7 +874,7 @@ def calculer_nmax_par_type(liste_super_jobs):
             intensite_par_type[v_type] = [0.0] * nb_creneaux
             
         # h_dispo_min et h_deadline_min sont calculés dans le __init__ du SuperJob
-        t_debut = min(to_min(j.h_dispo) for j in sj.liste_jobs)
+        t_debut = sj.h_dispo_min
         t_fin_autorisee = min(to_min(j.h_deadline) for j in sj.liste_jobs)
         poids_total = sj.poids_total # Durée de la mission en minutes
         
