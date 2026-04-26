@@ -704,7 +704,7 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicule
     
     # --- AJOUT : RÉCUPÉRATION DE LA LIMITE DE DURÉE ---
     # On récupère l'amplitude (ex: 450 min) et on définit le plafond à 50%
-    plafond_duree_sj = params.get("rh", {}).get("duree_max_superjob", 225)
+    plafond_duree_sj = params.get("duree_max_superjob", 225)
     
     super_jobs_optimises = []
     restants = jobs_solitaires.copy()
