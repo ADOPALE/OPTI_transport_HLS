@@ -693,11 +693,99 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
     return super_jobs_scelles, pile_a_optimiser
 
 
+
 def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites):
+    """
+    Regroupe les jobs solitaires en limitant la durée totale du SJ 
+    à 50% de l'amplitude maximale d'un poste.
+    """
+    params = st.session_state["params_logistique"]
+    taux_max_cible = params.get("securite_remplissage", 0.9)
+    
+    # --- AJOUT : RÉCUPÉRATION DE LA LIMITE DE DURÉE ---
+    # On récupère l'amplitude (ex: 450 min) et on définit le plafond à 50%
+    amplitude_max = params.get("rh", {}).get("amplitude_totale", 450)
+    plafond_duree_sj = amplitude_max / 3
+    
+    super_jobs_optimises = []
+    restants = jobs_solitaires.copy()
+
+    # On commence par les jobs les plus lourds
+    restants.sort(key=lambda x: x.taux_occupation, reverse=True)
+
+    while restants:
+        job_pivot = restants.pop(0)
+        current_jobs = [job_pivot]
+        
+        continuer_remplissage = True
+        while continuer_remplissage:
+            simulations = []
+            
+            for i, candidat in enumerate(restants):
+                # 1. Vérification de compatibilité standard (Volume, Horaires)
+                if est_compatible_sj_et_job(current_jobs, candidat, matrice_duree, 
+                                            df_vehicules, df_sites, taux_max_cible):
+                    
+                    # 2. Création virtuelle pour tester la nouvelle durée
+                    sj_simul = SuperJob(
+                        super_job_id="SIMUL",
+                        v_type=current_jobs[0].vehicule_type,
+                        liste_jobs=current_jobs + [candidat],
+                        matrice_duree=matrice_duree,
+                        df_vehicules=df_vehicules,
+                        df_sites=df_sites
+                    )
+                    
+                    # --- CONDITION DE GARDE-FOU ---
+                    # On n'ajoute le candidat que si le SJ reste "casable" (< 50% amplitude)
+                    if sj_simul.poids_total <= plafond_duree_sj:
+                        
+                        segments = {}
+                        for j in sj_simul.liste_jobs:
+                            cle_segment = (j.origin, j.destination)
+                            segments.setdefault(cle_segment, []).append(j)
+                        
+                        occ_pic = max(sum(j.taux_occupation for j in j_list) for j_list in segments.values())
+                        
+                        simulations.append({
+                            'index': i,
+                            'temps': sj_simul.poids_total,
+                            'occupation': occ_pic
+                        })
+            
+            # --- ARBITRAGE ET VALIDATION ---
+            if simulations:
+                simulations.sort(key=lambda x: (x['temps'], -x['occupation']))
+                meilleur = simulations[0]
+                
+                current_jobs.append(restants.pop(meilleur['index']))
+                
+                # Sortie si remplissage cible atteint
+                if meilleur['occupation'] >= (taux_max_cible - 0.005):
+                    continuer_remplissage = False
+            else:
+                continuer_remplissage = False
+        
+        # FINALISATION
+        new_sj = SuperJob(
+            super_job_id=f"OPT_SOL_{len(super_jobs_optimises)+1}",
+            v_type=current_jobs[0].vehicule_type,
+            liste_jobs=current_jobs,
+            matrice_duree=matrice_duree,
+            df_vehicules=df_vehicules,
+            df_sites=df_sites
+        )
+        super_jobs_optimises.append(new_sj)
+
+    return super_jobs_optimises
+"""
+def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites):
+    """
     """
     Regroupe les jobs solitaires (et reliquats) selon une logique de Pivot :
     1. Priorité au Temps Total du SJ minimal (Efficacité trajet)
     2. Priorité au Remplissage 'Pic' maximal (Optimisation volume)
+    """
     """
     params = st.session_state["params_logistique"]
     taux_max_cible = params.get("securite_remplissage", 0.9)
@@ -778,7 +866,7 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicule
         super_jobs_optimises.append(new_sj)
 
     return super_jobs_optimises
-
+"""
 
 def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules, df_sites):
     """
