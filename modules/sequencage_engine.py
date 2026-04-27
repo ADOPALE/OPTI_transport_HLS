@@ -328,7 +328,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
                 # --- 1. DÉFINITION DES SEUILS ---
                 besoin_pause = (temps_travaille >= 150 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 270 and not p.pause_faite)
+                besoin_pause_imperatif = (temps_travaille >= 180 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
                 # --- 2. GESTION DES PRIORITÉS ---
@@ -336,7 +336,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 # CAS A : BESOIN IMPÉRATIF (Fin de poste ou Pause > 270 min)
                 if besoin_fin or besoin_pause_imperatif:
                     best_sj = selectionner_meilleur_job_retour(
-                        p, dispos, minute, matrice_travail, I, 
+                        p, dispos, minute, matrice_travail, len(dispo), 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
                     )
                     
@@ -367,7 +367,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 # CAS B : BESOIN OPPORTUNISTE (Pause entre 150 et 270 min)
                 elif besoin_pause:
                     best_sj = selectionner_meilleur_job_retour(
-                        p, dispos, minute, matrice_travail, I, 
+                        p, dispos, minute, matrice_travail, len(dispo), 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
                     )
                     
