@@ -303,7 +303,7 @@ elif selected == "Synthèse transport":
                                 comptage_jour = {"Jour": jour, "Véhicules Réels": n_camions_total}
                                 # On ventile par type de poste pour le tableau
                                 for p in res_opti["postes"]:
-                                    key = f"Postes {p.vehicule_type}"
+                                    key = f"{p.vehicule_type}"
                                     comptage_jour[key] = comptage_jour.get(key, 0) + 1
                                 
                                 resultats_hebdo.append(comptage_jour)
@@ -348,19 +348,6 @@ elif selected == "Synthèse transport":
                 res_flux.afficher_gantt_chauffeur_detaille(postes_jour, type_choisi)
                 
             
-            # --- 3. Tableau des SuperJobs ---
-            with st.expander(f"Voir le détail des {len(liste_sj_jour)} SuperJobs"):
-                recap_sj = []
-                for i, sj in enumerate(liste_sj_jour):
-                    recap_sj.append({
-                        "ID": f"SJ_{i+1:02d}",
-                        "Type": sj.v_type,
-                        "Occupation": f"{round(sj.taux_occupation_total * 100, 1)}%",
-                        "Flux": len(sj.liste_jobs),
-                        "Poids (min)": int(sj.poids_total),
-                        "Deadline": fmt_heure_safe(sj.h_deadline_min)
-                    })
-                st.dataframe(pd.DataFrame(recap_sj), use_container_width=True)
 
     else:
         st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
