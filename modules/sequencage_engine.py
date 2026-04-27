@@ -79,6 +79,33 @@ def calculer_stress_maillon_critique(sj, minute_actuelle, matrice_duree, p_posit
     
     return score_stress
 
+
+def obtenir_couloir_groupage_prioritaire(jobs_restants):
+    """
+    Identifie le couloir (Zone A -> Zone B) ayant le plus de trajets 
+    cumulés dans des SuperJobs de type GROUPAGE_PUR.
+    """
+    stats_couloirs = {}
+    
+    for sj in jobs_restants:
+        if sj.type_logistique == 'GROUPAGE_PUR':
+            # On définit le couloir par les zones (3 premières lettres)
+            zone_dep = sj.points_depart[0][:3]
+            zone_arr = sj.points_arrivee[-1][:3]
+            c_id = f"{zone_dep}--{zone_arr}"
+            
+            # On compte le nombre de jobs (trajets) contenus dans ce SuperJob
+            nb_trajets = len(sj.liste_jobs)
+            stats_couloirs[c_id] = stats_couloirs.get(c_id, 0) + nb_trajets
+            
+    if not stats_couloirs:
+        return None
+        
+    # Retourne l'ID du couloir le plus chargé en trajets de groupage
+    return max(stats_couloirs, key=stats_couloirs.get)
+
+
+
 # =================================================================
 # 2. CLASSE POSTE CHAUFFEUR (Inchangée mais nécessaire)
 # =================================================================
@@ -126,8 +153,27 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule):
     if not dispos:
         return None
 
-    # --- 1. CALCUL DU STRESS ET TRI INITIAL ---
     liste_candidats = []
+    # --- RÈGLE STRATÉGIQUE : 1er JOB (Priorité Groupage Massif) ---
+    if est_premier_job:
+        c_prioritaire = obtenir_couloir_groupage_prioritaire(jobs_restants)
+        
+        if c_prioritaire:
+            # On cherche dans les dispos un SJ qui correspond à ce couloir (en zones)
+            candidats = []
+            for sj in dispos:
+                z_dep = sj.points_depart[0][:3]
+                z_arr = sj.points_arrivee[-1][:3]
+                if f"{z_dep}--{z_arr}" == c_prioritaire:
+                    candidats.append(sj)
+            
+            if candidats:
+                # On prend le plus urgent (stress) parmi ces candidats stratégiques
+                candidats.sort(key=lambda x: calculer_stress_maillon_critique(x, minute, matrice_duree, p.position_actuelle), reverse=True)
+                return candidats[0]
+
+    # --- 1. CALCUL DU STRESS ET TRI INITIAL ---
+    
     for sj in dispos:
         # Calcul de l'urgence (LST)
         stress = calculer_stress_maillon_critique(sj, minute, matrice_duree, p.position_actuelle)
