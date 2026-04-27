@@ -232,14 +232,12 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     h_end = to_min(rh.get('h_fin_max', 1380))
     pas = 1 
     
-    # --- GESTION DE L'ALÉA CIRCULATION ---
     facteur_alea = 1 + (params_logistique.get('alea_circulation', 0) / 100)
     matrice_travail = {
         origine: {dest: duree * facteur_alea for dest, duree in destinations.items()}
         for origine, destinations in matrice_duree.items()
     }
     
-    # --- MARGE INTER-JOBS ---
     marge_interjob = params_logistique.get('marge_interjob', 0)
 
     try:
@@ -247,63 +245,60 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     except:
         depot_initial = "DEPOT"
 
-    # Initialisation des I véhicules
     postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I)]
     jobs_restants = list(liste_sj_type)
     minute = h_start
 
     while minute <= h_end:
-        # --- 1. MISE À JOUR DES ÉTATS ---
         for p in postes:
             if p.temps_restant_etat > 0:
                 p.temps_restant_etat -= pas
                 continue
             
-            # Transitions d'états
+            # --- ÉTAPE 1 : MISE À JOUR DES TRANSITIONS ---
             if p.etat == 'PRISE_POSTE':
                 p.etat = 'DISPONIBLE'
                 p.vehicule_deja_affecte = True
 
             elif p.etat == 'EN_TRAJET_VIDE':
-                if p.job_en_cours: # Arrivée pour collecte (approche)
+                if p.job_en_cours: # Arrivée pour ramassage
                     p.position_actuelle = p.job_en_cours.points_depart[0]
                     p.etat = 'EN_MISSION'
                     p.temps_restant_etat = p.job_en_cours.poids_total
                     p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
-                else: # Arrivée au dépôt (Retour Dépôt fini)
+                else: # ARRIVÉE AU DÉPÔT (Retour à vide fini)
                     p.position_actuelle = p.stationnement_initial
                     temps_travaille = minute - p.h_debut_service_actuel
                     
-                    # Correction ici : On check si on doit finir le service ou faire la pause
+                    # LOGIQUE DE DÉCISION AU DÉPÔT
                     if temps_travaille >= p.amplitude_max - 65:
                         p.etat = 'FIN_DE_SERVICE'
                         p.temps_restant_etat = p.temps_passation
                         p.enregistrer(minute, "PASSATION_FIN")
                     elif not p.pause_faite:
+                        # ON FORCE LA PAUSE ICI
                         p.etat = 'EN_PAUSE'
                         p.temps_restant_etat = p.duree_pause
-                        p.enregistrer(minute, "EN_PAUSE")
+                        p.pause_faite = True # On marque la pause comme faite dès le début pour éviter les boucles
+                        p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
                     else:
                         p.etat = 'DISPONIBLE'
 
             elif p.etat == 'EN_MISSION':
-                # VÉRIFICATION DEADLINE
                 for job_u in p.job_en_cours.liste_jobs:
                     if minute > to_min(job_u.h_deadline):
                         return None
                 
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
-                
-                # Application de la marge inter-job
                 p.etat = 'DISPONIBLE'
                 p.temps_restant_etat = marge_interjob 
                 if marge_interjob > 0:
-                    p.enregistrer(minute, "ATTENTE_INTERJOB", details=f"{marge_interjob}min")
+                    p.enregistrer(minute, "ATTENTE_INTERJOB")
                 p.job_en_cours = None
 
             elif p.etat == 'EN_PAUSE':
-                p.pause_faite = True
+                # Sortie de pause
                 p.etat = 'DISPONIBLE'
                 p.enregistrer(minute, "REPRISE_APRES_PAUSE")
 
@@ -314,13 +309,12 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.couloir_actuel = None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
-        # --- 2. AFFECTATION DES JOBS ---
+        # --- ÉTAPE 2 : AFFECTATION DES JOBS ---
         dispos = [j for j in jobs_restants if to_min(j.h_dispo_min) <= minute]
 
         for p in postes:
             if p.temps_restant_etat > 0: continue
 
-            # Cas A : Camion libre au dépôt -> Nouveau chauffeur
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'
                 p.temps_restant_etat = 15
@@ -328,36 +322,45 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.enregistrer(minute, "PRISE_POSTE")
                 continue
 
-            # Cas B : Chauffeur en service et disponible
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
                 dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
 
-                # --- DÉTERMINATION DU BESOIN DE RETOUR ---
-                force_retour = False
-                if (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite) or (temps_travaille >= p.amplitude_max - 60):
-                    force_retour = True
+                # TRIGGER DE RETOUR
+                besoin_pause = (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite)
+                besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
-                if force_retour:
-                    # On tente de trouver un job qui ramène au dépôt
+                if besoin_pause or besoin_fin:
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, I, 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
                     )
                     
                     if best_sj:
+                        # On ne prend le job que s'il permet de finir avant l'amplitude max
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # Sinon, retour à vide
-                    p.etat = 'EN_TRAJET_VIDE'
-                    p.temps_restant_etat = dist_retour
-                    raison = "PAUSE" if not p.pause_faite else "FIN_DE_SERVICE"
-                    p.enregistrer(minute, "RETOUR_DEPOT", details=f"Retour pour {raison}")
+                    # SI ON EST ICI : Aucun job retour trouvé, on rentre au dépôt
+                    # On ne rentre que si on n'est pas déjà au dépôt !
+                    if p.position_actuelle != p.stationnement_initial:
+                        p.etat = 'EN_TRAJET_VIDE'
+                        p.temps_restant_etat = dist_retour
+                        raison = "PAUSE" if besoin_pause else "FIN_DE_SERVICE"
+                        p.enregistrer(minute, "RETOUR_DEPOT", details=f"Raison: {raison}")
+                    else:
+                        # Si déjà au dépôt, on déclenche directement
+                        if besoin_fin:
+                            p.etat = 'FIN_DE_SERVICE'
+                            p.temps_restant_etat = p.temps_passation
+                        elif besoin_pause:
+                            p.etat = 'EN_PAUSE'
+                            p.temps_restant_etat = p.duree_pause
+                            p.pause_faite = True
                     continue
 
-                # --- SÉLECTION STANDARD ---
+                # SÉLECTION STANDARD
                 if dispos:
                     est_premier = (p.couloir_actuel is None)
                     best_sj = selectionner_meilleur_job(
@@ -365,7 +368,6 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                         jobs_restants=jobs_restants, 
                         est_premier_job=est_premier
                     )
-                    
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
@@ -374,7 +376,6 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
         minute += pas
 
     return None
-
 def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_travail):
     """Version de affecter_job utilisant la matrice avec aléa"""
     dist_approche = matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
