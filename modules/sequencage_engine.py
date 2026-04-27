@@ -267,3 +267,68 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         else: st.error(f"❌ **{v_type}** : Échec.")
 
     return {"succes": len(postes_complets) > 0, "postes": postes_complets}
+
+
+
+
+def afficher_controle_coherence(liste_globale_sj, postes_complets):
+    """
+    Compare les flux demandés vs les flux réalisés par type de contenant.
+    """
+    st.subheader("Validator : Contrôle de cohérence des flux")
+    
+    # 1. Calcul du Théorique (ce qui était dans la liste de départ)
+    flux_theorique = {}
+    for sj in liste_globale_sj:
+        for job in sj.liste_jobs:
+            c_type = getattr(job, 'contenant', 'Inconnu')
+            flux_theorique[c_type] = flux_theorique.get(c_type, 0) + 1
+
+    # 2. Calcul du Réel (ce qui est présent dans l'historique des postes)
+    flux_reel = {c: 0 for c in flux_theorique.keys()}
+    jobs_vus = set() # Pour éviter les doublons si un historique est mal lu
+    
+    for p in postes_complets:
+        for h in p.historique:
+            if h['Activite'] == 'EN_MISSION' and h['SJ_ID'] != "N/A":
+                # On retrouve le SuperJob original pour compter ses jobs internes
+                sj_id = h['SJ_ID']
+                if sj_id not in jobs_vus:
+                    # On cherche le SJ dans la liste globale pour avoir le détail des contenants
+                    target_sj = next((s for s in liste_globale_sj if s.super_job_id == sj_id), None)
+                    if target_sj:
+                        for j_interne in target_sj.liste_jobs:
+                            c_type = getattr(j_interne, 'contenant', 'Inconnu')
+                            flux_reel[c_type] = flux_reel.get(c_type, 0) + 1
+                        jobs_vus.add(sj_id)
+
+    # 3. Construction de la Matrice (Tableau)
+    donnees_controle = []
+    total_theorique = 0
+    total_reel = 0
+
+    for contenant in sorted(flux_theorique.keys()):
+        theo = flux_theorique[contenant]
+        reel = flux_reel.get(contenant, 0)
+        status = "✅" if theo == reel else "❌"
+        
+        donnees_controle.append({
+            "Type de Contenant": contenant,
+            "Flux Théoriques": theo,
+            "Flux Réalisés": reel,
+            "Statut": status
+        })
+        total_theorique += theo
+        total_reel += reel
+
+    # Affichage dans Streamlit
+    df_controle = pd.DataFrame(donnees_controle)
+    
+    # Ajout d'une ligne de total pour la visibilité globale
+    st.table(df_controle)
+    
+    if total_theorique == total_reel:
+        st.success(f"Cohérence parfaite : {total_reel}/{total_theorique} missions effectuées.")
+    else:
+        diff = total_theorique - total_reel
+        st.error(f"Attention : {diff} missions n'ont pas été planifiées !")
