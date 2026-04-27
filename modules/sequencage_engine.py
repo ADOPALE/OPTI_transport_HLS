@@ -328,7 +328,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
                 # --- 1. DÉFINITION DES SEUILS ---
                 besoin_pause = (temps_travaille >= 150 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 270 and not p.pause_faite) # Ton seuil des 270 min
+                besoin_pause_imperatif = (temps_travaille >= 210 and not p.pause_faite) # Ton seuil des 270 min
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
                 # --- 2. GESTION DES PRIORITÉS ---
