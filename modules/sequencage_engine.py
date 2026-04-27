@@ -412,7 +412,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 """
                 # --- 3. SÉLECTION STANDARD (Pour ceux qui n'ont PAS besoin de pause) ---
                 if dispos:
-                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I, jobs_restants, (p.couloir_actuel is None))
+                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, les(dispos), jobs_restants, (p.couloir_actuel is None))
                     if best_sj:
                         # Vérification sécurité amplitude
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
