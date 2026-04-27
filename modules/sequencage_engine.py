@@ -227,10 +227,11 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule, jobs_r
     return best_sj_proximite
 
 
-def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
+def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
+    h_bascule = 780  # 13h00 : Heure à partir de laquelle on cherche à réduire la flotte
     pas = 1 
     
     facteur_alea = 1 + (params_logistique.get('alea_circulation', 0) / 100)
@@ -240,17 +241,15 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     }
     
     marge_interjob = params_logistique.get('marge_interjob', 0)
-
     filtre = df_vehicules[df_vehicules['Types'] == v_type]
 
     if not filtre.empty:
         depot_initial = filtre['Stationnement initial'].iloc[0]
     else:
-        # Débug si le v_type envoyé par la boucle ne matche pas le tableau
-        print(f"⚠️ Type '{v_type}' absent de df_vehicules. Valeurs : {df_vehicules['Types'].unique()}")
-        depot_initial = "HSJ" # Valeur par défaut visible sur ton image
+        depot_initial = "HSJ"
 
-    postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I)]
+    # On initialise avec le nombre de véhicules du MATIN
+    postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I_matin)]
     jobs_restants = list(liste_sj_type)
     minute = h_start
 
@@ -266,30 +265,28 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.vehicule_deja_affecte = True
 
             elif p.etat == 'EN_TRAJET_VIDE':
-                if p.job_en_cours: # Arrivée pour ramassage
+                if p.job_en_cours:
                     p.position_actuelle = p.job_en_cours.points_depart[0]
                     p.etat = 'EN_MISSION'
                     p.temps_restant_etat = p.job_en_cours.poids_total
                     p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
-                else: # ARRIVÉE AU DÉPÔT (Retour à vide fini)
+                else:
                     p.position_actuelle = p.stationnement_initial
                     temps_travaille = minute - p.h_debut_service_actuel
-                    
-                    # LOGIQUE DE DÉCISION AU DÉPÔT
                     if temps_travaille >= p.amplitude_max - p.temps_passation:
                         p.etat = 'FIN_DE_SERVICE'
                         p.temps_restant_etat = p.temps_passation
                         p.enregistrer(minute, "PASSATION_FIN")
                     elif not p.pause_faite:
-                        # ON FORCE LA PAUSE ICI
                         p.etat = 'EN_PAUSE'
                         p.temps_restant_etat = p.duree_pause
-                        p.pause_faite = True # On marque la pause comme faite dès le début pour éviter les boucles
+                        p.pause_faite = True
                         p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
                     else:
                         p.etat = 'DISPONIBLE'
 
             elif p.etat == 'EN_MISSION':
+                # Vérification critique des deadlines
                 for job_u in p.job_en_cours.liste_jobs:
                     if minute > to_min(job_u.h_deadline):
                         return None
@@ -298,12 +295,9 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
                 p.etat = 'DISPONIBLE'
                 p.temps_restant_etat = marge_interjob 
-                if marge_interjob > 0:
-                    p.enregistrer(minute, "ATTENTE_INTERJOB")
                 p.job_en_cours = None
 
             elif p.etat == 'EN_PAUSE':
-                # Sortie de pause
                 p.etat = 'DISPONIBLE'
                 p.enregistrer(minute, "REPRISE_APRES_PAUSE")
 
@@ -318,7 +312,22 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
         dispos = [j for j in jobs_restants if to_min(j.h_dispo_min) <= minute]
 
         for p in postes:
-            if p.temps_restant_etat > 0: continue
+            if p.temps_restant_etat > 0 or p.etat == 'INACTIF' and not dispos: 
+                continue
+
+            # LOGIQUE DE DÉZENGAGEMENT : Si on est l'après-midi et que le poste est excédentaire
+            idx_p = int(p.id_poste.split('_')[-1])
+            if p.etat == 'DISPONIBLE' and minute >= h_bascule and idx_p > I_am:
+                if p.position_actuelle == p.stationnement_initial:
+                    p.etat = 'FIN_DE_SERVICE'
+                    p.temps_restant_etat = p.temps_passation
+                    p.enregistrer(minute, "FIN_DE_SERVICE", details="Libération AM (Optimisation)")
+                else:
+                    dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                    p.etat = 'EN_TRAJET_VIDE'
+                    p.temps_restant_etat = dist_retour
+                    p.enregistrer(minute, "RETOUR_DEPOT", details="Retour pour libération AM")
+                continue
 
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'
@@ -329,83 +338,43 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
-                # On récupère le dépôt initial pour ce type de poste
                 dist_retour_actuel = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                 
-                # --- 1. SEUILS DE TEST / PROD ---
-                besoin_pause = (temps_travaille >= 60 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
+                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite) # Seuil test
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
-                
-                limite_critique_pause = 270 # Heure limite réelle pour la pause
+                limite_critique_pause = 270
 
-                # --- 2. CAS IMPÉRATIF : RETOUR FORCÉ ---
+                # CAS 1 : IMPÉRATIF
                 if besoin_fin or besoin_pause_imperatif:
-                    # On scanne TOUT pour essayer de rentrer intelligemment
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique=limite_critique_pause
                     )
-                    
                     if best_sj:
-                        # On vérifie juste que le job ne crève pas l'amplitude totale
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # SI PAS DE JOB RETOUR : RETOUR VIDE IMMÉDIAT
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat = 'EN_TRAJET_VIDE'
                         p.temps_restant_etat = dist_retour_actuel
-                        raison = "PAUSE IMPÉRATIVE" if besoin_pause_imperatif else "FIN_DE_SERVICE"
-                        p.enregistrer(minute, "RETOUR_DEPOT", details=f"Raison: {raison}")
+                        p.enregistrer(minute, "RETOUR_DEPOT", details="Force Impératif")
                     else:
-                        # Déjà sur place : on switch d'état
                         p.etat = 'FIN_DE_SERVICE' if besoin_fin else 'EN_PAUSE'
                         p.temps_restant_etat = p.temps_passation if besoin_fin else p.duree_pause
                         if not besoin_fin: p.pause_faite = True
-                    continue # BLOQUE l'accès à la sélection standard
+                    continue
 
-                # --- 3. CAS OPPORTUNISTE AVEC FILTRE STRICT ---
-                elif besoin_pause:
-                    # A. On cherche d'abord un job qui ramène au dépôt (Exhaustif)
-                    best_sj = selectionner_meilleur_job_retour(
-                        p, dispos, minute, matrice_travail, len(dispos), 
-                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique=limite_critique_pause
-                    )
-                    if best_sj:
-                        affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
-                        continue
-
-                    # B. FILTRAGE : Est-ce qu'une mission standard me permet de rentrer avant 270 min ?
-                    dispos_compatibles = []
-                    for sj in dispos:
-                        dist_approche = matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
-                        dist_retour_final = matrice_travail.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 30)
-                        
-                        # Calcul du temps total de travail SI on prend ce job
-                        temps_final_estime = (minute + dist_approche + sj.poids_total + dist_retour_final) - p.h_debut_service_actuel
-                        
-                        if temps_final_estime <= limite_critique_pause:
-                            dispos_compatibles.append(sj)
-                    
-                    if dispos_compatibles:
-                        best_sj = selectionner_meilleur_job(p, dispos_compatibles, minute, matrice_travail, I, jobs_restants)
-                        if best_sj:
-                            affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
-                            continue
-                    else:
-                        print(f"[{minute}] {p.id_poste} : Aucun job compatible avec la limite de 270min. Attente retour vide.")
-
-                # --- 4. SÉLECTION STANDARD (Chauffeurs sans besoin de pause) ---
+                # CAS 2 : OPPORTUNISTE / STANDARD
                 elif dispos:
-                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I, jobs_restants)
+                    # On utilise I_matin ici pour la sélection standard
+                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I_matin, jobs_restants)
                     if best_sj:
-                        # Vérification sécurité amplitude simple
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
-                            
-        if not jobs_restants: return postes
+
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE'] for p in postes):
+            return postes
         minute += pas
 
     return None
@@ -457,27 +426,41 @@ def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule,
 
 def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
     postes_complets = []
+    
     for v_type, val_max in n_max_dict.items():
-        # On utilise le pic d'intensité calculé précédemment comme point de départ
+        # Définition des bornes de recherche
         pic_charge = max(val_max) if isinstance(val_max, list) else val_max
-        n_depart = max(1, math.floor(pic_charge * 0.8)) # On tente d'abord avec un peu moins que le pic
-        n_limite = math.ceil(pic_charge * 3) # Limite haute de recherche
+        n_depart = max(1, math.floor(pic_charge * 0.7)) 
+        n_limite = math.ceil(pic_charge * 2.5) 
         
-        st.info(f"Analyse **{v_type}** : Tentative d'optimisation des ressources avec **{n_limite}** véhicules max...")
+        st.info(f"Analyse **{v_type}** : Recherche du couple optimal (Matin / Après-midi)...")
         
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
         if not jobs_v: continue
             
-        solution_trouvee = False
-        for I in range(n_depart, n_limite + 1):
-            res = simuler_faisabilite(I, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
-            if res:
-                st.success(f"✅ **{v_type}** : **{I}** véhicule(s) suffisent pour couvrir l'activité.")
-                postes_complets.extend(res)
-                solution_trouvee = True
-                break
+        solution_optimale = None
         
-        if not solution_trouvee:
-            st.error(f"❌ **{v_type}** : Impossible de trouver un planning. Vérifiez les deadlines.")
+        # --- DOUBLE BOUCLE D'OPTIMISATION ---
+        # im = Nombre de véhicules le MATIN (on cherche le minimum pour couvrir le pic)
+        for im in range(n_depart, n_limite + 1):
+            
+            # iam = Nombre de véhicules l'APRÈS-MIDI (on tente de réduire à partir de im)
+            # On commence par iam = 1 pour trouver la réduction la plus agressive
+            for iam in range(1, im + 1):
+                
+                # Attention : simuler_faisabilite doit maintenant accepter im et iam
+                res = simuler_faisabilite(im, iam, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+                
+                if res:
+                    st.success(f"✅ **{v_type}** : Trouvé avec {im} (Matin) / {iam} (Après-midi)")
+                    solution_optimale = res
+                    break # On a trouvé le iam min pour ce im, on sort de la boucle iam
+            
+            if solution_optimale:
+                postes_complets.extend(solution_optimale)
+                break # On a trouvé la solution avec le im le plus bas, on sort de la boucle im
+        
+        if not solution_optimale:
+            st.error(f"❌ **{v_type}** : Impossible de trouver un planning même avec {n_limite} véhicules.")
 
     return {"succes": len(postes_complets) > 0, "postes": postes_complets}
