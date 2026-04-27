@@ -227,7 +227,7 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule, jobs_r
     return best_sj_proximite
 
 
-def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
+def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
@@ -365,8 +365,9 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                 limite_critique_pause = 270
 
                 if besoin_fin or besoin_pause_imperatif:
+                    nb_Jobs = math.ceil(prio_tension * len(dispos)
                     best_sj = selectionner_meilleur_job_retour(
-                        p, dispos, minute, matrice_travail, len(dispos), 
+                        p, dispos, minute, matrice_travail, nb_Jobs, 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique=limite_critique_pause
                     )
                     if best_sj:
@@ -385,7 +386,8 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                     continue
 
                 elif dispos:
-                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I_matin, jobs_restants)
+                    nb_Jobs = math.ceil(prio_tension * len(dispos)
+                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants)
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
