@@ -365,7 +365,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 limite_critique_pause = 270
 
                 if besoin_fin or besoin_pause_imperatif:
-                    nb_Jobs = math.ceil(prio_tension * len(dispos)
+                    nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, nb_Jobs, 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique=limite_critique_pause
@@ -386,7 +386,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     continue
 
                 elif dispos:
-                    nb_Jobs = math.ceil(prio_tension * len(dispos)
+                    nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
                     best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants)
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
