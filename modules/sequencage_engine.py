@@ -333,8 +333,8 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 print(f"distance retour calculée = {dist_retour_actuel} : {p.position_actuelle} --> {p.stationnement_initial}")
                 
                 # --- 1. DÉFINITION DES SEUILS ---
-                besoin_pause = (temps_travaille >= 60 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
+                besoin_pause = (temps_travaille >= 0 and not p.pause_faite)
+                besoin_pause_imperatif = (temps_travaille >= 10 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
                 
                 limite_pause = 270 # Seuil maximal de travail avant pause (4h30)
