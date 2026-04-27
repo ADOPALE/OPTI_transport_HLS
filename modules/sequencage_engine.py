@@ -107,7 +107,7 @@ def obtenir_couloir_groupage_prioritaire(jobs_restants):
 
 
 # =================================================================
-# 2. CLASSE POSTE CHAUFFEUR (Inchangée mais nécessaire)
+# 2. CLASSE POSTE CHAUFFEUR
 # =================================================================
 
 class PosteChauffeur:
@@ -116,7 +116,7 @@ class PosteChauffeur:
         self.vehicule_type = v_type
         self.stationnement_initial = site_depot
         self.position_actuelle = site_depot
-        self.etat = 'INACTIF'  # INACTIF, PRISE_POSTE, DISPONIBLE, EN_TRAJET_VIDE, EN_MISSION, PAUSE, FIN_DE_SERVICE; FERMETURE AM
+        self.etat = 'INACTIF'  # INACTIF, PRISE_POSTE, DISPONIBLE, EN_TRAJET_VIDE, EN_MISSION, PAUSE, FIN_DE_SERVICE, OPTIMISATION_AM
         self.temps_restant_etat = 0
         self.job_en_cours = None
         self.couloir_actuel = None
@@ -312,19 +312,19 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                 p.couloir_actuel = None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
-        # --- ÉTAPE 2 : AFFECTATION ET DÉZENGAGEMENT ---
+        # --- ÉTAPE 2 : AFFECTATION ET DÉSENGAGEMENT ---
         dispos = [j for j in jobs_restants if to_min(j.h_dispo_min) <= minute]
 
         for p in postes:
-            # On ignore les véhicules déjà libérés ou occupés
-            if p.etat == 'OPTIMISATION_AM' or p.temps_restant_etat > 0:
+            # 1. On ignore les véhicules déjà libérés définitivement
+            if p.etat == 'OPTIMISATION_AM':
+                continue
+                
+            # 2. Si le véhicule est occupé, on passe au suivant
+            if p.temps_restant_etat > 0:
                 continue
             
-            # On ignore les inactifs s'il n'y a pas de travail
-            if p.etat == 'INACTIF' and not dispos:
-                continue
-
-            # --- LOGIQUE DE DÉSENGAGEMENT (I AM) ---
+            # --- LOGIQUE DE DÉSENGAGEMENT (I AM) PRIORITAIRE ---
             idx_p = int(p.id_poste.split('_')[-1])
             if p.etat == 'DISPONIBLE' and minute >= h_bascule and idx_p > I_am:
                 if p.position_actuelle == p.stationnement_initial:
@@ -336,6 +336,10 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                     p.etat = 'EN_TRAJET_VIDE'
                     p.temps_restant_etat = dist_retour
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour pour libération AM")
+                continue
+
+            # 3. On ignore les inactifs s'il n'y a pas de travail
+            if p.etat == 'INACTIF' and not dispos:
                 continue
 
             # --- PROCESSUS D'AFFECTATION STANDARD ---
@@ -449,24 +453,18 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         solution_optimale = None
         
         # --- DOUBLE BOUCLE D'OPTIMISATION ---
-        # im = Nombre de véhicules le MATIN (on cherche le minimum pour couvrir le pic)
         for im in range(n_depart, n_limite + 1):
-            
-            # iam = Nombre de véhicules l'APRÈS-MIDI (on tente de réduire à partir de im)
-            # On commence par iam = 1 pour trouver la réduction la plus agressive
             for iam in range(1, im + 1):
-                
-                # Attention : simuler_faisabilite doit maintenant accepter im et iam
                 res = simuler_faisabilite(im, iam, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
                 
                 if res:
                     st.success(f"✅ **{v_type}** : Trouvé avec {im} (Matin) / {iam} (Après-midi)")
                     solution_optimale = res
-                    break # On a trouvé le iam min pour ce im, on sort de la boucle iam
+                    break 
             
             if solution_optimale:
                 postes_complets.extend(solution_optimale)
-                break # On a trouvé la solution avec le im le plus bas, on sort de la boucle im
+                break 
         
         if not solution_optimale:
             st.error(f"❌ **{v_type}** : Impossible de trouver un planning même avec {n_limite} véhicules.")
