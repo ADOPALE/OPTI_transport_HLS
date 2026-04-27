@@ -383,7 +383,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 if dispos:
                     est_premier = (p.couloir_actuel is None)
                     best_sj = selectionner_meilleur_job(
-                        p, dispos, minute, matrice_travail, I, 
+                        p, dispos, minute, matrice_travail, len(dispos), 
                         jobs_restants=jobs_restants, 
                         est_premier_job=est_premier
                     )
