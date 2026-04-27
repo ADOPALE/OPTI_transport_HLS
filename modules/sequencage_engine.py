@@ -239,32 +239,63 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
         if not jobs_v: continue
             
-        meilleure_sol, min_v_total, max_occ = None, float('inf'), -1
+        meilleure_sol = None
+        # Initialisation des compteurs de référence
+        min_im = float('inf')
+        min_iam = float('inf')
+        max_occ = -1
 
         for tension in tensions_test:
             for im in range(n_depart, n_limite + 1):
-                if im > min_v_total: break
+                # Si on a déjà trouvé une solution avec un im plus petit, 
+                # on ne teste pas les im supérieurs (Optimisation)
+                if im > min_im: break 
+                
                 for iam in range(1, im + 1):
+                    # Si on est sur le même im, on ne teste pas les iam supérieurs au min déjà trouvé
+                    if im == min_im and iam > min_iam: break
+                    
                     res = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+                    
                     if res:
+                        # Calcul de la performance de cette solution
                         trav_utile, ampl_conso = 0, 0
                         for p in res:
                             if p.historique:
                                 ampl_conso += (p.historique[-1]['Minute_Debut'] - p.historique[0]['Minute_Debut'])
                                 for h in p.historique:
-                                    if h['Activite'] == 'EN_MISSION': trav_utile += h['sj_poids']
-                                    elif 'TRAJET_VIDE' in h['Activite'] or 'RETOUR' in h['Activite']: trav_utile += 15
+                                    if h['Activite'] == 'EN_MISSION': 
+                                        trav_utile += h.get('sj_poids', 0)
+                                    elif any(x in h['Activite'] for x in ['TRAJET_VIDE', 'RETOUR', 'INTERMISSION']): 
+                                        trav_utile += 15 # Valorisation du temps de trajet/attente
                         
                         taux_occ = trav_utile / max(ampl_conso, 1)
-                        if (im + iam) < min_v_total or ((im + iam) == min_v_total and taux_occ > max_occ):
-                            min_v_total, max_occ, meilleure_sol = (im + iam), taux_occ, res
-                        break
-                if meilleure_sol and (im + 1) > min_v_total: break
+
+                        # LOGIQUE DE DÉCISION HIÉRARCHIQUE :
+                        # 1. Est-ce que le nombre de véhicules (im) est meilleur ?
+                        if im < min_im:
+                            min_im, min_iam, max_occ, meilleure_sol = im, iam, taux_occ, res
+                        
+                        # 2. Si im identique, est-ce que le nombre de postes (iam) est meilleur ?
+                        elif im == min_im:
+                            if iam < min_iam:
+                                min_iam, max_occ, meilleure_sol = iam, taux_occ, res
+                            
+                            # 3. Si im et iam identiques, est-ce que le taux d'occupation est meilleur ?
+                            elif iam == min_iam:
+                                if taux_occ > max_occ:
+                                    max_occ, meilleure_sol = taux_occ, res
+                        
+                        # On a trouvé une solution pour ce couple (im, iam), 
+                        # on passe à la tension suivante ou on break selon besoin.
+                        # Ici on break iam car on cherche le iam MIN pour ce im.
+                        break 
 
         if meilleure_sol:
-            st.success(f"✅ **{v_type}** : Optimisé avec Taux Occ: {max_occ:.1%}")
+            st.success(f"✅ **{v_type}** : Optimisé (Im:{min_im}, Iam:{min_iam}, Occ:{max_occ:.1%})")
             postes_complets.extend(meilleure_sol)
-        else: st.error(f"❌ **{v_type}** : Échec.")
+        else:
+            st.error(f"❌ **{v_type}** : Échec de planification.")
 
     return {"succes": len(postes_complets) > 0, "postes": postes_complets}
 
