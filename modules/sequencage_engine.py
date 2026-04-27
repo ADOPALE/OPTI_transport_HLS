@@ -117,7 +117,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
-    h_bascule = h_start + to_min(rh.get('amplitude_totale', 450)) - 1
+    h_bascule = h_start + to_min(rh.get('amplitude_totale', 450)) - 100
     
     facteur_alea = 1 + (params_logistique.get('alea_circulation', 0) / 100)
     matrice_travail = {o: {d: dur * facteur_alea for d, dur in dests.items()} for o, dests in matrice_duree.items()}
@@ -161,7 +161,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
             elif p.etat == 'EN_MISSION':
                 p.position_actuelle, p.couloir_actuel, p.etat, p.job_en_cours = p.job_en_cours.points_arrivee[-1], get_couloir_id(p.job_en_cours), 'DISPONIBLE', None
             elif p.etat == 'EN_PAUSE': p.etat = 'DISPONIBLE'
-            elif p.etat == 'FIN_DE_SERVICE':
+            elif p.etat == 'FIN_DE_SERVICE' and p.temps_restant_etat == 0 :
                 p.etat, p.h_debut_service_actuel, p.pause_faite, p.couloir_actuel = 'INACTIF', None, False, None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
