@@ -450,7 +450,7 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
     for v_type, val_max in n_max_dict.items():
         # Définition des bornes de recherche
         pic_charge = max(val_max) if isinstance(val_max, list) else val_max
-        n_depart = max(1, math.floor(pic_charge * 0.7)) 
+        n_depart = max(1, math.floor(pic_charge * 0.5)) 
         n_limite = math.ceil(pic_charge * 2.5) 
         
         st.info(f"Analyse **{v_type}** : Recherche du couple optimal (Matin / Après-midi)...")
