@@ -347,7 +347,11 @@ elif selected == "Synthèse transport":
             if postes_jour:
                 st.write(f"**📅 Planning Gantt des chauffeurs ({jour_sel})**")
                 type_choisi = st.selectbox("Choisir un type", df_vehicules['Types'].unique())
-                res_flux.afficher_gantt_chauffeur_detaille(postes_jour, type_choisi)
+                res_flux.afficher_gantt_chauffeur_detaille(
+                    postes_jour, 
+                    type_choisi, 
+                    liste_globale_sj  # <--- Ajout du 3ème argument indispensable
+                )
 
                 
                 
