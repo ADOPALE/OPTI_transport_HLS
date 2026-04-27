@@ -242,6 +242,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
     try:
         depot_initial = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
+        print(f"[{depot_initial}]")
     except:
         depot_initial = "DEPOT"
 
@@ -325,7 +326,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
                 dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
-                print(f"[{dist_retour}]")
+                print(f"Position actuelle [{p.position_actuelle}]")
 
                 # --- 1. DÉFINITION DES SEUILS ---
                 besoin_pause = (temps_travaille >= 60 and not p.pause_faite)
