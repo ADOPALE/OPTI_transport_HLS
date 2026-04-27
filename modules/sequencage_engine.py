@@ -325,10 +325,11 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
                 dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                print(f"[{dist_retour}]")
 
                 # --- 1. DÉFINITION DES SEUILS ---
-                besoin_pause = (temps_travaille >= 150 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 180 and not p.pause_faite)
+                besoin_pause = (temps_travaille >= 60 and not p.pause_faite)
+                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
                 # --- 2. GESTION DES PRIORITÉS ---
