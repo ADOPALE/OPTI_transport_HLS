@@ -272,7 +272,7 @@ elif selected == "Synthèse transport":
                     from modules.sequencage_engine import trouver_meilleure_configuration_journee
 
                     with st.status("Exécution du Pipe Logistique...", expanded=True) as status:
-                        for jour in jours_semaine:
+                        for jour in jours_semaine[:1]:
                             st.write(f"🔄 Traitement du **{jour}**...")
                             
                             # A. Préparation & Consolidation
