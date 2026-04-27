@@ -116,7 +116,7 @@ class PosteChauffeur:
         self.vehicule_type = v_type
         self.stationnement_initial = site_depot
         self.position_actuelle = site_depot
-        self.etat = 'INACTIF'  # INACTIF, PRISE_POSTE, DISPONIBLE, EN_TRAJET_VIDE, EN_MISSION, PAUSE, FIN_DE_SERVICE
+        self.etat = 'INACTIF'  # INACTIF, PRISE_POSTE, DISPONIBLE, EN_TRAJET_VIDE, EN_MISSION, PAUSE, FIN_DE_SERVICE; FERMETURE AM
         self.temps_restant_etat = 0
         self.job_en_cours = None
         self.couloir_actuel = None
@@ -231,7 +231,8 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
-    h_bascule = 780  # 13h00 : Heure à partir de laquelle on cherche à réduire la flotte
+    # Heure de bascule basée sur l'amplitude légale à partir du début de journée
+    h_bascule = h_start + to_min(rh.get('amplitude_totale', 450)) - 1 
     pas = 1 
     
     facteur_alea = 1 + (params_logistique.get('alea_circulation', 0) / 100)
@@ -248,13 +249,17 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
     else:
         depot_initial = "HSJ"
 
-    # On initialise avec le nombre de véhicules du MATIN
+    # Initialisation avec la flotte complète du matin
     postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I_matin)]
     jobs_restants = list(liste_sj_type)
     minute = h_start
 
     while minute <= h_end:
         for p in postes:
+            # --- FILTRES DE SÉCURITÉ ---
+            if p.etat == 'OPTIMISATION_AM': 
+                continue
+            
             if p.temps_restant_etat > 0:
                 p.temps_restant_etat -= pas
                 continue
@@ -286,10 +291,9 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                         p.etat = 'DISPONIBLE'
 
             elif p.etat == 'EN_MISSION':
-                # Vérification critique des deadlines
                 for job_u in p.job_en_cours.liste_jobs:
                     if minute > to_min(job_u.h_deadline):
-                        return None
+                        return None # Échec de la configuration
                 
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
@@ -308,20 +312,25 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                 p.couloir_actuel = None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
-        # --- ÉTAPE 2 : AFFECTATION DES JOBS ---
+        # --- ÉTAPE 2 : AFFECTATION ET DÉZENGAGEMENT ---
         dispos = [j for j in jobs_restants if to_min(j.h_dispo_min) <= minute]
 
         for p in postes:
-            if p.temps_restant_etat > 0 or p.etat == 'INACTIF' and not dispos: 
+            # On ignore les véhicules déjà libérés ou occupés
+            if p.etat == 'OPTIMISATION_AM' or p.temps_restant_etat > 0:
+                continue
+            
+            # On ignore les inactifs s'il n'y a pas de travail
+            if p.etat == 'INACTIF' and not dispos:
                 continue
 
-            # LOGIQUE DE DÉZENGAGEMENT : Si on est l'après-midi et que le poste est excédentaire
+            # --- LOGIQUE DE DÉSENGAGEMENT (I AM) ---
             idx_p = int(p.id_poste.split('_')[-1])
             if p.etat == 'DISPONIBLE' and minute >= h_bascule and idx_p > I_am:
                 if p.position_actuelle == p.stationnement_initial:
-                    p.etat = 'FIN_DE_SERVICE'
-                    p.temps_restant_etat = p.temps_passation
-                    p.enregistrer(minute, "FIN_DE_SERVICE", details="Libération AM (Optimisation)")
+                    p.etat = 'OPTIMISATION_AM'
+                    p.temps_restant_etat = 9999 
+                    p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
                 else:
                     dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                     p.etat = 'EN_TRAJET_VIDE'
@@ -329,6 +338,7 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour pour libération AM")
                 continue
 
+            # --- PROCESSUS D'AFFECTATION STANDARD ---
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'
                 p.temps_restant_etat = p.temps_prise
@@ -340,11 +350,10 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                 temps_travaille = minute - p.h_debut_service_actuel
                 dist_retour_actuel = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                 
-                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite) # Seuil test
+                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
                 limite_critique_pause = 270
 
-                # CAS 1 : IMPÉRATIF
                 if besoin_fin or besoin_pause_imperatif:
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
@@ -365,15 +374,14 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                         if not besoin_fin: p.pause_faite = True
                     continue
 
-                # CAS 2 : OPPORTUNISTE / STANDARD
                 elif dispos:
-                    # On utilise I_matin ici pour la sélection standard
                     best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I_matin, jobs_restants)
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
 
-        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE'] for p in postes):
+        # Condition de sortie : plus de jobs et tout le monde est rentré (ou libéré par l'AM)
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM'] for p in postes):
             return postes
         minute += pas
 
