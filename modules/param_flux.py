@@ -126,7 +126,8 @@ def afficher_parametres_logistique():
                     "pause": pause_obs,
                     "h_prise_min": h_start,
                     "h_fin_max": h_end,
-                    "temps_fixes": t_prise + t_fin,
+                    "temps_fixes_prise": t_prise,
+                    "temps_fixes_fin":  t_fin,
                     "temps_productif_max": duree_poste - (pause_obs + t_prise + t_fin)
                 },
                 "securite_remplissage": taux_remplissage / 100,
