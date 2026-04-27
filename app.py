@@ -26,7 +26,8 @@ from modules.sim_engine import (
     traitement_flux_recurrents, 
     ordonnancer_flotte_optimale,
     preparer_flux_complets_du_jour, # Ajoutez celle-ci
-    tunnel_consolidation_flux       # Ajoutez celle-ci
+    tunnel_consolidation_flux,
+    afficher_controle_coherence# Ajoutez celle-ci
 )
 from modules.sequencage_engine import trouver_meilleure_configuration_journee
 import modules.Resultats_simul_flux as res_flux
@@ -346,6 +347,8 @@ elif selected == "Synthèse transport":
                 st.write(f"**📅 Planning Gantt des chauffeurs ({jour_sel})**")
                 type_choisi = st.selectbox("Choisir un type", df_vehicules['Types'].unique())
                 res_flux.afficher_gantt_chauffeur_detaille(postes_jour, type_choisi)
+
+                afficher_controle_coherence(liste_globale_sj, res_opti["postes"])
                 
             
 
