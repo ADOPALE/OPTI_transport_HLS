@@ -116,7 +116,7 @@ class PosteChauffeur:
         self.vehicule_type = v_type
         self.stationnement_initial = site_depot
         self.position_actuelle = site_depot
-        self.etat = 'INACTIF'  # INACTIF, PRISE_POSTE, DISPONIBLE, EN_TRAJET_VIDE, EN_MISSION, PAUSE, FIN_DE_SERVICE, OPTIMISATION_AM
+        self.etat = 'INACTIF' 
         self.temps_restant_etat = 0
         self.job_en_cours = None
         self.couloir_actuel = None
@@ -278,6 +278,15 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                 else:
                     p.position_actuelle = p.stationnement_initial
                     temps_travaille = minute - p.h_debut_service_actuel
+                    
+                    # LOGIQUE PRIORITAIRE POUR L'AM LORS DU RETOUR AU DÉPÔT
+                    idx_p = int(p.id_poste.split('_')[-1])
+                    if minute >= h_bascule and idx_p > I_am:
+                        p.etat = 'OPTIMISATION_AM'
+                        p.temps_restant_etat = 9999 
+                        p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
+                        continue
+
                     if temps_travaille >= p.amplitude_max - p.temps_passation:
                         p.etat = 'FIN_DE_SERVICE'
                         p.temps_restant_etat = p.temps_passation
@@ -293,7 +302,7 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
             elif p.etat == 'EN_MISSION':
                 for job_u in p.job_en_cours.liste_jobs:
                     if minute > to_min(job_u.h_deadline):
-                        return None # Échec de la configuration
+                        return None 
                 
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
@@ -316,15 +325,12 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
         dispos = [j for j in jobs_restants if to_min(j.h_dispo_min) <= minute]
 
         for p in postes:
-            # 1. On ignore les véhicules déjà libérés définitivement
-            if p.etat == 'OPTIMISATION_AM':
-                continue
-                
-            # 2. Si le véhicule est occupé, on passe au suivant
-            if p.temps_restant_etat > 0:
+            # 1. On ignore les véhicules déjà libérés ou occupés
+            if p.etat == 'OPTIMISATION_AM' or p.temps_restant_etat > 0:
                 continue
             
-            # --- LOGIQUE DE DÉSENGAGEMENT (I AM) PRIORITAIRE ---
+            # --- LOGIQUE DE DÉSENGAGEMENT (I AM) ---
+            # On place cette vérification AVANT de regarder si le véhicule est INACTIF
             idx_p = int(p.id_poste.split('_')[-1])
             if p.etat == 'DISPONIBLE' and minute >= h_bascule and idx_p > I_am:
                 if p.position_actuelle == p.stationnement_initial:
@@ -338,7 +344,7 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour pour libération AM")
                 continue
 
-            # 3. On ignore les inactifs s'il n'y a pas de travail
+            # 2. On ignore les inactifs s'il n'y a pas de travail
             if p.etat == 'INACTIF' and not dispos:
                 continue
 
