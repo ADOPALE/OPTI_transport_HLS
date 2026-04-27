@@ -102,7 +102,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne):
         legend_title_text="Légende Activités",
         height=400 + (len(postes_filtres) * 25), # Hauteur dynamique selon le nombre de camions
         barmode='stack', # Empilement horizontal
-        hoverlabel=dict(bgcolor="white", font_size=12)
+        hoverlabel=dict(bgcolor="black", font_size=12)
     )
 
     # Ajout d'une ligne verticale pour l'heure actuelle (optionnel mais utile)
