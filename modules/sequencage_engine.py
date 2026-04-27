@@ -446,35 +446,39 @@ def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule,
 
 def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
     postes_complets = []
+    tensions_test = [0.2, 0.4, 0.6, 0.8, 1.0]
     
     for v_type, val_max in n_max_dict.items():
-        # Définition des bornes de recherche
         pic_charge = max(val_max) if isinstance(val_max, list) else val_max
-        n_depart = max(1, math.floor(pic_charge * 0.5)) 
-        n_limite = math.ceil(pic_charge * 2.5) 
-        
-        st.info(f"Analyse **{v_type}** : Recherche du couple optimal (Matin / Après-midi)...")
-        
+        n_depart, n_limite = max(1, math.floor(pic_charge * 0.5)), math.ceil(pic_charge * 2.5)
         jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
         if not jobs_v: continue
             
-        solution_optimale = None
-        
-        # --- DOUBLE BOUCLE D'OPTIMISATION ---
-        for im in range(n_depart, n_limite + 1):
-            for iam in range(1, im + 1):
-                res = simuler_faisabilite(im, iam, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
-                
-                if res:
-                    st.success(f"✅ **{v_type}** : Trouvé avec {im} (Matin) / {iam} (Après-midi)")
-                    solution_optimale = res
-                    break 
-            
-            if solution_optimale:
-                postes_complets.extend(solution_optimale)
-                break 
-        
-        if not solution_optimale:
-            st.error(f"❌ **{v_type}** : Impossible de trouver un planning même avec {n_limite} véhicules.")
+        meilleure_sol, min_v_total, max_occ = None, float('inf'), -1
+
+        for tension in tensions_test:
+            for im in range(n_depart, n_limite + 1):
+                if im > min_v_total: break
+                for iam in range(1, im + 1):
+                    res = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+                    if res:
+                        trav_utile, ampl_conso = 0, 0
+                        for p in res:
+                            if p.historique:
+                                ampl_conso += (p.historique[-1]['Minute_Debut'] - p.historique[0]['Minute_Debut'])
+                                for h in p.historique:
+                                    if h['Activite'] == 'EN_MISSION': trav_utile += h['sj_poids']
+                                    elif 'TRAJET_VIDE' in h['Activite'] or 'RETOUR' in h['Activite']: trav_utile += 15
+                        
+                        taux_occ = trav_utile / max(ampl_conso, 1)
+                        if (im + iam) < min_v_total or ((im + iam) == min_v_total and taux_occ > max_occ):
+                            min_v_total, max_occ, meilleure_sol = (im + iam), taux_occ, res
+                        break
+                if meilleure_sol and (im + 1) > min_v_total: break
+
+        if meilleure_sol:
+            st.success(f"✅ **{v_type}** : Optimisé avec Taux Occ: {max_occ:.1%}")
+            postes_complets.extend(meilleure_sol)
+        else: st.error(f"❌ **{v_type}** : Échec.")
 
     return {"succes": len(postes_complets) > 0, "postes": postes_complets}
