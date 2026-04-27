@@ -230,14 +230,24 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
-    pas = 1 # Pas de temps précis à 1 minute
+    pas = 1 
     
+    # --- NOUVEAU : GESTION DE L'ALÉA CIRCULATION ---
+    # On récupère le facteur (ex: 10 pour +10%) et on l'applique à une copie de la matrice
+    facteur_alea = 1 + (params_logistique.get('alea_circulation', 0) / 100)
+    matrice_travail = {
+        origine: {dest: duree * facteur_alea for dest, duree in destinations.items()}
+        for origine, destinations in matrice_duree.items()
+    }
+    
+    # --- NOUVEAU : MARGE INTER-JOBS ---
+    marge_interjob = params_logistique.get('marge_interjob', 0)
+
     try:
         depot_initial = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
     except:
         depot_initial = "DEPOT"
 
-    # Initialisation des I véhicules
     postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I)]
     jobs_restants = list(liste_sj_type)
     minute = h_start
@@ -249,18 +259,17 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.temps_restant_etat -= pas
                 continue
             
-            # Transitions après expiration du temps restant
             if p.etat == 'PRISE_POSTE':
                 p.etat = 'DISPONIBLE'
                 p.vehicule_deja_affecte = True
 
             elif p.etat == 'EN_TRAJET_VIDE':
-                if p.job_en_cours: # Arrivée pour collecte
+                if p.job_en_cours:
                     p.position_actuelle = p.job_en_cours.points_depart[0]
                     p.etat = 'EN_MISSION'
                     p.temps_restant_etat = p.job_en_cours.poids_total
                     p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
-                else: # Arrivée au dépôt pour Pause ou Fin
+                else:
                     p.position_actuelle = p.stationnement_initial
                     temps_travaille = minute - p.h_debut_service_actuel
                     if temps_travaille >= p.amplitude_max - 65:
@@ -273,14 +282,20 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                         p.enregistrer(minute, "EN_PAUSE")
 
             elif p.etat == 'EN_MISSION':
-                # VÉRIFICATION DEADLINE : Si un maillon est en retard, on invalide la simulation
+                # Vérification deadline
                 for job_u in p.job_en_cours.liste_jobs:
                     if minute > to_min(job_u.h_deadline):
                         return None
                 
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
-                p.couloir_actuel = get_couloir_id(p.job_en_cours) # Mise à jour du couloir après mission
+                p.couloir_actuel = get_couloir_id(p.job_en_cours)
+                
+                # MODIFICATION : On applique la marge inter-job avant de rendre le camion disponible
                 p.etat = 'DISPONIBLE'
+                p.temps_restant_etat = marge_interjob 
+                if marge_interjob > 0:
+                    p.enregistrer(minute, "ATTENTE_INTERJOB", details=f"Marge de {marge_interjob}min")
+                
                 p.job_en_cours = None
 
             elif p.etat == 'EN_PAUSE':
@@ -289,11 +304,10 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.enregistrer(minute, "REPRISE_APRES_PAUSE")
 
             elif p.etat == 'FIN_DE_SERVICE':
-                # RESET du poste pour le chauffeur suivant sur le même véhicule
                 p.etat = 'INACTIF'
                 p.h_debut_service_actuel = None
                 p.pause_faite = False
-                p.couloir_actuel = None # IMPORTANT : Permet d'activer la règle "Premier Job" pour le suivant
+                p.couloir_actuel = None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
         # --- 2. AFFECTATION DES JOBS ---
@@ -302,7 +316,6 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
         for p in postes:
             if p.temps_restant_etat > 0: continue
 
-            # Cas A : Camion libre au dépôt -> Nouveau chauffeur prend son poste
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'
                 p.temps_restant_etat = 15
@@ -310,22 +323,21 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.enregistrer(minute, "PRISE_POSTE")
                 continue
 
-            # Cas B : Chauffeur en service et disponible
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
-                dist_retour = matrice_duree.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                # Utilisation de la matrice_travail (avec aléa)
+                dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
 
-                # --- GESTION PAUSE ET FIN DE POSTE ---
                 force_retour = False
                 if (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite) or (temps_travaille >= p.amplitude_max - 60):
                     force_retour = True
 
                 if force_retour:
-                    # Ici on passe I (nombre de véhicules simule) à la fonction de retour
-                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I, jobs_restants, est_premier_job = (p.couloir_actuel is None))
+                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_travail, I, jobs_restants, est_premier_job=(p.couloir_actuel is None))
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
-                            affecter_job(p, best_sj, jobs_restants, dispos, minute, matrice_duree)
+                            # On utilise matrice_travail pour l'affectation
+                            affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
                     p.etat = 'EN_TRAJET_VIDE'
@@ -333,29 +345,26 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour vers Pause/Fin")
                     continue
 
-                # --- CAS STANDARD ---
                 if dispos:
-                    # On détermine si c'est le 1er job pour activer la stratégie de flux groupage
                     est_premier = (p.couloir_actuel is None)
-                    
-                    # APPEL MIS À JOUR avec jobs_restants et est_premier_job
                     best_sj = selectionner_meilleur_job(
-                        p, dispos, minute, matrice_duree, I, 
+                        p, dispos, minute, matrice_travail, I, 
                         jobs_restants=jobs_restants, 
                         est_premier_job=est_premier
                     )
                     
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
-                            affecter_job(p, best_sj, jobs_restants, dispos, minute, matrice_duree)
+                            affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
 
         if not jobs_restants: return postes
         minute += pas
 
     return None
 
-def affecter_job(p, sj, jobs_restants, dispos, minute, matrice_duree):
-    dist_approche = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_travail):
+    """Version de affecter_job utilisant la matrice avec aléa"""
+    dist_approche = matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
     p.job_en_cours = sj
     jobs_restants.remove(sj)
     if sj in dispos: dispos.remove(sj)
