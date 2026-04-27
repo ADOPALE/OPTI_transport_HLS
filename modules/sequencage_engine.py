@@ -322,7 +322,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
                 if force_retour:
                     # Ici on passe I (nombre de véhicules simule) à la fonction de retour
-                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I, jobs_restants, est_premier_job=false)
+                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I, jobs_restants, est_premier_job = (p.couloir_actuel is None))
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job(p, best_sj, jobs_restants, dispos, minute, matrice_duree)
