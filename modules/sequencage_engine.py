@@ -123,7 +123,7 @@ class PosteChauffeur:
         self.h_debut_service_actuel = None 
         self.pause_faite = False
         self.historique = []
-        self.amplitude_max = params_rh.get('amplitude_totale', 540) # ex: 9h
+        self.amplitude_max = params_rh.get('amplitude_totale', 450) # ex: 9h
         self.duree_pause = params_rh.get('pause', 45)
         self.temps_passation = params_rh.get('temps_fixes', 30)
         self.vehicule_deja_affecte = False # Pour savoir si on initialise à t ou t-15
@@ -338,7 +338,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     
                     if best_sj:
                         # On ne prend le job que s'il permet de finir avant l'amplitude max
-                        if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
+                        if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
