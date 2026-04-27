@@ -350,7 +350,7 @@ elif selected == "Synthèse transport":
                 res_flux.afficher_gantt_chauffeur_detaille(
                     postes_jour, 
                     type_choisi, 
-                    liste_globale_sj  # <--- Ajout du 3ème argument indispensable
+                    liste_sj_jour  # <--- Ajout du 3ème argument indispensable
                 )
 
                 
