@@ -344,7 +344,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     # On scanne TOUT pour essayer de rentrer intelligemment
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
-                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique_pause
+                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique=limite_critique_pause
                     )
                     
                     if best_sj:
@@ -371,7 +371,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     # A. On cherche d'abord un job qui ramène au dépôt (Exhaustif)
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
-                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique_pause
+                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique=limite_critique_pause
                     )
                     if best_sj:
                         affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
@@ -422,7 +422,7 @@ def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_trav
     p.enregistrer(minute, "EN_TRAJET_VIDE", sj, "Approche Mission")
 
 
-def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule, jobs_restants, est_premier_job=False, limite_critique):
+def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule, jobs_restants, est_premier_job=False, limite_critique=270):
     """
     Variante : Priorise les jobs qui ramènent vers le stationnement initial 
     ET qui permettent de rentrer avant la limite critique de travail.
