@@ -328,7 +328,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
                 # --- 1. DÉFINITION DES SEUILS ---
                 besoin_pause = (temps_travaille >= 150 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 210 and not p.pause_faite) # Ton seuil des 270 min
+                besoin_pause_imperatif = (temps_travaille >= 270 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
                 # --- 2. GESTION DES PRIORITÉS ---
@@ -341,12 +341,14 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     )
                     
                     if best_sj:
-                        # On vérifie quand même que le job ne nous fait pas exploser l'amplitude
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # SI PAS DE JOB RETOUR OU TROP LONG : ON FORCE LE RETOUR À VIDE
+                    # LOG DE DÉBOGAGE : FORCE LE RETOUR
+                    h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
+                    print(f"[{h_log}] {p.id_poste} : FORCE RETOUR À VIDE (Travail: {temps_travaille}min)")
+                    
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat = 'EN_TRAJET_VIDE'
                         p.temps_restant_etat = dist_retour
@@ -360,11 +362,10 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                             p.etat = 'EN_PAUSE'
                             p.temps_restant_etat = p.duree_pause
                             p.pause_faite = True
-                    continue # On ne regarde jamais la sélection standard si on est en impératif
+                    continue
 
                 # CAS B : BESOIN OPPORTUNISTE (Pause entre 150 et 270 min)
                 elif besoin_pause:
-                    # On cherche UNIQUEMENT un job qui ramène
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, I, 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
@@ -375,11 +376,10 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # SI PAS DE JOB RETOUR : On continue vers la SÉLECTION STANDARD (ton souhait)
-                    # On ne met pas de "continue" ici pour laisser le code descendre
+                    # Si on arrive ici, c'est qu'on a besoin de pause mais pas de job retour trouvé
+                    # Le code va donc descendre vers la sélection standard.
 
                 # --- 3. SÉLECTION STANDARD ---
-                # S'exécute si : Pas besoin de pause OU (Besoin pause opportuniste ET pas de job retour trouvé)
                 if dispos:
                     est_premier = (p.couloir_actuel is None)
                     best_sj = selectionner_meilleur_job(
@@ -388,9 +388,14 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                         est_premier_job=est_premier
                     )
                     if best_sj:
+                        # LOG DE DÉBOGAGE : AFFECTATION MALGRÉ BESOIN PAUSE
+                        if besoin_pause:
+                            h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
+                            print(f"[{h_log}] {p.id_poste} : Affectation {best_sj.super_job_id} MALGRÉ besoin pause (Opportunité manquée, temps: {temps_travaille}min)")
+
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
-
+                            
         if not jobs_restants: return postes
         minute += pas
 
