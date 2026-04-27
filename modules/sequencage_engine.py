@@ -184,7 +184,7 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule, jobs_r
 
     # --- 2. RESTRICTION AU TOP N (N = I_simule) ---
     # On ne travaille que sur les 'I' missions les plus urgentes
-    top_n_jobs = [item['sj'] for item in liste_candidats[:I_simule]]
+    top_n_jobs = [item['sj'] for item in liste_candidats[:I_simule*2]]
 
     # Récupération du couloir du dernier job effectué par le chauffeur
     couloir_precedent = getattr(p, 'couloir_actuel', None)
