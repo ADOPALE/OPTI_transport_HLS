@@ -326,41 +326,60 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 temps_travaille = minute - p.h_debut_service_actuel
                 dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
 
-                # TRIGGER DE RETOUR
+                # --- 1. DÉFINITION DES SEUILS ---
                 besoin_pause = (temps_travaille >= 150 and not p.pause_faite)
+                besoin_pause_imperatif = (temps_travaille >= 270 and not p.pause_faite) # Ton seuil des 270 min
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
-                if besoin_pause or besoin_fin:
+                # --- 2. GESTION DES PRIORITÉS ---
+                
+                # CAS A : BESOIN IMPÉRATIF (Fin de poste ou Pause > 270 min)
+                if besoin_fin or besoin_pause_imperatif:
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, I, 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
                     )
                     
                     if best_sj:
-                        # On ne prend le job que s'il permet de finir avant l'amplitude max
+                        # On vérifie quand même que le job ne nous fait pas exploser l'amplitude
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # SI ON EST ICI : Aucun job retour trouvé, on rentre au dépôt
-                    # On ne rentre que si on n'est pas déjà au dépôt !
+                    # SI PAS DE JOB RETOUR OU TROP LONG : ON FORCE LE RETOUR À VIDE
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat = 'EN_TRAJET_VIDE'
                         p.temps_restant_etat = dist_retour
-                        raison = "PAUSE" if besoin_pause else "FIN_DE_SERVICE"
+                        raison = "PAUSE IMPÉRATIVE" if besoin_pause_imperatif else "FIN_DE_SERVICE"
                         p.enregistrer(minute, "RETOUR_DEPOT", details=f"Raison: {raison}")
                     else:
-                        # Si déjà au dépôt, on déclenche directement
                         if besoin_fin:
                             p.etat = 'FIN_DE_SERVICE'
                             p.temps_restant_etat = p.temps_passation
-                        elif besoin_pause:
+                        elif besoin_pause_imperatif:
                             p.etat = 'EN_PAUSE'
                             p.temps_restant_etat = p.duree_pause
                             p.pause_faite = True
-                    continue
+                    continue # On ne regarde jamais la sélection standard si on est en impératif
 
-                # SÉLECTION STANDARD
+                # CAS B : BESOIN OPPORTUNISTE (Pause entre 150 et 270 min)
+                elif besoin_pause:
+                    # On cherche UNIQUEMENT un job qui ramène
+                    best_sj = selectionner_meilleur_job_retour(
+                        p, dispos, minute, matrice_travail, I, 
+                        jobs_restants, est_premier_job=(p.couloir_actuel is None)
+                    )
+                    
+                    if best_sj:
+                        if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
+                            affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                            continue
+                    
+                    # SI PAS DE JOB RETOUR : On continue vers la SÉLECTION STANDARD (ton souhait)
+                    # On ne met pas de "continue" ici pour laisser le code descendre
+
+                # --- 3. SÉLECTION STANDARD ---
+                # S'exécute si : Pas besoin de pause OU (Besoin pause opportuniste ET pas de job retour trouvé)
                 if dispos:
                     est_premier = (p.couloir_actuel is None)
                     best_sj = selectionner_meilleur_job(
