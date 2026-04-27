@@ -124,8 +124,9 @@ class PosteChauffeur:
         self.pause_faite = False
         self.historique = []
         self.amplitude_max = params_rh.get('amplitude_totale', 450) # ex: 9h
-        self.duree_pause = params_rh.get('pause', 45)
-        self.temps_passation = params_rh.get('temps_fixes', 30)
+        self.duree_pause = params_rh.get('pause', 20)
+        self.temps_passation = params_rh.get('temps_fixes_fin', 15)
+        self.temps_prise = params_rh.get('temps_fixes_prise', 15)
         self.vehicule_deja_affecte = False # Pour savoir si on initialise à t ou t-15
         
     def enregistrer(self, minute, activite, sj=None, details=""):
@@ -321,8 +322,8 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'
-                p.temps_restant_etat = 15
-                p.h_debut_service_actuel = minute if p.vehicule_deja_affecte else (minute - 15)
+                p.temps_restant_etat = p.temps_prise
+                p.h_debut_service_actuel = minute if p.vehicule_deja_affecte else (minute - p.temps_prise)
                 p.enregistrer(minute, "PRISE_POSTE")
                 continue
 
