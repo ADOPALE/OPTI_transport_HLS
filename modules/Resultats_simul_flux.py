@@ -62,7 +62,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
                         # Note: adapte les noms d'attributs 'origin', 'destination', 'nb_contenants' selon ta classe Job
                         orig = getattr(j, 'origin', '?')
                         dest = getattr(j, 'destination', '?')
-                        qty = getattr(j, 'nb_contenants', 1) 
+                        qty = getattr(j, 'quantite', 1) 
                         details_jobs.append(f"Job {idx+1}: {orig} -> {dest} ({qty} cont.)")
                     
                     # On remplace ou on ajoute au détail existant avec des retours à la ligne HTML (<br>)
