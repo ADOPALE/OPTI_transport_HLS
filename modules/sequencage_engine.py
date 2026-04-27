@@ -142,7 +142,7 @@ class PosteChauffeur:
 # 3. MOTEUR DE SIMULATION (Ajusté pour SuperJob)
 # =================================================================
 
-def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule):
+def selectionner_meilleur_job(p, dispos, minute, matrice_duree, I_simule, jobs_restants, est_premier_job=False):
     """
     Sélectionne le meilleur SuperJob pour le chauffeur 'p'.
     Logique : 
@@ -230,7 +230,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     rh = params_logistique.get('rh', {})
     h_start = to_min(rh.get('h_prise_min', 360))
     h_end = to_min(rh.get('h_fin_max', 1380))
-    pas = 1
+    pas = 1 # Pas de temps précis à 1 minute
     
     try:
         depot_initial = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
@@ -262,7 +262,6 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
                 else: # Arrivée au dépôt pour Pause ou Fin
                     p.position_actuelle = p.stationnement_initial
-                    # On détermine si c'est une pause ou une fin de poste
                     temps_travaille = minute - p.h_debut_service_actuel
                     if temps_travaille >= p.amplitude_max - 65:
                         p.etat = 'FIN_DE_SERVICE'
@@ -280,7 +279,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                         return None
                 
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
-                p.couloir_actuel = get_couloir_id(p.job_en_cours)
+                p.couloir_actuel = get_couloir_id(p.job_en_cours) # Mise à jour du couloir après mission
                 p.etat = 'DISPONIBLE'
                 p.job_en_cours = None
 
@@ -290,10 +289,11 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 p.enregistrer(minute, "REPRISE_APRES_PAUSE")
 
             elif p.etat == 'FIN_DE_SERVICE':
-                # Le véhicule redevient libre pour un nouveau chauffeur
+                # RESET du poste pour le chauffeur suivant sur le même véhicule
                 p.etat = 'INACTIF'
                 p.h_debut_service_actuel = None
                 p.pause_faite = False
+                p.couloir_actuel = None # IMPORTANT : Permet d'activer la règle "Premier Job" pour le suivant
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
         # --- 2. AFFECTATION DES JOBS ---
@@ -306,7 +306,6 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
             if p.etat == 'INACTIF' and dispos:
                 p.etat = 'PRISE_POSTE'
                 p.temps_restant_etat = 15
-                # Si le véhicule a déjà tourné, on ne gagne pas le temps de préchauffe
                 p.h_debut_service_actuel = minute if p.vehicule_deja_affecte else (minute - 15)
                 p.enregistrer(minute, "PRISE_POSTE")
                 continue
@@ -318,30 +317,35 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
                 # --- GESTION PAUSE ET FIN DE POSTE ---
                 force_retour = False
-                if (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite):
-                    force_retour = True
-                elif (temps_travaille >= p.amplitude_max - 60):
+                if (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite) or (temps_travaille >= p.amplitude_max - 60):
                     force_retour = True
 
                 if force_retour:
-                    # On cherche un job qui finit près du dépôt
+                    # Ici on passe I (nombre de véhicules simule) à la fonction de retour
                     best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I)
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job(p, best_sj, jobs_restants, dispos, minute, matrice_duree)
                             continue
                     
-                    # Sinon, retour à vide immédiat
                     p.etat = 'EN_TRAJET_VIDE'
                     p.temps_restant_etat = dist_retour
-                    p.enregistrer(minute, "RETOUR_DEPOT", details="Fin de service ou Pause")
+                    p.enregistrer(minute, "RETOUR_DEPOT", details="Retour vers Pause/Fin")
                     continue
 
                 # --- CAS STANDARD ---
                 if dispos:
-                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_duree, I)
+                    # On détermine si c'est le 1er job pour activer la stratégie de flux groupage
+                    est_premier = (p.couloir_actuel is None)
+                    
+                    # APPEL MIS À JOUR avec jobs_restants et est_premier_job
+                    best_sj = selectionner_meilleur_job(
+                        p, dispos, minute, matrice_duree, I, 
+                        jobs_restants=jobs_restants, 
+                        est_premier_job=est_premier
+                    )
+                    
                     if best_sj:
-                        # Validation amplitude avant départ
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job(p, best_sj, jobs_restants, dispos, minute, matrice_duree)
 
