@@ -338,7 +338,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 limite_pause = 270 # Seuil maximal de travail avant pause (4h30)
 
                 # --- 2. GESTION DES PRIORITÉS ---
-
+                """    
                 # CAS A : BESOIN IMPÉRATIF (Fin de poste ou Pause > 70 min selon ton test)
                 if besoin_fin or besoin_pause_imperatif:
                     # On cherche un job retour parmi TOUS les disponibles
@@ -409,9 +409,9 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                         # d'atteindre le besoin_pause_imperatif pour rentrer à vide ou on force ici)
                         h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
                         print(f"[{h_log}] {p.id_poste} : Aucun job compatible avec limite pause 270. En attente.")
-
+                """
                 # --- 3. SÉLECTION STANDARD (Pour ceux qui n'ont PAS besoin de pause) ---
-                elif dispos:
+                if dispos:
                     best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I, jobs_restants, (p.couloir_actuel is None))
                     if best_sj:
                         # Vérification sécurité amplitude
