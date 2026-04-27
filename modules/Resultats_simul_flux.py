@@ -119,7 +119,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
         ),
         yaxis=dict(autorange="reversed"),
         height=400 + (len(postes_filtres) * 30),
-        hoverlabel=dict(bgcolor="white", font_size=12, font_family="Arial")
+        hoverlabel=dict(bgcolor="black", font_size=12, font_family="Arial")
     )
 
     # Forcer l'affichage multi-ligne dans le hover
