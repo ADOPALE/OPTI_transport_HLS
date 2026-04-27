@@ -271,7 +271,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                     temps_travaille = minute - p.h_debut_service_actuel
                     
                     # LOGIQUE DE DÉCISION AU DÉPÔT
-                    if temps_travaille >= p.amplitude_max - 65:
+                    if temps_travaille >= p.amplitude_max - p.temps_passation:
                         p.etat = 'FIN_DE_SERVICE'
                         p.temps_restant_etat = p.temps_passation
                         p.enregistrer(minute, "PASSATION_FIN")
@@ -327,7 +327,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
                 dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
 
                 # TRIGGER DE RETOUR
-                besoin_pause = (temps_travaille >= p.amplitude_max / 2 and not p.pause_faite)
+                besoin_pause = (temps_travaille >= 150 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
 
                 if besoin_pause or besoin_fin:
