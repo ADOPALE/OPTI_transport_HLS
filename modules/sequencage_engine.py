@@ -131,11 +131,15 @@ class PosteChauffeur:
         
     def enregistrer(self, minute, activite, sj=None, details=""):
         sj_id = sj.super_job_id if sj else "N/A"
+        # Utiliser 0 par défaut si pas de SJ
+        poids = sj.poids_total if sj else 0
+        
         self.historique.append({
             "Minute_Debut": minute,
             "Heure_Debut": f"{int(minute//60):02d}h{int(minute%60):02d}",
             "Activite": activite,
             "SJ_ID": sj_id,
+            "sj_poids": poids, # La clé est maintenant garantie
             "Details": details
         })
 
