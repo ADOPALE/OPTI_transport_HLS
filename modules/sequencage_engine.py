@@ -240,11 +240,14 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
     
     marge_interjob = params_logistique.get('marge_interjob', 0)
 
-    try:
-        depot_initial = df_vehicules[df_vehicules['Types'] == v_type]['Stationnement initial'].iloc[0]
-        print(f"[{depot_initial}]")
-    except:
-        depot_initial = "DEPOT"
+    filtre = df_vehicules[df_vehicules['Types'] == v_type]
+
+    if not filtre.empty:
+        depot_initial = filtre['Stationnement initial'].iloc[0]
+    else:
+        # Débug si le v_type envoyé par la boucle ne matche pas le tableau
+        print(f"⚠️ Type '{v_type}' absent de df_vehicules. Valeurs : {df_vehicules['Types'].unique()}")
+        depot_initial = "HSJ" # Valeur par défaut visible sur ton image
 
     postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I)]
     jobs_restants = list(liste_sj_type)
