@@ -26,10 +26,9 @@ from modules.sim_engine import (
     traitement_flux_recurrents, 
     ordonnancer_flotte_optimale,
     preparer_flux_complets_du_jour, # Ajoutez celle-ci
-    tunnel_consolidation_flux,
-    afficher_controle_coherence# Ajoutez celle-ci
+    tunnel_consolidation_flux# Ajoutez celle-ci
 )
-from modules.sequencage_engine import trouver_meilleure_configuration_journee
+from modules.sequencage_engine import trouver_meilleure_configuration_journee, afficher_controle_coherence
 import modules.Resultats_simul_flux as res_flux
 
 # --------- FONCTIONS UI ------------
