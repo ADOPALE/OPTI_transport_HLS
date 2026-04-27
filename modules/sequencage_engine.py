@@ -328,77 +328,94 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
-                dist_retour = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
-                print(f"Position actuelle [{p.position_actuelle}]")
-
+                dist_retour_actuel = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                
                 # --- 1. DÉFINITION DES SEUILS ---
                 besoin_pause = (temps_travaille >= 60 and not p.pause_faite)
                 besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
+                
+                limite_pause = 270 # Seuil maximal de travail avant pause (4h30)
 
                 # --- 2. GESTION DES PRIORITÉS ---
-                
-                # CAS A : BESOIN IMPÉRATIF (Fin de poste ou Pause > 270 min)
+
+                # CAS A : BESOIN IMPÉRATIF (Fin de poste ou Pause > 70 min selon ton test)
                 if besoin_fin or besoin_pause_imperatif:
+                    # On cherche un job retour parmi TOUS les disponibles
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
                     )
                     
                     if best_sj:
-                        if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
+                        # Validation amplitude max pour le job retour
+                        if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # LOG DE DÉBOGAGE : FORCE LE RETOUR
-                    h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
-                    print(f"[{h_log}] {p.id_poste} : FORCE RETOUR À VIDE (Travail: {temps_travaille}min)")
-                    
+                    # FORCE LE RETOUR À VIDE
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat = 'EN_TRAJET_VIDE'
-                        p.temps_restant_etat = dist_retour
-                        raison = "PAUSE IMPÉRATIVE" if besoin_pause_imperatif else "FIN_DE_SERVICE"
-                        p.enregistrer(minute, "RETOUR_DEPOT", details=f"Raison: {raison}")
+                        p.temps_restant_etat = dist_retour_actuel
+                        p.enregistrer(minute, "RETOUR_DEPOT", details="Force (Impératif)")
                     else:
                         if besoin_fin:
                             p.etat = 'FIN_DE_SERVICE'
                             p.temps_restant_etat = p.temps_passation
-                        elif besoin_pause_imperatif:
+                        else:
                             p.etat = 'EN_PAUSE'
                             p.temps_restant_etat = p.duree_pause
                             p.pause_faite = True
                     continue
 
-                # CAS B : BESOIN OPPORTUNISTE (Pause entre 150 et 270 min)
+                # CAS B : BESOIN OPPORTUNISTE (Filtre de faisabilité strict)
                 elif besoin_pause:
+                    # 1. On cherche d'abord un job retour classique (len(dispos))
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
                         jobs_restants, est_premier_job=(p.couloir_actuel is None)
                     )
                     
                     if best_sj:
-                        if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
+                        if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # Si on arrive ici, c'est qu'on a besoin de pause mais pas de job retour trouvé
-                    # Le code va donc descendre vers la sélection standard.
+                    # 2. FILTRAGE DES JOBS STANDARDS : Uniquement ceux permettant de faire la pause avant 270min
+                    # On crée une sous-liste de dispos "compatibles pause"
+                    dispos_compatibles_pause = []
+                    for sj in dispos:
+                        dist_approche = matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+                        dist_retour_apres_sj = matrice_travail.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 30)
+                        
+                        # Heure estimée de retour au dépôt après cette mission
+                        heure_retour_estimee = minute + dist_approche + sj.poids_total + dist_retour_apres_sj
+                        temps_total_apres_mission = heure_retour_estimee - p.h_debut_service_actuel
+                        
+                        if temps_total_apres_mission <= limite_pause:
+                            dispos_compatibles_pause.append(sj)
+                    
+                    # On tente la sélection standard UNIQUEMENT sur les jobs compatibles
+                    if dispos_compatibles_pause:
+                        best_sj = selectionner_meilleur_job(
+                            p, dispos_compatibles_pause, minute, matrice_travail, I, 
+                            jobs_restants, (p.couloir_actuel is None)
+                        )
+                        if best_sj:
+                            affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                            continue
+                    else:
+                        # Si AUCUN job ne permet de rentrer avant 270 min, on ne fait RIEN (on attend 
+                        # d'atteindre le besoin_pause_imperatif pour rentrer à vide ou on force ici)
+                        h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
+                        print(f"[{h_log}] {p.id_poste} : Aucun job compatible avec limite pause 270. En attente.")
 
-                # --- 3. SÉLECTION STANDARD ---
-                if dispos:
-                    est_premier = (p.couloir_actuel is None)
-                    best_sj = selectionner_meilleur_job(
-                        p, dispos, minute, matrice_travail, len(dispos), 
-                        jobs_restants=jobs_restants, 
-                        est_premier_job=est_premier
-                    )
+                # --- 3. SÉLECTION STANDARD (Pour ceux qui n'ont PAS besoin de pause) ---
+                elif dispos:
+                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I, jobs_restants, (p.couloir_actuel is None))
                     if best_sj:
-                        # LOG DE DÉBOGAGE : AFFECTATION MALGRÉ BESOIN PAUSE
-                        if besoin_pause:
-                            h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
-                            print(f"[{h_log}] {p.id_poste} : Affectation {best_sj.super_job_id} MALGRÉ besoin pause (Opportunité manquée, temps: {temps_travaille}min)")
-
-                        if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
+                        # Vérification sécurité amplitude
+                        if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             
         if not jobs_restants: return postes
