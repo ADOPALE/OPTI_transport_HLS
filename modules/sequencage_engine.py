@@ -322,7 +322,7 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
                 if force_retour:
                     # Ici on passe I (nombre de véhicules simule) à la fonction de retour
-                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I)
+                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I, jobs_restants, est_premier_job = (p.couloir_actuel is None)
                     if best_sj:
                         if (minute + best_sj.poids_total + dist_retour) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job(p, best_sj, jobs_restants, dispos, minute, matrice_duree)
@@ -364,7 +364,7 @@ def affecter_job(p, sj, jobs_restants, dispos, minute, matrice_duree):
     p.enregistrer(minute, "EN_TRAJET_VIDE", sj, "Approche Mission")
 
 
-def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule):
+def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule, jobs_restants, est_premier_job = False):
     """Variante : Priorise les jobs qui ramènent vers le stationnement initial."""
     # On filtre les jobs qui finissent dans le même "groupe" que le dépôt
     zone_depot = p.stationnement_initial[:3]
@@ -372,7 +372,7 @@ def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule)
     
     if candidats_retour:
         # Parmi ceux qui rentrent, on prend le plus stressé
-        return selectionner_meilleur_job(p, candidats_retour, minute, matrice_duree, I_simule)
+        return selectionner_meilleur_job(p, candidats_retour, minute, matrice_duree, I_simule, jobs_restants, est_premier_job)
     
     return None # Si rien ne ramène au dépôt, on rentrera à vide
 
