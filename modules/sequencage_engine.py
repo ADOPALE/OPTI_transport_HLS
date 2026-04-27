@@ -361,7 +361,7 @@ def simuler_faisabilite(I_matin, I_am, liste_sj_type, v_type, matrice_duree, par
                 dist_retour_actuel = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                 
                 besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
-                besoin_fin = (temps_travaille >= p.amplitude_max - 60)
+                besoin_fin = (temps_travaille >= p.amplitude_max - params_logistique.get('',))
                 limite_critique_pause = 270
 
                 if besoin_fin or besoin_pause_imperatif:
