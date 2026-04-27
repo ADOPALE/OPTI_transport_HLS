@@ -329,94 +329,79 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
 
             if p.etat == 'DISPONIBLE':
                 temps_travaille = minute - p.h_debut_service_actuel
+                # On récupère le dépôt initial pour ce type de poste
                 dist_retour_actuel = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
-                print(f"distance retour calculée = {dist_retour_actuel} : {p.position_actuelle} --> {p.stationnement_initial}")
                 
-                # --- 1. DÉFINITION DES SEUILS ---
-                besoin_pause = (temps_travaille >= 0 and not p.pause_faite)
-                besoin_pause_imperatif = (temps_travaille >= 10 and not p.pause_faite)
+                # --- 1. SEUILS DE TEST / PROD ---
+                besoin_pause = (temps_travaille >= 60 and not p.pause_faite)
+                besoin_pause_imperatif = (temps_travaille >= 70 and not p.pause_faite)
                 besoin_fin = (temps_travaille >= p.amplitude_max - 60)
                 
-                limite_pause = 270 # Seuil maximal de travail avant pause (4h30)
+                limite_critique_pause = 270 # Heure limite réelle pour la pause
 
-                # --- 2. GESTION DES PRIORITÉS ---
-                    
-                # CAS A : BESOIN IMPÉRATIF (Fin de poste ou Pause > 70 min selon ton test)
+                # --- 2. CAS IMPÉRATIF : RETOUR FORCÉ ---
                 if besoin_fin or besoin_pause_imperatif:
-                    # On cherche un job retour parmi TOUS les disponibles
+                    # On scanne TOUT pour essayer de rentrer intelligemment
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
-                        jobs_restants, est_premier_job=(p.couloir_actuel is None)
+                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique_pause
                     )
                     
                     if best_sj:
-                        # Validation amplitude max pour le job retour
+                        # On vérifie juste que le job ne crève pas l'amplitude totale
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     
-                    # FORCE LE RETOUR À VIDE
+                    # SI PAS DE JOB RETOUR : RETOUR VIDE IMMÉDIAT
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat = 'EN_TRAJET_VIDE'
                         p.temps_restant_etat = dist_retour_actuel
-                        p.enregistrer(minute, "RETOUR_DEPOT", details="Force (Impératif)")
+                        raison = "PAUSE IMPÉRATIVE" if besoin_pause_imperatif else "FIN_DE_SERVICE"
+                        p.enregistrer(minute, "RETOUR_DEPOT", details=f"Raison: {raison}")
                     else:
-                        if besoin_fin:
-                            p.etat = 'FIN_DE_SERVICE'
-                            p.temps_restant_etat = p.temps_passation
-                        else:
-                            p.etat = 'EN_PAUSE'
-                            p.temps_restant_etat = p.duree_pause
-                            p.pause_faite = True
-                    continue
+                        # Déjà sur place : on switch d'état
+                        p.etat = 'FIN_DE_SERVICE' if besoin_fin else 'EN_PAUSE'
+                        p.temps_restant_etat = p.temps_passation if besoin_fin else p.duree_pause
+                        if not besoin_fin: p.pause_faite = True
+                    continue # BLOQUE l'accès à la sélection standard
 
-                # CAS B : BESOIN OPPORTUNISTE (Filtre de faisabilité strict)
+                # --- 3. CAS OPPORTUNISTE AVEC FILTRE STRICT ---
                 elif besoin_pause:
-                    # 1. On cherche d'abord un job retour classique (len(dispos))
+                    # A. On cherche d'abord un job qui ramène au dépôt (Exhaustif)
                     best_sj = selectionner_meilleur_job_retour(
                         p, dispos, minute, matrice_travail, len(dispos), 
-                        jobs_restants, est_premier_job=(p.couloir_actuel is None)
+                        jobs_restants, est_premier_job=(p.couloir_actuel is None), limite_critique_pause
                     )
-                    
                     if best_sj:
-                        if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
-                            affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
-                            continue
-                    
-                    # 2. FILTRAGE DES JOBS STANDARDS : Uniquement ceux permettant de faire la pause avant 270min
-                    # On crée une sous-liste de dispos "compatibles pause"
-                    dispos_compatibles_pause = []
+                        affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                        continue
+
+                    # B. FILTRAGE : Est-ce qu'une mission standard me permet de rentrer avant 270 min ?
+                    dispos_compatibles = []
                     for sj in dispos:
                         dist_approche = matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
-                        dist_retour_apres_sj = matrice_travail.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 30)
+                        dist_retour_final = matrice_travail.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 30)
                         
-                        # Heure estimée de retour au dépôt après cette mission
-                        heure_retour_estimee = minute + dist_approche + sj.poids_total + dist_retour_apres_sj
-                        temps_total_apres_mission = heure_retour_estimee - p.h_debut_service_actuel
+                        # Calcul du temps total de travail SI on prend ce job
+                        temps_final_estime = (minute + dist_approche + sj.poids_total + dist_retour_final) - p.h_debut_service_actuel
                         
-                        if temps_total_apres_mission <= limite_pause:
-                            dispos_compatibles_pause.append(sj)
+                        if temps_final_estime <= limite_critique_pause:
+                            dispos_compatibles.append(sj)
                     
-                    # On tente la sélection standard UNIQUEMENT sur les jobs compatibles
-                    if dispos_compatibles_pause:
-                        best_sj = selectionner_meilleur_job(
-                            p, dispos_compatibles_pause, minute, matrice_travail, I, 
-                            jobs_restants, (p.couloir_actuel is None)
-                        )
+                    if dispos_compatibles:
+                        best_sj = selectionner_meilleur_job(p, dispos_compatibles, minute, matrice_travail, I, jobs_restants)
                         if best_sj:
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             continue
                     else:
-                        # Si AUCUN job ne permet de rentrer avant 270 min, on ne fait RIEN (on attend 
-                        # d'atteindre le besoin_pause_imperatif pour rentrer à vide ou on force ici)
-                        h_log = f"{int(minute//60):02d}h{int(minute%60):02d}"
-                        print(f"[{h_log}] {p.id_poste} : Aucun job compatible avec limite pause 270. En attente.")
-                
-                # --- 3. SÉLECTION STANDARD (Pour ceux qui n'ont PAS besoin de pause) ---
-                if dispos:
-                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, len(dispos), jobs_restants, (p.couloir_actuel is None))
+                        print(f"[{minute}] {p.id_poste} : Aucun job compatible avec la limite de 270min. Attente retour vide.")
+
+                # --- 4. SÉLECTION STANDARD (Chauffeurs sans besoin de pause) ---
+                elif dispos:
+                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, I, jobs_restants)
                     if best_sj:
-                        # Vérification sécurité amplitude
+                        # Vérification sécurité amplitude simple
                         if (minute + best_sj.poids_total + dist_retour_actuel) <= (p.h_debut_service_actuel + p.amplitude_max):
                             affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                             
@@ -424,6 +409,8 @@ def simuler_faisabilite(I, liste_sj_type, v_type, matrice_duree, params_logistiq
         minute += pas
 
     return None
+
+
 def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_travail):
     """Version de affecter_job utilisant la matrice avec aléa"""
     dist_approche = matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
@@ -435,17 +422,33 @@ def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_trav
     p.enregistrer(minute, "EN_TRAJET_VIDE", sj, "Approche Mission")
 
 
-def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule, jobs_restants, est_premier_job = False):
-    """Variante : Priorise les jobs qui ramènent vers le stationnement initial."""
-    # On filtre les jobs qui finissent dans le même "groupe" que le dépôt
+def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, I_simule, jobs_restants, est_premier_job=False, limite_critique):
+    """
+    Variante : Priorise les jobs qui ramènent vers le stationnement initial 
+    ET qui permettent de rentrer avant la limite critique de travail.
+    """
     zone_depot = p.stationnement_initial[:3]
-    candidats_retour = [sj for sj in dispos if sj.points_arrivee[-1][:3] == zone_depot]
     
-    if candidats_retour:
-        # Parmi ceux qui rentrent, on prend le plus stressé
-        return selectionner_meilleur_job(p, candidats_retour, minute, matrice_duree, I_simule, jobs_restants, est_premier_job)
+    # 1. Filtre géographique (Zone du dépôt)
+    candidats_zone = [sj for sj in dispos if sj.points_arrivee[-1][:3] == zone_depot]
     
-    return None # Si rien ne ramène au dépôt, on rentrera à vide
+    # 2. Filtre de durée (Approche + Job + Retour < Limite Critique)
+    candidats_valides = []
+    for sj in candidats_zone:
+        dist_approche = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 20)
+        dist_retour_final = matrice_duree.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 20)
+        
+        # Temps total de travail cumulé à la fin de la boucle (Retour au dépôt inclus)
+        temps_total_estime = (minute + dist_approche + sj.poids_total + dist_retour_final) - p.h_debut_service_actuel
+        
+        if temps_total_estime <= limite_critique:
+            candidats_valides.append(sj)
+
+    if candidats_valides:
+        # Parmi ceux qui sont géographiquement ET temporellement valides, on prend le plus urgent (stress)
+        return selectionner_meilleur_job(p, candidats_valides, minute, matrice_duree, I_simule, jobs_restants, est_premier_job)
+    
+    return None # Si rien ne ramène au dépôt dans les temps, on rentrera à vide
 
 
 # =================================================================
