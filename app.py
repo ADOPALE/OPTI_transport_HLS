@@ -307,6 +307,8 @@ elif selected == "Synthèse transport":
                                     comptage_jour[key] = comptage_jour.get(key, 0) + 1
                                 
                                 resultats_hebdo.append(comptage_jour)
+
+                                afficher_controle_coherence(liste_globale_sj, res_opti["postes"])
                             else:
                                 st.error(f"Impossible de trouver une solution pour {jour}")
 
@@ -347,7 +349,7 @@ elif selected == "Synthèse transport":
                 type_choisi = st.selectbox("Choisir un type", df_vehicules['Types'].unique())
                 res_flux.afficher_gantt_chauffeur_detaille(postes_jour, type_choisi)
 
-                afficher_controle_coherence(liste_globale_sj, res_opti["postes"])
+                
                 
             
 
