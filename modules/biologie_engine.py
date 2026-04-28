@@ -238,7 +238,7 @@ def _solve_ortools(data, time_limit_seconds=30):
         )
         time_dimension.SetBreakIntervalsOfVehicle(
             [break_interval], v,
-            node_visit_transit_slack=int(5 * data['SCALE'])
+            node_visit_transits=int(5 * data['SCALE'])
         )
 
     # --- Objectif : minimiser nombre de véhicules, puis temps total ---
