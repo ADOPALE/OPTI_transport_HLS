@@ -10,6 +10,7 @@ except Exception:
     pywrapcp          = None
     ORTOOLS_AVAILABLE = False
 
+
 # ==========================================
 # PARTIE 1 : FONCTIONS UTILITAIRES
 # ==========================================
