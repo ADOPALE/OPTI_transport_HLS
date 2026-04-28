@@ -514,6 +514,11 @@ def run_optimization(
             tournees_unitaires = _extract_tournees(
                 manager, routing, solution, time_dimension, data
             )
+            try:
+                import streamlit as st
+                st.success("✅ Solution trouvée par OR-Tools (solveur optimal)")
+            except Exception:
+                pass
         else:
             warnings.warn(
                 f"OR-Tools n'a pas trouvé de solution en {time_limit_seconds}s. "
@@ -527,6 +532,11 @@ def run_optimization(
         tournees_unitaires = _greedy_fallback(
             m_duree_df, tasks, temps_collecte, max_tournee
         )
+        try:
+            import streamlit as st
+            st.warning("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
+        except Exception:
+            pass
 
     # ── 5. Affectation véhicules et chauffeurs ────────────────────────────
     resultat_initial  = assign_to_vehicles(tournees_unitaires, config_rh)
