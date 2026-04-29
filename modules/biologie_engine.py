@@ -517,7 +517,7 @@ def run_optimization(
             )
             try:
                 import streamlit as st
-                st.success("✅ Solution trouvée par OR-Tools (solveur optimal)")
+                st.write("✅ Solution trouvée par OR-Tools (solveur optimal)")
             except Exception:
                 pass
         else:
@@ -535,7 +535,7 @@ def run_optimization(
         )
         try:
             import streamlit as st
-            st.warning("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
+            st.write("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
         except Exception:
             pass
 
