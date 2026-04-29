@@ -516,7 +516,6 @@ def run_optimization(
                 manager, routing, solution, time_dimension, data
             )
             try:
-                import streamlit as st
                 st.write("✅ Solution trouvée par OR-Tools (solveur optimal)")
             except Exception:
                 pass
@@ -534,7 +533,6 @@ def run_optimization(
             m_duree_df, tasks, temps_collecte, max_tournee
         )
         try:
-            import streamlit as st
             st.write("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
         except Exception:
             pass
