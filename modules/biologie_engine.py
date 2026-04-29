@@ -670,6 +670,19 @@ def run_optimization(
             f"taux occupation moyen {meilleur_score['taux_occupation']:.1%}",
             "success"
         )
+        # Stocker le rapport dans session_state pour affichage après st.rerun()
+        try:
+            import streamlit as _st
+            _st.session_state["bio_rapport"] = {
+                "nb_vehicules"   : meilleur_score["nb_vehicules"],
+                "nb_postes"      : meilleur_score["nb_postes"],
+                "taux_occupation": float(meilleur_score["taux_occupation"]),
+                "palier"         : meilleur_palier,
+                "repassage"      : repassage_autorise,
+                "solveur"        : solveur,
+            }
+        except Exception:
+            pass
     else:
         _st_info("⚠️ Aucune solution trouvée sur tous les paliers.", "warning")
 
