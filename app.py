@@ -89,12 +89,19 @@ def show_simulation_page():
                 )
                 st.session_state.resultat_flotte = resultats
                 st.session_state.sim_lancee = True
+                # Stocker le solveur utilisé pour l'afficher après rerun
+                from modules.biologie_engine import ORTOOLS_AVAILABLE
+                st.session_state["solveur_utilise"] = "ortools" if ORTOOLS_AVAILABLE else "greedy"
                 st.rerun()
             except Exception as e:
                 st.error(f"Erreur : {e}")
 
     if st.session_state.get("sim_lancee"):
         st.success(f"✅ Simulation réussie ! {len(st.session_state.resultat_flotte)} véhicules identifiés.")
+        if st.session_state.get("solveur_utilise") == "ortools":
+            st.info("🧠 Solution calculée par **OR-Tools** (solveur optimal)")
+        elif st.session_state.get("solveur_utilise") == "greedy":
+            st.warning("⚠️ Solution calculée par **l'heuristique gloutonne** (OR-Tools indisponible ou sans solution)")
 
 # ------------ INITIALISATION APP ---------------
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
