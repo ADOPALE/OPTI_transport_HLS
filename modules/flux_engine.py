@@ -332,9 +332,10 @@ def decomposer_flux_en_jobs(
 
         # Quantité du jour
         try:
-            qte = float(row.get(col_qte, 0) or 0)
+            raw_qte = row.get(col_qte, 0)
+            qte = 0.0 if (raw_qte is None or (isinstance(raw_qte, float) and math.isnan(raw_qte))) else float(raw_qte)
         except (ValueError, TypeError):
-            qte = 0
+            qte = 0.0
         if qte <= 0:
             continue
 
@@ -1023,3 +1024,4 @@ def run_flux_optimization(
         "jobs_par_type": jobs_par_type,
         "jour"         : jour,
     }
+          
