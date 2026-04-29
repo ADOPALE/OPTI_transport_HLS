@@ -238,14 +238,25 @@ def _choisir_vehicule(
         df_sites.columns[0]
     )
 
-    def est_accessible(v_nom: str) -> bool:
+    # Mapping colonnes normalisées → colonnes originales dans df_sites
+    _cols_sites_norm = {_norm(c): c for c in df_sites.columns}
+
+    def est_accessible(v_nom_norm: str) -> bool:
+        """
+        Vérifie si le véhicule (type normalisé) peut accéder aux deux sites.
+        Cherche la colonne véhicule dans df_sites par correspondance normalisée.
+        """
         try:
             row_o = df_sites[df_sites[col_lib].apply(_norm) == _norm(origine)]
             row_d = df_sites[df_sites[col_lib].apply(_norm) == _norm(destination)]
             if row_o.empty or row_d.empty:
                 return False
-            return (str(row_o[v_nom].values[0]).upper() == 'OUI' and
-                    str(row_d[v_nom].values[0]).upper() == 'OUI')
+            # Trouver la colonne originale correspondant au type véhicule normalisé
+            col_orig = _cols_sites_norm.get(v_nom_norm)
+            if col_orig is None:
+                return False
+            return (str(row_o[col_orig].values[0]).upper() == 'OUI' and
+                    str(row_d[col_orig].values[0]).upper() == 'OUI')
         except Exception:
             return False
 
@@ -1007,3 +1018,4 @@ def run_flux_optimization(
         "jobs_par_type": jobs_par_type,
         "jour"         : jour,
     }
+  
