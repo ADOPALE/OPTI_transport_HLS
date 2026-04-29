@@ -47,39 +47,54 @@ def minutes_to_hhmm(minutes):
 
 def generate_target_windows(sites_config):
     """
-    Génère les rendez-vous théoriques.
-    - 1er passage : au plus tôt à l'heure 'open'.
-    - Dernier passage : au plus tôt à l'heure 'close'.
-    - Intermédiaires : répartis équitablement.
+    Génère les fenêtres de passage pour chaque site.
+
+    Règles :
+    - freq = 1 (passage unique) : fenêtre libre [open, close].
+      OR-Tools positionne la collecte librement dans cette plage,
+      ce qui maximise la flexibilité de groupage des tournées.
+    - freq > 1 :
+        * 1er passage  : contrainte "au plus tôt" → [open,  open  + 20 min]
+        * Dernier      : contrainte "au plus tôt" → [close, close + 20 min]
+        * Intermédiaires : fenêtre centrée ±10 min autour du point théorique
     """
     tasks = []
     for site_name, config in sites_config.items():
         ouv, fer, freq = config['open'], config['close'], config['freq']
 
         if freq <= 1:
-            points_passage = [fer]
-        else:
-            intervalle = (fer - ouv) / (freq - 1)
-            points_passage = [ouv + (i * intervalle) for i in range(freq)]
-
-        marge_retard = 20
-
-        for i, cible in enumerate(points_passage):
-            is_premier = (i == 0)
-            is_dernier = (i == len(points_passage) - 1)
-
-            if is_premier or is_dernier:
-                window = (cible, cible + marge_retard)
-            else:
-                window = (cible - 10, cible + 10)
-
+            # ── Passage unique : fenêtre entièrement libre ────────────────
             tasks.append({
                 'site_name'  : str(site_name).strip().upper(),
-                'window'     : window,
-                'target_time': cible,
-                'is_fixed'   : is_premier or is_dernier,
+                'window'     : (ouv, fer),   # toute la plage d'ouverture
+                'target_time': (ouv + fer) / 2,
+                'is_fixed'   : False,         # pas de contrainte horaire
+                'freq_unique': True,
                 'done'       : False
             })
+        else:
+            # ── Passages multiples : répartition linéaire contrainte ──────
+            intervalle     = (fer - ouv) / (freq - 1)
+            points_passage = [ouv + (i * intervalle) for i in range(freq)]
+            marge_retard   = 20
+
+            for i, cible in enumerate(points_passage):
+                is_premier = (i == 0)
+                is_dernier = (i == len(points_passage) - 1)
+
+                if is_premier or is_dernier:
+                    window = (cible, cible + marge_retard)
+                else:
+                    window = (cible - 10, cible + 10)
+
+                tasks.append({
+                    'site_name'  : str(site_name).strip().upper(),
+                    'window'     : window,
+                    'target_time': cible,
+                    'is_fixed'   : is_premier or is_dernier,
+                    'freq_unique': False,
+                    'done'       : False
+                })
 
     return sorted(tasks, key=lambda x: x['window'][0])
 
@@ -352,47 +367,59 @@ def _calculer_score(flotte, config_rh, temps_collecte):
     """
     Calcule les métriques d'une solution pour comparer les itérations.
 
+    Critère d'optimisation (par ordre de priorité) :
+      1. Minimiser le nombre de véhicules
+      2. Minimiser le nombre de postes chauffeurs
+      3. À iso (véhicules, postes) : maximiser le taux du poste le plus chargé,
+         puis du second, etc. (tri lexicographique descendant des taux).
+         → "remplir le premier poste avant d'ouvrir le suivant"
+
+    Taux d'occupation d'un poste = (conduite + collecte) / amplitude_max_poste
+
     Retourne un dict :
-        nb_vehicules      : int
-        nb_postes         : int  (total chauffeurs sur la journée)
-        taux_occupation   : float  (moyenne sur tous les postes)
-        score_tri         : tuple  utilisé pour comparer deux solutions
+        nb_vehicules    : int
+        nb_postes       : int
+        taux_occupation : float   moyenne des taux (pour affichage)
+        taux_par_poste  : list    taux individuels triés décroissant
+        score_tri       : tuple   clé de comparaison
     """
-    MAX_POSTE = config_rh.get('amplitude', 450)
+    MAX_POSTE    = config_rh.get('amplitude', 450)
     nb_vehicules = len(flotte)
     nb_postes    = 0
-    taux_total   = 0.0
+    taux_liste   = []
 
     for vacations in flotte.values():
         for vacation in vacations:
             nb_postes += 1
-            # Amplitude réelle du poste
-            h_debut = vacation[0][0]['heure']
-            h_fin   = vacation[-1][-1]['heure']
-            amplitude = max(h_fin - h_debut, 1)
 
-            # Temps productif = conduite + collecte
+            # Temps productif du poste = conduite + collecte (hors attente)
             temps_productif = 0.0
             for tournee in vacation:
                 for i in range(len(tournee) - 1):
-                    # collecte sur chaque site (hors dépôt)
                     if tournee[i]['site'] != 'HLS':
                         temps_productif += temps_collecte
-                    # conduite = différence d'heure entre deux arrêts
-                    # (inclut les pauses d'attente, on prend la durée de trajet brute)
-                    temps_productif += max(0, tournee[i+1]['heure'] - tournee[i]['heure'] - temps_collecte)
+                    temps_productif += max(
+                        0,
+                        tournee[i+1]['heure'] - tournee[i]['heure'] - temps_collecte
+                    )
 
             taux = min(temps_productif / MAX_POSTE, 1.0)
-            taux_total += taux
+            taux_liste.append(taux)
 
-    taux_moyen = taux_total / nb_postes if nb_postes > 0 else 0.0
+    # Tri décroissant : le poste le plus chargé en premier
+    taux_tries  = sorted(taux_liste, reverse=True)
+    taux_moyen  = sum(taux_liste) / len(taux_liste) if taux_liste else 0.0
+
+    # Score : minimiser (vehicules, postes) puis maximiser lexicographiquement
+    # les taux du plus chargé au moins chargé → on les négative pour le min
+    score_tri = (nb_vehicules, nb_postes) + tuple(-round(t, 4) for t in taux_tries)
 
     return {
         'nb_vehicules'   : nb_vehicules,
         'nb_postes'      : nb_postes,
         'taux_occupation': taux_moyen,
-        # Tri : on minimise véhicules, puis postes, puis on maximise taux
-        'score_tri'      : (nb_vehicules, nb_postes, -round(taux_moyen, 4))
+        'taux_par_poste' : taux_tries,
+        'score_tri'      : score_tri,
     }
 
 
@@ -677,6 +704,7 @@ def run_optimization(
                 "nb_vehicules"   : meilleur_score["nb_vehicules"],
                 "nb_postes"      : meilleur_score["nb_postes"],
                 "taux_occupation": float(meilleur_score["taux_occupation"]),
+                "taux_par_poste" : [float(t) for t in meilleur_score.get("taux_par_poste", [])],
                 "palier"         : meilleur_palier,
                 "repassage"      : repassage_autorise,
                 "solveur"        : solveur,
