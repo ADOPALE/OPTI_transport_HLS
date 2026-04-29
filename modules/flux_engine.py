@@ -360,7 +360,8 @@ def decomposer_flux_en_jobs(
         if not v_type or capa_utile <= 0:
             warnings.warn(
                 f"Flux {flux_id} ({origine}→{destination}, {type_cont}) : "
-                "aucun véhicule compatible trouvé, flux ignoré.",
+                f"aucun véhicule compatible trouvé parmi {vehicules_autorises}. "
+                f"Capacités disponibles : { {v: capacites.get(v,{}).get(_norm(type_cont),0) for v in vehicules_autorises} }",
                 RuntimeWarning, stacklevel=2
             )
             continue
@@ -923,6 +924,10 @@ def run_flux_optimization(
 
     _log(f"🔍 Démarrage de l'optimisation — {jour}", "info")
 
+    # Log des paramètres reçus pour déboguer
+    vehicules_selectionnes = params_logistique.get('vehicules_selectionnes', [])
+    _log(f"🚛 Véhicules sélectionnés : {vehicules_selectionnes}", "info")
+
     # ── 0. Pré-calcul bin-packing ────────────────────────────────────────────
     _log("📦 Calcul des capacités véhicules × contenants (bin-packing 2D)...", "info")
     capacites = precalculer_capacites(df_vehicules, df_contenants)
@@ -1018,4 +1023,3 @@ def run_flux_optimization(
         "jobs_par_type": jobs_par_type,
         "jour"         : jour,
     }
-  
