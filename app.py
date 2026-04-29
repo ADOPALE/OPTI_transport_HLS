@@ -102,6 +102,16 @@ def show_simulation_page():
             st.info("🧠 Solution calculée par **OR-Tools** (solveur optimal)")
         elif st.session_state.get("solveur_utilise") == "greedy":
             st.warning("⚠️ Solution calculée par **l'heuristique gloutonne** (OR-Tools indisponible ou sans solution)")
+        # Affichage du rapport détaillé stocké par biologie_engine
+        rapport = st.session_state.get("bio_rapport")
+        if rapport:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("🚐 Véhicules", rapport["nb_vehicules"])
+            col2.metric("👤 Postes chauffeurs", rapport["nb_postes"])
+            col3.metric("⏱️ Taux occupation moyen", f"{rapport['taux_occupation']:.1%}")
+            col4.metric("⏳ Palier optimal", f"{rapport['palier']} min")
+            if rapport.get("repassage"):
+                st.caption("⚠️ Repassage autorisé sur certains sites (fenêtres incompatibles)")
 
 # ------------ INITIALISATION APP ---------------
 st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
