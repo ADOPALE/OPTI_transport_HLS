@@ -19,10 +19,11 @@ def _st_info(msg, level="info"):
             st.success(msg)
         elif level == "warning":
             st.warning(msg)
-        else:
+        elif level == "info":
             st.info(msg)
     except Exception:
         pass
+
 try:
     from ortools.constraint_solver import routing_enums_pb2  # noqa
     from ortools.constraint_solver import pywrapcp            # noqa
@@ -50,8 +51,6 @@ def generate_target_windows(sites_config):
     - 1er passage : au plus tôt à l'heure 'open'.
     - Dernier passage : au plus tôt à l'heure 'close'.
     - Intermédiaires : répartis équitablement.
-
-    Interface inchangée — utilisée en amont par st.session_state.
     """
     tasks = []
     for site_name, config in sites_config.items():
@@ -75,11 +74,11 @@ def generate_target_windows(sites_config):
                 window = (cible - 10, cible + 10)
 
             tasks.append({
-                'site_name': str(site_name).strip().upper(),
-                'window': window,
+                'site_name'  : str(site_name).strip().upper(),
+                'window'     : window,
                 'target_time': cible,
-                'is_fixed': is_premier or is_dernier,
-                'done': False
+                'is_fixed'   : is_premier or is_dernier,
+                'done'       : False
             })
 
     return sorted(tasks, key=lambda x: x['window'][0])
@@ -92,105 +91,68 @@ def generate_target_windows(sites_config):
 def _build_ortools_data(m_duree_df, tasks, temps_collecte, max_tournee, config_rh):
     """
     Traduit les données métier en structures attendues par OR-Tools.
-
-    Retourne un dictionnaire 'data' contenant :
-      - distance_matrix   : matrice de durées (int, en minutes × SCALE)
-      - time_windows      : fenêtres [earliest, latest] par nœud
-      - service_times     : durée de collecte par nœud
-      - num_vehicles      : borne supérieure (nombre de tâches, on laisse OR-Tools réduire)
-      - depot             : index du dépôt
-      - node_to_task      : mapping index nœud → tâche originale
-      - site_names        : liste ordonnée des nœuds
-      - SCALE             : facteur d'échelle entier pour OR-Tools
+    SCALE=10 → précision à 0,1 minute.
     """
-    SCALE = 10  # OR-Tools travaille en entiers : on multiplie les minutes × 10
+    SCALE      = 10
+    DEPOT_NAME = "HLS"
 
-    # --- Préparation de la matrice de durées ---
     df = m_duree_df.copy()
     nom_col = df.columns[0]
     df = df.set_index(nom_col)
-    df.index = df.index.astype(str).str.strip().str.upper()
+    df.index   = df.index.astype(str).str.strip().str.upper()
     df.columns = df.columns.astype(str).str.strip().str.upper()
 
-    depot_name = "HLS"
-
-    # Liste ordonnée des nœuds : dépôt en index 0, puis une entrée par tâche
-    # (un même site peut apparaître plusieurs fois s'il a freq > 1)
-    node_names = [depot_name]
-    node_to_task = [None]  # index 0 = dépôt, pas de tâche associée
-
+    node_names   = [DEPOT_NAME]
+    node_to_task = [None]
     for task in tasks:
         node_names.append(task['site_name'])
         node_to_task.append(task)
 
-    n = len(node_names)
-
-    # --- Matrice de durées (entiers) ---
     distance_matrix = []
-    for i, from_site in enumerate(node_names):
+    for from_site in node_names:
         row = []
-        for j, to_site in enumerate(node_names):
-            if from_site not in df.index or to_site not in df.columns:
+        for to_site in node_names:
+            if from_site == to_site:
                 row.append(0)
-            elif i == j:
-                row.append(0)
+            elif from_site in df.index and to_site in df.columns:
+                row.append(int(round(float(df.loc[from_site, to_site]) * SCALE)))
             else:
-                val = df.loc[from_site, to_site]
-                row.append(int(round(float(val) * SCALE)))
+                row.append(0)
         distance_matrix.append(row)
 
-    # --- Fenêtres temporelles (entières, scalées) ---
-    # Dépôt : disponible toute la journée
     time_windows = [(int(200 * SCALE), int(1440 * SCALE))]
     for task in tasks:
-        tw_open  = int(task['window'][0] * SCALE)
-        tw_close = int(task['window'][1] * SCALE)
-        time_windows.append((tw_open, tw_close))
+        time_windows.append((int(task['window'][0] * SCALE), int(task['window'][1] * SCALE)))
 
-    # --- Durées de service (collecte) ---
-    service_times = [0]  # dépôt : pas de service
-    for _ in tasks:
-        service_times.append(int(temps_collecte * SCALE))
-
-    # --- Nombre de véhicules (borne haute) ---
-    # On démarre avec autant de véhicules que de tâches (OR-Tools minimisera)
-    num_vehicles = len(tasks)
-
-    # --- Amplitude maximale par poste (en scalé) ---
-    max_poste_scaled = int(config_rh.get('amplitude', 450) * SCALE)
-    pause_seuil_scaled = int(180 * SCALE)  # 3h avant obligation de pause
-    pause_duree_scaled = int(config_rh.get('pause', 30) * SCALE)
-    releve_scaled = int(config_rh.get('releve', 15) * SCALE)
-    max_tournee_scaled = int(max_tournee * SCALE)
+    service_times = [0] + [int(temps_collecte * SCALE) for _ in tasks]
 
     return {
-        'distance_matrix': distance_matrix,
-        'time_windows': time_windows,
-        'service_times': service_times,
-        'num_vehicles': num_vehicles,
-        'depot': 0,
-        'node_to_task': node_to_task,
-        'node_names': node_names,
-        'SCALE': SCALE,
-        'max_poste_scaled': max_poste_scaled,
-        'max_tournee_scaled': max_tournee_scaled,
-        'pause_seuil_scaled': pause_seuil_scaled,
-        'pause_duree_scaled': pause_duree_scaled,
-        'releve_scaled': releve_scaled,
-        'n_tasks': len(tasks),
+        'distance_matrix'  : distance_matrix,
+        'time_windows'     : time_windows,
+        'service_times'    : service_times,
+        'num_vehicles'     : len(tasks),
+        'depot'            : 0,
+        'node_to_task'     : node_to_task,
+        'node_names'       : node_names,
+        'SCALE'            : SCALE,
+        'max_poste_scaled' : int(config_rh.get('amplitude', 450) * SCALE),
+        'max_tournee_scaled': int(max_tournee * SCALE),
+        'pause_seuil_scaled': int(180 * SCALE),
+        'pause_duree_scaled': int(config_rh.get('pause', 30) * SCALE),
+        'releve_scaled'    : int(config_rh.get('releve', 15) * SCALE),
+        'n_tasks'          : len(tasks),
     }
 
 
 def _solve_ortools(data, time_limit_seconds=30):
     """
     Résout le VRPTW avec OR-Tools.
-
-    Objectif hiérarchique :
-      1. Minimiser le nombre de véhicules utilisés
-      2. Minimiser le temps total de trajet
-
-    Retourne la solution brute OR-Tools (ou None si infaisable).
+    - Contrainte dure : pas de repassage sur un même site physique dans une tournée
+      (souple : autorisé en dernier recours si OR-Tools ne trouve pas de solution sans).
+    - Objectif : minimiser véhicules puis temps total.
     """
+    SCALE = data['SCALE']
+
     manager = pywrapcp.RoutingIndexManager(
         len(data['distance_matrix']),
         data['num_vehicles'],
@@ -198,93 +160,158 @@ def _solve_ortools(data, time_limit_seconds=30):
     )
     routing = pywrapcp.RoutingModel(manager)
 
-    SCALE = data['SCALE']
-
-    # --- Callback de durée de transit ---
+    # ── Callback transit + service ──────────────────────────────────────────
     def time_callback(from_index, to_index):
         from_node = manager.IndexToNode(from_index)
         to_node   = manager.IndexToNode(to_index)
-        transit   = data['distance_matrix'][from_node][to_node]
-        service   = data['service_times'][from_node]
-        return transit + service
+        return data['distance_matrix'][from_node][to_node] + data['service_times'][from_node]
 
-    transit_callback_index = routing.RegisterTransitCallback(time_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+    cb_idx = routing.RegisterTransitCallback(time_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(cb_idx)
 
-    # --- Dimension temporelle avec fenêtres ---
+    # ── Dimension temporelle ────────────────────────────────────────────────
     routing.AddDimension(
-        transit_callback_index,
-        slack_max=int(60 * SCALE),          # attente max avant une fenêtre
-        capacity=int(1440 * SCALE),          # horizon journée complète
+        cb_idx,
+        slack_max=int(90 * SCALE),
+        capacity=int(1440 * SCALE),
         fix_start_cumul_to_zero=False,
         name='Time'
     )
-    time_dimension = routing.GetDimensionOrDie('Time')
+    time_dim = routing.GetDimensionOrDie('Time')
 
-    # Appliquer les fenêtres temporelles sur chaque nœud
     for node_idx in range(1, len(data['time_windows'])):
-        index = manager.NodeToIndex(node_idx)
+        idx = manager.NodeToIndex(node_idx)
         tw_open, tw_close = data['time_windows'][node_idx]
-        time_dimension.CumulVar(index).SetRange(tw_open, tw_close)
+        time_dim.CumulVar(idx).SetRange(tw_open, tw_close)
 
-    # Fenêtre dépôt de départ
-    depot_start = manager.NodeToIndex(data['depot'])
-    time_dimension.CumulVar(depot_start).SetRange(
-        data['time_windows'][0][0],
-        data['time_windows'][0][1]
-    )
+    depot_idx = manager.NodeToIndex(data['depot'])
+    time_dim.CumulVar(depot_idx).SetRange(*data['time_windows'][0])
 
-    # --- Contrainte d'amplitude de tournée (max_tournee) ---
-    for v in range(data['num_vehicles']):
-        start_var = time_dimension.CumulVar(routing.Start(v))
-        end_var   = time_dimension.CumulVar(routing.End(v))
-        routing.solver().Add(
-            end_var - start_var <= data['max_tournee_scaled']
-        )
-
-    # --- Contrainte de pause obligatoire (> 3h → pause 30 min) ---
-    # Modélisée via une dimension "temps de conduite cumulé" avec break
-    # OR-Tools gère les breaks via IntervalVar sur chaque véhicule
+    # ── Amplitude max de tournée ────────────────────────────────────────────
     solver = routing.solver()
     for v in range(data['num_vehicles']):
-        # Pause obligatoire si amplitude > 3h : on crée une IntervalVar de pause
-        # La pause peut se placer n'importe où entre 3h et fin de poste
+        solver.Add(
+            time_dim.CumulVar(routing.End(v)) - time_dim.CumulVar(routing.Start(v))
+            <= data['max_tournee_scaled']
+        )
+
+    # ── Contrainte : pas de repassage sur le même site physique (souple) ───
+    # On identifie les groupes de nœuds qui représentent le même site physique.
+    # Pour chaque véhicule, on impose qu'au plus 1 nœud du groupe soit visité.
+    # Si OR-Tools ne trouve pas de solution avec cette contrainte, on relâche.
+    node_names = data['node_names']
+    depot_name = node_names[0]
+
+    # Groupes : site_physique → liste d'index nœuds (hors dépôt)
+    site_to_nodes = {}
+    for node_idx, name in enumerate(node_names):
+        if node_idx == 0:  # dépôt
+            continue
+        site_to_nodes.setdefault(name, []).append(node_idx)
+
+    # Pénalité souple : si un site a plusieurs passages possibles dans une tournée,
+    # on pénalise fortement (mais pas interdit) le fait d'en faire 2 dans la même.
+    # On utilise AddDisjunction avec penalty=0 pour rendre chaque passage optionnel
+    # puis on laisse OR-Tools choisir — la contrainte stricte est gérée par
+    # un callback d'arc qui met le coût à l'infini si même site déjà visité.
+    # Solution compatible OR-Tools : on ajoute une dimension "visite" par site
+    # avec capacité 1 par véhicule (contrainte dure, souple si infaisable).
+    penalite_repassage = int(5e6)  # Forte pénalité mais pas infinie
+
+    for site, nodes in site_to_nodes.items():
+        if len(nodes) <= 1:
+            continue  # freq=1 : pas de risque de repassage
+        # Pour chaque paire de nœuds du même site, on interdit qu'un véhicule
+        # les visite tous les deux (coût prohibitif sur l'arc fictif).
+        # En OR-Tools, on le modélise via une dimension de comptage par site.
+        # Approche la plus simple et robuste : AllowedAssignments ou dimension comptage.
+        # On utilise ici une dimension entière "count_{site}" avec capacité 1.
+        dim_name = f"cnt_{site[:8].replace(' ', '_')}"
+        count_cb_vals = [0] * len(node_names)
+        for n in nodes:
+            count_cb_vals[n] = 1  # chaque visite de ce site compte pour 1
+
+        def make_count_cb(vals):
+            def cb(from_idx, to_idx):
+                return vals[manager.IndexToNode(to_idx)]
+            return cb
+
+        cnt_cb = routing.RegisterTransitCallback(make_count_cb(count_cb_vals))
+        routing.AddDimensionWithVehicleCapacity(
+            cnt_cb,
+            0,       # pas de slack
+            [1] * data['num_vehicles'],   # max 1 passage par site et par véhicule
+            True,    # start cumul to zero
+            dim_name
+        )
+
+    # ── Pauses obligatoires ─────────────────────────────────────────────────
+    for v in range(data['num_vehicles']):
         break_start = solver.IntVar(
             data['pause_seuil_scaled'],
             data['max_poste_scaled'],
             f'break_start_v{v}'
         )
-        break_interval = solver.FixedDurationIntervalVar(
-            break_start,
-            data['pause_duree_scaled'],
-            f'break_v{v}'
+        break_iv = solver.FixedDurationIntervalVar(
+            break_start, data['pause_duree_scaled'], f'break_iv_v{v}'
         )
-        time_dimension.SetBreakIntervalsOfVehicle(
-            [break_interval], v,
-            node_visit_transits=[int(5 * data['SCALE'])] * len(data['distance_matrix'])
+        time_dim.SetBreakIntervalsOfVehicle(
+            [break_iv], v,
+            node_visit_transits=[int(5 * SCALE)] * len(data['distance_matrix'])
         )
 
-    # --- Objectif : minimiser nombre de véhicules, puis temps total ---
-    # Pénalité forte pour chaque véhicule utilisé
+    # ── Objectif ────────────────────────────────────────────────────────────
     for v in range(data['num_vehicles']):
-        routing.SetFixedCostOfVehicle(int(1e7), v)  # coût fixe par véhicule
+        routing.SetFixedCostOfVehicle(int(1e8), v)
 
-    # --- Stratégie de recherche ---
-    search_params = pywrapcp.DefaultRoutingSearchParameters()
-    search_params.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    )
-    search_params.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    search_params.time_limit.seconds = time_limit_seconds
-    search_params.log_search = False
+    # ── Résolution (mode strict : contrainte de repassage active) ───────────
+    params = pywrapcp.DefaultRoutingSearchParameters()
+    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    params.time_limit.seconds = time_limit_seconds
+    params.log_search = False
 
-    solution = routing.SolveWithParameters(search_params)
+    solution = routing.SolveWithParameters(params)
 
     if solution:
-        return manager, routing, solution, time_dimension
-    return None, None, None, None
+        return manager, routing, solution, time_dim, False  # False = pas de repassage
+
+    # ── Fallback souple : on relâche la contrainte de repassage ─────────────
+    warnings.warn(
+        "Contrainte anti-repassage relâchée (fenêtres incompatibles).",
+        RuntimeWarning, stacklevel=3
+    )
+    # On recrée un modèle sans les dimensions de comptage
+    manager2 = pywrapcp.RoutingIndexManager(
+        len(data['distance_matrix']), data['num_vehicles'], data['depot']
+    )
+    routing2 = pywrapcp.RoutingModel(manager2)
+    cb_idx2  = routing2.RegisterTransitCallback(
+        lambda fi, ti: (data['distance_matrix'][manager2.IndexToNode(fi)][manager2.IndexToNode(ti)]
+                        + data['service_times'][manager2.IndexToNode(fi)])
+    )
+    routing2.SetArcCostEvaluatorOfAllVehicles(cb_idx2)
+    routing2.AddDimension(cb_idx2, int(90*SCALE), int(1440*SCALE), False, 'Time')
+    time_dim2 = routing2.GetDimensionOrDie('Time')
+
+    for node_idx in range(1, len(data['time_windows'])):
+        idx = manager2.NodeToIndex(node_idx)
+        tw_open, tw_close = data['time_windows'][node_idx]
+        time_dim2.CumulVar(idx).SetRange(tw_open, tw_close)
+    time_dim2.CumulVar(manager2.NodeToIndex(data['depot'])).SetRange(*data['time_windows'][0])
+
+    solver2 = routing2.solver()
+    for v in range(data['num_vehicles']):
+        solver2.Add(
+            time_dim2.CumulVar(routing2.End(v)) - time_dim2.CumulVar(routing2.Start(v))
+            <= data['max_tournee_scaled']
+        )
+        routing2.SetFixedCostOfVehicle(int(1e8), v)
+
+    solution2 = routing2.SolveWithParameters(params)
+    if solution2:
+        return manager2, routing2, solution2, time_dim2, True  # True = repassage autorisé
+    return None, None, None, None, False
 
 
 # ==========================================
@@ -292,64 +319,101 @@ def _solve_ortools(data, time_limit_seconds=30):
 # ==========================================
 
 def _extract_tournees(manager, routing, solution, time_dimension, data):
-    """
-    Extrait les tournées OR-Tools et les reformate en liste de dicts
-    identiques à l'ancien format :
-      [{'site': ..., 'heure': ...}, ...]
-
-    Seules les tournées non vides (ayant au moins un nœud hors dépôt) sont retournées.
-    """
-    SCALE = data['SCALE']
+    """Extrait les tournées OR-Tools au format interne [{"site", "heure"}, ...]."""
+    SCALE      = data['SCALE']
     depot_name = data['node_names'][0]
-    tournees = []
+    tournees   = []
 
     for v in range(data['num_vehicles']):
         index = routing.Start(v)
-        route_nodes = []
-
+        route = []
         while not routing.IsEnd(index):
             node = manager.IndexToNode(index)
-            time_var = time_dimension.CumulVar(index)
-            t = solution.Min(time_var) / SCALE
-            route_nodes.append({'node': node, 'heure': t})
+            t    = solution.Min(time_dimension.CumulVar(index)) / SCALE
+            route.append({'site': data['node_names'][node], 'heure': t})
             index = solution.Value(routing.NextVar(index))
 
-        # Nœud final (retour dépôt)
         node = manager.IndexToNode(index)
-        time_var = time_dimension.CumulVar(index)
-        t = solution.Min(time_var) / SCALE
-        route_nodes.append({'node': node, 'heure': t})
+        t    = solution.Min(time_dimension.CumulVar(index)) / SCALE
+        route.append({'site': data['node_names'][node], 'heure': t})
 
-        # Filtrer les tournées vides (dépôt → dépôt directement)
-        non_depot = [n for n in route_nodes if n['node'] != 0]
-        if not non_depot:
+        if all(s['site'] == depot_name for s in route):
             continue
-
-        # Reformater en [{'site': ..., 'heure': ...}]
-        tournee = []
-        for entry in route_nodes:
-            site_name = data['node_names'][entry['node']]
-            tournee.append({'site': site_name, 'heure': entry['heure']})
-
-        tournees.append(tournee)
+        tournees.append(route)
 
     return tournees
 
 
 # ==========================================
-# PARTIE 4 : AFFECTATION VÉHICULES / POSTES
+# PARTIE 4 : MÉTRIQUES D'OPTIMISATION
+# ==========================================
+
+def _calculer_score(flotte, config_rh, temps_collecte):
+    """
+    Calcule les métriques d'une solution pour comparer les itérations.
+
+    Retourne un dict :
+        nb_vehicules      : int
+        nb_postes         : int  (total chauffeurs sur la journée)
+        taux_occupation   : float  (moyenne sur tous les postes)
+        score_tri         : tuple  utilisé pour comparer deux solutions
+    """
+    MAX_POSTE = config_rh.get('amplitude', 450)
+    nb_vehicules = len(flotte)
+    nb_postes    = 0
+    taux_total   = 0.0
+
+    for vacations in flotte.values():
+        for vacation in vacations:
+            nb_postes += 1
+            # Amplitude réelle du poste
+            h_debut = vacation[0][0]['heure']
+            h_fin   = vacation[-1][-1]['heure']
+            amplitude = max(h_fin - h_debut, 1)
+
+            # Temps productif = conduite + collecte
+            temps_productif = 0.0
+            for tournee in vacation:
+                for i in range(len(tournee) - 1):
+                    # collecte sur chaque site (hors dépôt)
+                    if tournee[i]['site'] != 'HLS':
+                        temps_productif += temps_collecte
+                    # conduite = différence d'heure entre deux arrêts
+                    # (inclut les pauses d'attente, on prend la durée de trajet brute)
+                    temps_productif += max(0, tournee[i+1]['heure'] - tournee[i]['heure'] - temps_collecte)
+
+            taux = min(temps_productif / MAX_POSTE, 1.0)
+            taux_total += taux
+
+    taux_moyen = taux_total / nb_postes if nb_postes > 0 else 0.0
+
+    return {
+        'nb_vehicules'   : nb_vehicules,
+        'nb_postes'      : nb_postes,
+        'taux_occupation': taux_moyen,
+        # Tri : on minimise véhicules, puis postes, puis on maximise taux
+        'score_tri'      : (nb_vehicules, nb_postes, -round(taux_moyen, 4))
+    }
+
+
+def _est_meilleure(nouvelle, meilleure):
+    """Retourne True si 'nouvelle' est meilleure que 'meilleure'."""
+    if meilleure is None:
+        return True
+    return nouvelle['score_tri'] < meilleure['score_tri']
+
+
+# ==========================================
+# PARTIE 5 : AFFECTATION VÉHICULES / POSTES
 # ==========================================
 
 def assign_to_vehicles(tournees, config_rh):
-    """
-    Répartit les tournées par véhicule et par chauffeur (vacation).
-    Interface identique à l'original — utilisable indépendamment depuis st.session_state.
-    """
+    """Répartit les tournées par véhicule et par chauffeur (vacation)."""
     MAX_POSTE = config_rh.get('amplitude', 450)
     PAUSE     = config_rh.get('pause', 30)
     RELEVE    = config_rh.get('releve', 15)
 
-    tournees_triees = sorted(tournees, key=lambda x: x[0]['heure'])
+    tournees_triees  = sorted(tournees, key=lambda x: x[0]['heure'])
     flotte_vehicules = {}
 
     for trne in tournees_triees:
@@ -358,19 +422,16 @@ def assign_to_vehicles(tournees, config_rh):
         assigned   = False
 
         for v_id, postes in flotte_vehicules.items():
-            dernier_poste  = postes[-1]
-            h_debut_poste  = dernier_poste[0][0]['heure']
-            h_fin_poste    = dernier_poste[-1][-1]['heure']
+            dernier_poste = postes[-1]
+            h_debut_poste = dernier_poste[0][0]['heure']
+            h_fin_poste   = dernier_poste[-1][-1]['heure']
 
-            # 1. Ajout au chauffeur actuel (même poste)
             if (fin_trne - h_debut_poste) <= MAX_POSTE:
                 marge = PAUSE if (h_fin_poste - h_debut_poste) > 180 else 0
                 if h_fin_poste + marge <= debut_trne:
                     dernier_poste.append(trne)
                     assigned = True
                     break
-
-            # 2. Relève sur le même véhicule (nouveau chauffeur)
             elif h_fin_poste + RELEVE <= debut_trne:
                 postes.append([trne])
                 assigned = True
@@ -384,205 +445,83 @@ def assign_to_vehicles(tournees, config_rh):
 
 
 def optimiser_postes_chauffeurs(flotte, config_rh, souplesse=False):
-    """
-    Tente de fusionner les vacations pour réduire le nombre de chauffeurs
-    SANS ajouter de nouveaux véhicules.
-    Interface identique à l'original.
-    """
+    """Fusionne les vacations pour réduire le nombre de chauffeurs sans ajouter de véhicules."""
     MAX_POSTE = config_rh.get('amplitude', 450)
-    PAUSE     = config_rh.get('pause', 30)
     RELEVE    = config_rh.get('releve', 15)
 
     toutes_vacations = []
-    for v_id, vacations in flotte.items():
-        for vac in vacations:
-            toutes_vacations.append(vac)
-
+    for vacations in flotte.values():
+        toutes_vacations.extend(vacations)
     toutes_vacations.sort(key=lambda x: x[0][0]['heure'])
 
-    nb_vehicules_max  = len(flotte)
-    nouvelle_flotte   = {f"Véhicule {i+1}": [] for i in range(nb_vehicules_max)}
+    nouvelle_flotte = {f"Véhicule {i+1}": [] for i in range(len(flotte))}
 
-    for vac_a_placer in toutes_vacations:
-        debut_v = vac_a_placer[0][0]['heure']
-        fin_v   = vac_a_placer[-1][-1]['heure']
+    for vac in toutes_vacations:
+        debut_v = vac[0][0]['heure']
+        fin_v   = vac[-1][-1]['heure']
         placed  = False
 
-        # Essai de fusion dans un poste existant
-        for v_id, postes in nouvelle_flotte.items():
+        for postes in nouvelle_flotte.values():
             for poste in postes:
-                h_debut_poste = poste[0][0]['heure']
-                h_fin_poste   = poste[-1][-1]['heure']
-                nouvelle_amp  = max(h_fin_poste, fin_v) - min(h_debut_poste, debut_v)
+                h_dep_p = poste[0][0]['heure']
+                h_fin_p = poste[-1][-1]['heure']
+                amp = max(h_fin_p, fin_v) - min(h_dep_p, debut_v)
 
-                if nouvelle_amp <= MAX_POSTE:
+                if amp <= MAX_POSTE:
                     if souplesse:
                         for decalage in range(20, 31):
-                            if (fin_v + decalage >= h_debut_poste and debut_v <= h_fin_poste + decalage):
-                                poste.extend(vac_a_placer)
+                            if fin_v + decalage >= h_dep_p and debut_v <= h_fin_p + decalage:
+                                poste.extend(vac)
                                 poste.sort(key=lambda x: x[0]['heure'])
                                 placed = True
                                 break
                     else:
-                        if fin_v + 5 <= h_debut_poste or debut_v >= h_fin_poste + 5:
-                            poste.extend(vac_a_placer)
+                        if fin_v + 5 <= h_dep_p or debut_v >= h_fin_p + 5:
+                            poste.extend(vac)
                             poste.sort(key=lambda x: x[0]['heure'])
                             placed = True
-                            break
                 if placed:
                     break
             if placed:
                 break
 
-        # Sinon : relève sur véhicule existant
         if not placed:
-            for v_id in nouvelle_flotte:
-                postes = nouvelle_flotte[v_id]
+            for v_id, postes in nouvelle_flotte.items():
                 if not postes:
-                    postes.append(vac_a_placer)
+                    postes.append(vac)
                     placed = True
                     break
-                else:
-                    conflit = False
-                    for poste in postes:
-                        h_dep = poste[0][0]['heure']
-                        h_fin = poste[-1][-1]['heure']
-                        if not (fin_v + RELEVE <= h_dep or debut_v >= h_fin + RELEVE):
-                            conflit = True
-                            break
-                    if not conflit:
-                        postes.append(vac_a_placer)
-                        postes.sort(key=lambda x: x[0][0]['heure'])
-                        placed = True
-                        break
+                conflit = any(
+                    not (fin_v + RELEVE <= p[0][0]['heure'] or debut_v >= p[-1][-1]['heure'] + RELEVE)
+                    for p in postes
+                )
+                if not conflit:
+                    postes.append(vac)
+                    postes.sort(key=lambda x: x[0][0]['heure'])
+                    placed = True
+                    break
 
         if not placed:
-            v_id_secu = list(nouvelle_flotte.keys())[0]
-            nouvelle_flotte[v_id_secu].append(vac_a_placer)
+            nouvelle_flotte[list(nouvelle_flotte.keys())[0]].append(vac)
 
     return {k: v for k, v in nouvelle_flotte.items() if v}
 
 
 # ==========================================
-# PARTIE 5 : MOTEUR PRINCIPAL (point d'entrée)
-# ==========================================
-
-def run_optimization(
-    m_duree_df,
-    sites_config,
-    temps_collecte,
-    max_tournee,
-    config_rh=None,
-    souplesse=False,
-    time_limit_seconds=30
-):
-    """
-    Optimise les tournées de biologie — point d'entrée principal.
-    Interface identique à l'original, compatible avec app.py, param_bio.py
-    et resultats_bio.py sans aucune modification.
-
-    Paramètres
-    ----------
-    m_duree_df         : pd.DataFrame
-        Matrice de durées — st.session_state["data"]["matrice_duree"].
-        La première colonne contient les noms de sites.
-    sites_config       : dict  {nom_site: {"open": int, "close": int, "freq": int}}
-        st.session_state["biologie_config"]["sites"].
-    temps_collecte     : int  durée de collecte sur site (minutes).
-    max_tournee        : int  durée maximale dépôt→dépôt (minutes).
-    config_rh          : dict | None  {"amplitude": int, "pause": int, "releve": int}
-        st.session_state["biologie_config"]["rh"].
-        Si None (cas app.py v16), lu automatiquement depuis session_state
-        avec fallback sur les valeurs par défaut.
-    souplesse          : bool  st.session_state.get("souplesse_fusion", False).
-    time_limit_seconds : int  budget temps du solveur OR-Tools (défaut 30 s).
-
-    Retourne
-    --------
-    dict {"Véhicule N": [[tournee_1, tournee_2, ...], ...], ...}
-    Structure identique à l'ancienne version.
-    """
-    # ── Résolution de config_rh (correction bug app.py v16) ──────────────
-    if config_rh is None:
-        try:
-            import streamlit as st
-            config_rh = st.session_state.get("biologie_config", {}).get(
-                "rh", {"amplitude": 450, "pause": 30, "releve": 15}
-            )
-        except Exception:
-            config_rh = {"amplitude": 450, "pause": 30, "releve": 15}
-
-    # ── 1. Fenêtres cibles ────────────────────────────────────────────────
-    clean_config = {str(k).strip().upper(): v for k, v in sites_config.items()}
-    tasks        = generate_target_windows(clean_config)
-
-    # ── 2. Matrice nettoyée ───────────────────────────────────────────────
-    df = m_duree_df.copy()
-    col_noms = df.columns[0]
-    df = df.set_index(col_noms)
-    df.index   = df.index.astype(str).str.strip().str.upper()
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-
-    # ── 3. Tentative OR-Tools ─────────────────────────────────────────────
-    tournees_unitaires = None
-
-    if ORTOOLS_AVAILABLE:
-        data = _build_ortools_data(
-            m_duree_df, tasks, temps_collecte, max_tournee, config_rh
-        )
-        manager, routing, solution, time_dimension = _solve_ortools(
-            data, time_limit_seconds=time_limit_seconds
-        )
-        if solution is not None:
-            tournees_unitaires = _extract_tournees(
-                manager, routing, solution, time_dimension, data
-            )
-            _st_info("✅ Solution trouvée par OR-Tools (solveur optimal)", "success")
-        else:
-            warnings.warn(
-                f"OR-Tools n'a pas trouvé de solution en {time_limit_seconds}s. "
-                "Bascule sur l'heuristique gloutonne.",
-                RuntimeWarning,
-                stacklevel=2
-            )
-
-    # ── 4. Fallback greedy ────────────────────────────────────────────────
-    if tournees_unitaires is None:
-        tournees_unitaires = _greedy_fallback(
-            m_duree_df, tasks, temps_collecte, max_tournee
-        )
-        _st_info("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)", "warning")
-
-    # ── 5. Affectation véhicules et chauffeurs ────────────────────────────
-    resultat_initial  = assign_to_vehicles(tournees_unitaires, config_rh)
-
-    # ── 6. Compactage des postes ──────────────────────────────────────────
-    resultat_optimise = optimiser_postes_chauffeurs(
-        resultat_initial, config_rh, souplesse=souplesse
-    )
-
-    return resultat_optimise
-
-
-# ==========================================
-# PARTIE 6 : FALLBACK GREEDY (filet de sécurité)
+# PARTIE 6 : FALLBACK GREEDY
 # ==========================================
 
 def _greedy_fallback(m_duree_df, tasks, temps_collecte, max_tournee):
-    """
-    Heuristique gloutonne de l'ancienne version, conservée comme fallback
-    au cas où OR-Tools ne trouve pas de solution (instances dégénérées,
-    fenêtres très serrées, timeout).
-    """
+    """Heuristique gloutonne de secours si OR-Tools est indisponible."""
     df = m_duree_df.copy()
     nom_col = df.columns[0]
     df = df.set_index(nom_col)
-    df.index = df.index.astype(str).str.strip().str.upper()
+    df.index   = df.index.astype(str).str.strip().str.upper()
     df.columns = df.columns.astype(str).str.strip().str.upper()
 
-    depot = "HLS"
+    DEPOT      = "HLS"
     tasks_copy = [t.copy() for t in tasks]
-    tournees_unitaires = []
+    tournees   = []
 
     while any(not t['done'] for t in tasks_copy):
         remaining = [t for t in tasks_copy if not t['done']]
@@ -595,11 +534,11 @@ def _greedy_fallback(m_duree_df, tasks, temps_collecte, max_tournee):
             first_task['done'] = True
             continue
 
-        heure_depart = max(300, first_task['window'][0] - df.loc[depot, site_cible])
+        heure_depart = max(300, first_task['window'][0] - df.loc[DEPOT, site_cible])
         current_time = heure_depart
-        tournee = [{'site': depot, 'heure': current_time}]
-        current_site = depot
-        sites_visites = set()
+        tournee      = [{'site': DEPOT, 'heure': current_time}]
+        current_site = DEPOT
+        sites_visites = set()  # contrainte anti-repassage (souple via exclusion)
 
         while True:
             best_idx, score_min = None, float('inf')
@@ -609,7 +548,7 @@ def _greedy_fallback(m_duree_df, tasks, temps_collecte, max_tournee):
                 if task['done'] or t_site not in df.index or t_site in sites_visites:
                     continue
                 trajet  = df.loc[current_site, t_site]
-                retour  = df.loc[t_site, depot]
+                retour  = df.loc[t_site, DEPOT]
                 arrivee = current_time + trajet
                 debut   = max(arrivee, task['window'][0])
                 fin     = debut + temps_collecte
@@ -628,17 +567,110 @@ def _greedy_fallback(m_duree_df, tasks, temps_collecte, max_tournee):
                 current_time = h_reel + temps_collecte
                 task['done'] = True
                 current_site = t_site
-                sites_visites.add(t_site)
+                sites_visites.add(t_site)  # ← bloque le repassage dans cette tournée
                 for autre in df.columns:
                     if df.loc[t_site, autre] == 0:
                         sites_visites.add(autre)
             else:
-                tournee.append({
-                    'site': depot,
-                    'heure': current_time + df.loc[current_site, depot]
-                })
+                tournee.append({'site': DEPOT, 'heure': current_time + df.loc[current_site, DEPOT]})
                 break
 
-        tournees_unitaires.append(tournee)
+        tournees.append(tournee)
 
-    return tournees_unitaires
+    return tournees
+
+
+# ==========================================
+# PARTIE 7 : MOTEUR PRINCIPAL (point d'entrée)
+# ==========================================
+
+def run_optimization(
+    m_duree_df,
+    sites_config,
+    temps_collecte,
+    max_tournee,
+    config_rh=None,
+    souplesse=False,
+    time_limit_seconds=15
+):
+    """
+    Optimise les tournées de biologie par recherche itérative sur la durée max.
+
+    Stratégie :
+      - Teste tous les paliers de durée_max entre 60 min et max_tournee (pas 15 min)
+      - Pour chaque palier : résolution OR-Tools (ou greedy si indisponible)
+      - Retient la solution qui minimise (nb_vehicules, nb_postes, -taux_occupation)
+      - Contrainte anti-repassage : dure par défaut, souple en dernier recours
+
+    Interface inchangée — compatible app.py, param_bio.py, resultats_bio.py.
+    """
+    # ── Config RH ────────────────────────────────────────────────────────────
+    if config_rh is None:
+        try:
+            import streamlit as _st
+            config_rh = _st.session_state.get("biologie_config", {}).get(
+                "rh", {"amplitude": 450, "pause": 30, "releve": 15}
+            )
+        except Exception:
+            config_rh = {"amplitude": 450, "pause": 30, "releve": 15}
+
+    # ── Préparation commune ───────────────────────────────────────────────────
+    clean_config = {str(k).strip().upper(): v for k, v in sites_config.items()}
+    tasks        = generate_target_windows(clean_config)
+
+    # ── Plage de test : 60 → max_tournee, pas 15 min ─────────────────────────
+    paliers = list(range(60, max_tournee + 1, 15))
+    if max_tournee not in paliers:
+        paliers.append(max_tournee)
+
+    meilleure_flotte  = None
+    meilleur_score    = None
+    meilleur_palier   = None
+    repassage_autorise = False
+
+    _st_info(f"🔍 Recherche itérative sur {len(paliers)} paliers "
+             f"({paliers[0]}–{paliers[-1]} min, pas 15 min)...", "info")
+
+    for palier in paliers:
+        tournees_unitaires = None
+
+        if ORTOOLS_AVAILABLE:
+            data = _build_ortools_data(m_duree_df, tasks, temps_collecte, palier, config_rh)
+            manager, routing, solution, time_dim, repassage = _solve_ortools(
+                data, time_limit_seconds=time_limit_seconds
+            )
+            if solution is not None:
+                tournees_unitaires = _extract_tournees(manager, routing, solution, time_dim, data)
+                repassage_autorise = repassage
+
+        if tournees_unitaires is None:
+            tournees_unitaires = _greedy_fallback(m_duree_df, tasks, temps_collecte, palier)
+
+        if not tournees_unitaires:
+            continue
+
+        flotte   = assign_to_vehicles(tournees_unitaires, config_rh)
+        flotte   = optimiser_postes_chauffeurs(flotte, config_rh, souplesse=souplesse)
+        score    = _calculer_score(flotte, config_rh, temps_collecte)
+
+        if _est_meilleure(score, meilleur_score):
+            meilleure_flotte = flotte
+            meilleur_score   = score
+            meilleur_palier  = palier
+
+    # ── Rapport final ─────────────────────────────────────────────────────────
+    if meilleur_score is not None:
+        solveur = "OR-Tools" if ORTOOLS_AVAILABLE else "heuristique gloutonne"
+        repass  = " (repassage autorisé sur certains sites)" if repassage_autorise else ""
+        _st_info(
+            f"✅ Meilleure solution ({solveur}{repass}) — "
+            f"palier {meilleur_palier} min | "
+            f"{meilleur_score['nb_vehicules']} véhicule(s) | "
+            f"{meilleur_score['nb_postes']} poste(s) | "
+            f"taux occupation moyen {meilleur_score['taux_occupation']:.1%}",
+            "success"
+        )
+    else:
+        _st_info("⚠️ Aucune solution trouvée sur tous les paliers.", "warning")
+
+    return meilleure_flotte or {}
