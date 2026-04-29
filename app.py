@@ -22,14 +22,7 @@ from modules.resultats_bio import (
 )
 from modules.param_flux import afficher_parametres_logistique
 from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
-from modules.sim_engine import (
-    traitement_flux_recurrents, 
-    ordonnancer_flotte_optimale,
-    preparer_flux_complets_du_jour, # Ajoutez celle-ci
-    tunnel_consolidation_flux# Ajoutez celle-ci
-)
-from modules.sequencage_engine import trouver_meilleure_configuration_journee, afficher_controle_coherence
-import modules.Resultats_simul_flux as res_flux
+from modules.flux_engine import run_flux_optimization
 
 # --------- FONCTIONS UI ------------
 def show_home():
@@ -247,132 +240,174 @@ elif selected == "Simul tournées":
         st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
         
 elif selected == "Synthèse transport":
-    if 'df_sequence_type' in st.session_state:
-        st.title("🚚 Synthèse Hebdomadaire & Détail Opérationnel")
-        
-        # 1. RÉCUPÉRATION DES DONNÉES
-        df_recurrent = st.session_state.get('df_sequence_type')
-        df_specifique = st.session_state.get('df_flux_specifique', pd.DataFrame())
-        df_vehicules = st.session_state['data']['param_vehicules']
-        df_contenants = st.session_state['data']['param_contenants']
-        df_sites = st.session_state['data']['param_sites']
-        # On récupère, on définit la 1ère colonne comme index, et on convertit en dictionnaire
-        matrice_duree = st.session_state['data']['matrice_duree'].set_index(st.session_state['data']['matrice_duree'].columns[0]).to_dict('index')
-        #matrice_duree = st.session_state['data'].get('matrice_duree')
-        params_logistique = st.session_state.get('params_logistique')
+    st.title("🚚 Synthèse Transport — Optimisation OR-Tools")
 
-        # Fonction utilitaire pour l'affichage
-        def fmt_heure_safe(val):
-            try:
-                if pd.isna(val) or val is None: return "--:--"
-                h = int(val // 60)
-                m = int(val % 60)
-                return f"{h:02d}:{m:02d}"
-            except: return "Err"
+    # Vérification des prérequis
+    donnees_ok = (
+        "data" in st.session_state
+        and "m_flux"           in st.session_state["data"]
+        and "param_vehicules"  in st.session_state["data"]
+        and "param_contenants" in st.session_state["data"]
+        and "param_sites"      in st.session_state["data"]
+        and "matrice_duree"    in st.session_state["data"]
+    )
+    params_ok = "params_logistique" in st.session_state
 
-        # --- BOUTON DE LANCEMENT GLOBAL ---
-        if st.button("🚀 Lancer la simulation hebdomadaire (Pipe Complet)", type="primary", use_container_width=True):
-            if matrice_duree is None:
-                st.error("⚠️ Matrice de temps introuvable.")
-            else:
+    if not donnees_ok:
+        st.warning("⚠️ Importez vos données Excel avant de lancer la simulation.")
+    elif not params_ok:
+        st.warning("⚠️ Validez vos paramètres logistiques dans l'onglet 'Véhicules et paramètres'.")
+    else:
+        # Sélection du jour
+        jour_choisi = st.selectbox(
+            "Jour à simuler",
+            ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"],
+            key="flux_jour_choisi"
+        )
+
+        # Budget temps solveur
+        time_limit = st.slider(
+            "Budget temps OR-Tools par type de véhicule (secondes)",
+            min_value=15, max_value=180, value=60, step=15,
+            help="Plus la valeur est élevée, plus la solution sera proche de l'optimal."
+        )
+
+        btn_label = (
+            "🔄 Relancer la simulation"
+            if st.session_state.get("flux_sim_lancee")
+            else "🚀 Lancer la simulation"
+        )
+
+        if st.button(btn_label, type="primary", use_container_width=True):
+            with st.spinner("🧠 Optimisation OR-Tools en cours..."):
                 try:
-                    jours_semaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
-                    resultats_hebdo = []
-                    dict_detail_sj = {}
-                    dict_postes_par_jour = {} # Pour stocker les plannings
-                    
-                    from modules.sim_engine import (
-                        preparer_flux_complets_du_jour, 
-                        tunnel_consolidation_flux, 
-                        calculer_nmax_par_type
+                    resultats = run_flux_optimization(
+                        df_flux           = st.session_state["data"]["m_flux"],
+                        df_vehicules      = st.session_state["data"]["param_vehicules"],
+                        df_contenants     = st.session_state["data"]["param_contenants"],
+                        df_sites          = st.session_state["data"]["param_sites"],
+                        matrice_duree     = st.session_state["data"]["matrice_duree"],
+                        params_logistique = st.session_state["params_logistique"],
+                        jour              = jour_choisi,
+                        time_limit_seconds= time_limit,
                     )
-                    from modules.sequencage_engine import trouver_meilleure_configuration_journee
-
-                    with st.status("Exécution du Pipe Logistique...", expanded=True) as status:
-                        for jour in jours_semaine[:1]:
-                            st.write(f"🔄 Traitement du **{jour}**...")
-                            
-                            # A. Préparation & Consolidation
-                            df_complet_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
-                            liste_globale_sj = tunnel_consolidation_flux(
-                                df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree
-                            )
-                            dict_detail_sj[jour] = liste_globale_sj
-                            
-                            # B. Calcul Intensité (Besoin théorique)
-                            intensite_dict = calculer_nmax_par_type(liste_globale_sj)
-
-                            st.write(f"**📈 Courbe d'intensité théorique du Lundi")
-                            labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
-                            st.area_chart(pd.DataFrame(intensite_dict, index=labels_h))
-                            
-                            # C. Séquençage Optimisé (Recherche du minimum de camions réels)
-                            st.write(f"  ↳ 🧠 Optimisation de l'ordonnancement...")
-                            res_opti = trouver_meilleure_configuration_journee(
-                                liste_globale_sj, intensite_dict, df_vehicules, matrice_duree, params_logistique
-                            )
-                            
-                            if res_opti:
-                                dict_postes_par_jour[jour] = res_opti["postes"]
-                                n_camions_total = len(res_opti["postes"])
-                                
-                                # D. Enregistrement pour le récap
-                                comptage_jour = {"Jour": jour, "Véhicules Réels": n_camions_total}
-                                # On ventile par type de poste pour le tableau
-                                for p in res_opti["postes"]:
-                                    key = f"{p.vehicule_type}"
-                                    comptage_jour[key] = comptage_jour.get(key, 0) + 1
-                                
-                                resultats_hebdo.append(comptage_jour)
-
-                                afficher_controle_coherence(liste_globale_sj, res_opti["postes"])
-                            else:
-                                st.error(f"Impossible de trouver une solution pour {jour}")
-
-                        # Sauvegarde globale
-                        st.session_state['df_recap_hebdo'] = pd.DataFrame(resultats_hebdo).fillna(0)
-                        st.session_state['dict_detail_sj'] = dict_detail_sj
-                        st.session_state['dict_postes_par_jour'] = dict_postes_par_jour
-                        status.update(label="✅ Simulation hebdomadaire terminée !", state="complete")
-                
+                    st.session_state["flux_resultats"]  = resultats
+                    st.session_state["flux_sim_lancee"] = True
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"Erreur lors du pipe : {e}")
+                    st.error(f"Erreur lors de l'optimisation : {e}")
                     st.exception(e)
 
-        # --- AFFICHAGE DES RÉSULTATS ---
-        if 'df_recap_hebdo' in st.session_state:
-            st.divider()
-            st.subheader("📊 Récapitulatif du Dimensionnement")
-            st.dataframe(st.session_state['df_recap_hebdo'], use_container_width=True)
+        # ── AFFICHAGE DES RÉSULTATS (après rerun) ──────────────────────────
+        if st.session_state.get("flux_sim_lancee") and "flux_resultats" in st.session_state:
+            res     = st.session_state["flux_resultats"]
+            rapport = res.get("rapport", {})
+            postes  = res.get("postes", [])
+            jour_res = res.get("jour", jour_choisi)
 
             st.divider()
-            st.subheader("🔍 Analyse Opérationnelle par Jour")
-            jour_sel = st.selectbox("Choisir un jour pour voir le détail :", ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"])
-            
-            # --- 1. Graphique de Charge ---
-            liste_sj_jour = st.session_state['dict_detail_sj'].get(jour_sel, [])
-            if liste_sj_jour:
-                from modules.sim_engine import calculer_nmax_par_type
-                intensite_dict = calculer_nmax_par_type(liste_sj_jour)
-                
-                st.write(f"**📈 Courbe d'intensité théorique ({jour_sel})**")
-                labels_h = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
-                st.area_chart(pd.DataFrame(intensite_dict, index=labels_h))
 
-            # --- 2. Planning Gantt (Séquençage Réel) ---
-            postes_jour = st.session_state.get('dict_postes_par_jour', {}).get(jour_sel)
-            if postes_jour:
-                st.write(f"**📅 Planning Gantt des chauffeurs ({jour_sel})**")
-                type_choisi = st.selectbox("Choisir un type", df_vehicules['Types'].unique())
-                res_flux.afficher_gantt_chauffeur_detaille(
-                    postes_jour, 
-                    type_choisi, 
-                    liste_sj_jour  # <--- Ajout du 3ème argument indispensable
-                )
+            # ── Métriques globales ──────────────────────────────────────────
+            st.subheader(f"📊 Résultats — {jour_res}")
 
-                
-                
-            
+            nb_v_par_type = rapport.get("nb_vehicules_par_type", {})
+            nb_p_par_type = rapport.get("nb_postes_par_type", {})
+            all_types     = sorted(set(list(nb_v_par_type.keys()) + list(nb_p_par_type.keys())))
 
-    else:
-        st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
+            if all_types:
+                cols = st.columns(len(all_types) + 2)
+                for i, v_type in enumerate(all_types):
+                    cols[i].metric(
+                        f"🚛 {v_type}",
+                        f"{nb_v_par_type.get(v_type, 0)} véh.",
+                        f"{nb_p_par_type.get(v_type, 0)} poste(s)"
+                    )
+                cols[-2].metric("👤 Postes total",   rapport.get("nb_postes_total", 0))
+                cols[-1].metric("⏱️ Taux moyen",     f"{rapport.get('taux_moyen', 0):.1%}")
+
+            # Alerte jobs non planifiés
+            nb_np = rapport.get("nb_jobs_non_planifies", 0)
+            if nb_np > 0:
+                st.warning(f"⚠️ {nb_np} job(s) n'ont pas pu être planifiés "
+                           "(vérifiez les fenêtres horaires et l'accessibilité des sites).")
+            else:
+                st.success("✅ Tous les flux ont été planifiés.")
+
+            # ── Détail des postes chauffeurs ────────────────────────────────
+            if postes:
+                st.divider()
+                st.subheader("📅 Planning des postes chauffeurs")
+
+                # Filtrage par type de véhicule
+                types_dispo = sorted({p.v_type for p in postes})
+                type_filtre = st.selectbox("Filtrer par type de véhicule", ["Tous"] + types_dispo,
+                                           key="flux_type_filtre")
+                postes_affiches = postes if type_filtre == "Tous" else [p for p in postes if p.v_type == type_filtre]
+
+                # Tableau récapitulatif des postes
+                rows = []
+                for p in postes_affiches:
+                    h_deb = f"{int(p.h_debut // 60):02d}h{int(p.h_debut % 60):02d}"
+                    h_fin = f"{int(p.h_fin   // 60):02d}h{int(p.h_fin   % 60):02d}"
+                    rows.append({
+                        "Poste"           : p.poste_id,
+                        "Type véhicule"   : p.v_type,
+                        "Début"           : h_deb,
+                        "Fin"             : h_fin,
+                        "Amplitude (min)" : round(p.amplitude, 0),
+                        "Taux occupation" : f"{p.taux_occupation:.1%}",
+                        "Nb missions"     : len(p.missions),
+                    })
+                if rows:
+                    st.dataframe(
+                        pd.DataFrame(rows),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                # Détail mission d'un poste sélectionné
+                st.divider()
+                st.subheader("🔍 Détail d'un poste")
+                poste_ids = [p.poste_id for p in postes_affiches]
+                if poste_ids:
+                    poste_sel_id = st.selectbox("Choisir un poste", poste_ids, key="flux_poste_sel")
+                    poste_sel = next((p for p in postes_affiches if p.poste_id == poste_sel_id), None)
+                    if poste_sel and poste_sel.missions:
+                        rows_m = []
+                        for m in poste_sel.missions:
+                            heure = f"{int(m['heure'] // 60):02d}h{int(m['heure'] % 60):02d}"
+                            action = "📦 Chargement" if m['is_pickup'] else "🏁 Livraison"
+                            rows_m.append({
+                                "Heure"         : heure,
+                                "Action"        : action,
+                                "Site"          : m['site'],
+                                "Contenant"     : m['type_contenant'],
+                                "Qté"           : m['nb_contenants'],
+                                "Propre/Sale"   : m['propre_sale'],
+                            })
+                        st.dataframe(
+                            pd.DataFrame(rows_m),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+            # ── Graphique de charge par type de véhicule ────────────────────
+            jobs_par_type = res.get("jobs_par_type", {})
+            if jobs_par_type:
+                st.divider()
+                st.subheader("📈 Charge horaire théorique par type de véhicule")
+                import numpy as np
+                heures = list(range(24))
+                chart_data = {}
+                for v_type, jlist in jobs_par_type.items():
+                    vecteur = np.zeros(24)
+                    for j in jlist:
+                        h_start = max(0, min(23, int(j.h_dispo   / 60)))
+                        h_end   = max(0, min(23, int(j.h_deadline / 60)))
+                        if h_end > h_start:
+                            vecteur[h_start:h_end] += j.nb_contenants / max(h_end - h_start, 1)
+                    if vecteur.sum() > 0:
+                        chart_data[v_type] = vecteur
+                if chart_data:
+                    labels = [f"{h:02d}h" for h in heures]
+                    st.bar_chart(pd.DataFrame(chart_data, index=labels))
