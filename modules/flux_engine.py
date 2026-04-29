@@ -94,8 +94,18 @@ def _excel_time_to_minutes(val: Any, default: float = 360.0) -> float:
 
 
 def _norm(s: Any) -> str:
-    """Normalise un nom de site/véhicule/contenant."""
-    return str(s).strip().upper()
+    """
+    Normalise un nom de site/véhicule/contenant.
+    Supprime les espaces, met en majuscules et retire les accents
+    pour éviter les problèmes de correspondance (ex: 'Sté' vs 'STE').
+    """
+    import unicodedata
+    val = str(s).strip().upper()
+    # Décomposition unicode puis suppression des caractères de combinaison (accents)
+    return ''.join(
+        c for c in unicodedata.normalize('NFD', val)
+        if unicodedata.category(c) != 'Mn'
+    )
 
 
 # ============================================================
