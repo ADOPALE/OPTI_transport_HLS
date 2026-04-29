@@ -1,6 +1,28 @@
 import warnings
 import pandas as pd
 import numpy as np
+
+try:
+    import streamlit as st
+    _ST_AVAILABLE = True
+except Exception:
+    st = None
+    _ST_AVAILABLE = False
+
+def _st_info(msg, level="info"):
+    """Affiche un message dans Streamlit si disponible, sinon print."""
+    print(msg)
+    if not _ST_AVAILABLE or st is None:
+        return
+    try:
+        if level == "success":
+            st.success(msg)
+        elif level == "warning":
+            st.warning(msg)
+        else:
+            st.info(msg)
+    except Exception:
+        pass
 try:
     from ortools.constraint_solver import routing_enums_pb2  # noqa
     from ortools.constraint_solver import pywrapcp            # noqa
@@ -515,11 +537,7 @@ def run_optimization(
             tournees_unitaires = _extract_tournees(
                 manager, routing, solution, time_dimension, data
             )
-            try:
-                st.write("✅ Solution trouvée par OR-Tools (solveur optimal)")
-                print("✅ Solution trouvée par OR-Tools (solveur optimal)")
-            except Exception:
-                pass
+            _st_info("✅ Solution trouvée par OR-Tools (solveur optimal)", "success")
         else:
             warnings.warn(
                 f"OR-Tools n'a pas trouvé de solution en {time_limit_seconds}s. "
@@ -533,11 +551,7 @@ def run_optimization(
         tournees_unitaires = _greedy_fallback(
             m_duree_df, tasks, temps_collecte, max_tournee
         )
-        try:
-            st.write("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
-            print("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
-        except Exception:
-            pass
+        _st_info("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)", "warning")
 
     # ── 5. Affectation véhicules et chauffeurs ────────────────────────────
     resultat_initial  = assign_to_vehicles(tournees_unitaires, config_rh)
