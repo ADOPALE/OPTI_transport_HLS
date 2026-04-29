@@ -517,6 +517,7 @@ def run_optimization(
             )
             try:
                 st.write("✅ Solution trouvée par OR-Tools (solveur optimal)")
+                print("✅ Solution trouvée par OR-Tools (solveur optimal)")
             except Exception:
                 pass
         else:
@@ -534,6 +535,7 @@ def run_optimization(
         )
         try:
             st.write("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
+            print("⚠️ Solution calculée par l'heuristique gloutonne (OR-Tools indisponible ou sans solution)")
         except Exception:
             pass
 
