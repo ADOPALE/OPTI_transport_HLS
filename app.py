@@ -22,7 +22,7 @@ from modules.resultats_bio import (
 )
 from modules.param_flux import afficher_parametres_logistique
 from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
-from modules.flux_engine import run_flux_optimization
+from modules.flux_engine import run_flux_optimization, verifier_faisabilite, precalculer_capacites
 
 # --------- FONCTIONS UI ------------
 def show_home():
@@ -271,6 +271,53 @@ elif selected == "Synthèse transport":
             min_value=15, max_value=180, value=60, step=15,
             help="Plus la valeur est élevée, plus la solution sera proche de l'optimal."
         )
+
+        # ── Contrôle de faisabilité ────────────────────────────────────────
+        if st.button("🔍 Vérifier la faisabilité", use_container_width=True):
+            with st.spinner("Vérification en cours..."):
+                try:
+                    cap = precalculer_capacites(
+                        st.session_state["data"]["param_vehicules"],
+                        st.session_state["data"]["param_contenants"],
+                    )
+                    controle = verifier_faisabilite(
+                        df_flux           = st.session_state["data"]["m_flux"],
+                        df_vehicules      = st.session_state["data"]["param_vehicules"],
+                        df_contenants     = st.session_state["data"]["param_contenants"],
+                        df_sites          = st.session_state["data"]["param_sites"],
+                        capacites         = cap,
+                        params_logistique = st.session_state["params_logistique"],
+                        jour              = jour_choisi,
+                    )
+                    st.session_state["flux_controle"] = controle
+                except Exception as e:
+                    st.error(f"Erreur lors du contrôle : {e}")
+                    st.exception(e)
+
+        # Affichage du rapport de faisabilité
+        if "flux_controle" in st.session_state:
+            ctrl = st.session_state["flux_controle"]
+            if ctrl["faisable"]:
+                st.success(ctrl["resume"])
+            else:
+                st.warning(ctrl["resume"])
+                with st.expander(f"📋 Voir les {ctrl['nb_flux_ko']} flux non faisables", expanded=False):
+                    if not ctrl["details_df"].empty:
+                        # Grouper par raison pour un affichage clair
+                        for raison, grp in ctrl["details_df"].groupby("Problème"):
+                            labels = {
+                                "SITE_INCONNU"             : "🔴 Sites inconnus dans param_sites",
+                                "AUCUN_VEHICULE_ACCESSIBLE": "🟠 Aucun véhicule accessible sur la liaison",
+                                "AUCUNE_CAPACITE"          : "🟡 Véhicule accessible mais capacité incompatible",
+                            }
+                            st.subheader(labels.get(raison, raison))
+                            st.dataframe(
+                                grp.drop(columns=["Problème"]),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+
+        st.divider()
 
         btn_label = (
             "🔄 Relancer la simulation"
