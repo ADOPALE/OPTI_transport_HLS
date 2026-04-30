@@ -727,19 +727,26 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         )
 
     # ── Contrainte d'exclusion propre/sale ──────────────────────────────────
-    # Implémentation : on crée une dimension "propre" et "sale" par véhicule.
-    # Si un véhicule transporte du PROPRE, il ne peut pas prendre du SALE
-    # dans la même tournée (et vice-versa).
-    # Approche : pénalité prohibitive sur les arcs entre nœuds incompatibles.
-    COUT_INTERDIT = int(1e9)
+    # RemoveValue() sur les arcs propre↔sale peut rendre le modèle infaisable
+    # si les nœuds d'un même type ne forment pas un graphe connexe suffisant.
+    # On utilise à la place une pénalité forte sur le coût d'arc,
+    # ce qui laisse OR-Tools trouver une solution même dans les cas difficiles
+    # (il choisira de ne jamais emprunter ces arcs sauf en dernier recours).
     ps = data['propre_sale_par_noeud']
-    for i in range(1, n_nodes):
-        for k in range(1, n_nodes):
-            if i != k and ps[i] and ps[k] and ps[i] != ps[k]:
-                # Arc interdit entre nœuds propre et sale
-                i_idx = manager.NodeToIndex(i)
-                k_idx = manager.NodeToIndex(k)
-                routing.NextVar(i_idx).RemoveValue(k_idx)
+    COUT_MIXTE = int(1e7)  # fort mais pas infini → solution dégradée plutôt qu'infaisable
+
+    def penalite_callback(from_idx, to_idx):
+        from_node = manager.IndexToNode(from_idx)
+        to_node   = manager.IndexToNode(to_idx)
+        transit   = data['time_matrix'][from_node][to_node]
+        # Pénalité si mélange propre/sale
+        if (ps[from_node] and ps[to_node]
+                and ps[from_node] != ps[to_node]):
+            return transit + COUT_MIXTE
+        return transit
+
+    cb_penalite = routing.RegisterTransitCallback(penalite_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(cb_penalite)
 
     # ── Objectif : coût fixe fort par véhicule ──────────────────────────────
     COUT_FIXE_VEH = int(1e8)
