@@ -799,7 +799,8 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         params.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        params.time_limit.seconds = max(10, time_limit_seconds // len(strategies))
+        # Pas de limite de temps — OR-Tools cherche jusqu'à trouver
+        # params.time_limit.seconds = ...  # désactivé
         params.log_search = False
         solution = routing.SolveWithParameters(params)
         status = routing.status()
@@ -817,7 +818,8 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
         params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
-        params.time_limit.seconds = time_limit_seconds
+        # Pas de limite de temps sur la dernière tentative non plus
+        # params.time_limit.seconds = time_limit_seconds
         params.log_search = False
         solution = routing.SolveWithParameters(params)
         status = routing.status()
@@ -1323,16 +1325,9 @@ def _solve_type_iteratif(
     time_limit_seconds: int = 60,
 ) -> dict | None:
     """
-    Itère de 1 à nmax véhicules et s'arrête dès qu'OR-Tools
-    trouve une solution valide.
-
-    Pour chaque valeur de n_v :
-      - On reconstruit un RoutingModel avec exactement n_v véhicules
-      - On lance le solveur avec time_limit_seconds / nmax secondes
-      - Si solution trouvée → on retourne immédiatement
-      - Sinon → on essaie avec n_v + 1
-
-    Si aucune solution jusqu'à nmax → retourne None.
+    Lance une unique tentative OR-Tools avec ceil(Nmax × 1.2) véhicules.
+    OR-Tools minimise lui-même le nombre utilisés via le coût fixe élevé.
+    Filet de sécurité à ceil(Nmax × 1.5) si la première tentative échoue.
     """
     if not data:
         return None
@@ -1340,7 +1335,7 @@ def _solve_type_iteratif(
     nmax           = data.get('nmax', data['n_vehicles'])
     nmax_theorique = data.get('nmax_theorique', 1)
     pic_charge     = data.get('pic_charge_min', 0)
-    SCALE          = data['SCALE']
+    n_jobs         = len(data.get('jobs', []))
 
     _log(
         f"  📊 Pic de charge lissée : {pic_charge:.1f} min | "
@@ -1349,43 +1344,38 @@ def _solve_type_iteratif(
         "info"
     )
 
-    # Plage de recherche : Nmax → 1.5×Nmax (arrondi au supérieur)
-    # On part de la meilleure estimation et on monte si nécessaire.
-    n_jobs    = len(data.get("jobs", []))
-    nmax_haut = min(n_jobs, math.ceil(nmax * 1.5))
-    _log(f"  🔍 Plage de recherche : {nmax} → {nmax_haut} véhicules", "info")
+    # ── Tentative principale : ceil(Nmax × 1.2) ─────────────────────────────
+    n_v = min(n_jobs, math.ceil(nmax * 1.2))
+    _log(f"  🔄 Tentative avec {n_v} véhicule(s) (budget : {time_limit_seconds}s)...", "info")
+    sol = _solve_type({**data, 'n_vehicles': n_v}, time_limit_seconds=time_limit_seconds)
+    if sol is not None:
+        _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
+        return sol
 
-    for n_v in range(nmax, nmax_haut + 1):
-        _log(f"  🔄 Tentative avec {n_v} véhicule(s) (budget : {time_limit_seconds}s)...", "info")
+    # ── Filet de sécurité : ceil(Nmax × 1.5) ───────────────────────────────
+    n_v2 = min(n_jobs, math.ceil(nmax * 1.5))
+    if n_v2 > n_v:
+        _log(f"  ↳ Échec avec {n_v}, filet : {n_v2} véhicule(s)...", "warning")
+        sol = _solve_type({**data, 'n_vehicles': n_v2}, time_limit_seconds=time_limit_seconds)
+        if sol is not None:
+            _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
+            return sol
+        n_v = n_v2
 
-        data_nv = {**data, 'n_vehicles': n_v}
-        solution_data = _solve_type(data_nv, time_limit_seconds=time_limit_seconds)
-
-        if solution_data is not None:
-            _log(f"  ✅ Solution trouvée avec {n_v} véhicule(s)", "success")
-            return solution_data
-
-        _log(f"  ↳ Pas de solution avec {n_v} véhicule(s), on essaie {n_v+1}...", "info")
-
-    _log(
-        f"  ❌ Aucune solution trouvée jusqu'à {nmax} véhicules.",
-        "error"
-    )
+    # ── Diagnostic ───────────────────────────────────────────────────────────
+    _log(f"  ❌ Aucune solution trouvée.", "error")
     _log("  🔬 Lancement du diagnostic d'infaisabilité...", "info")
-    diagnostiquer_infaisabilite({**data, 'n_vehicles': nmax}, time_limit_seconds=20)
-
-    # Diagnostic capacité : vérifier si des jobs dépassent la capacité
+    diagnostiquer_infaisabilite({**data, 'n_vehicles': n_v}, time_limit_seconds=20)
     capa_max = data['vehicle_capacity']
     jobs_hors_capa = [j for j in data['jobs'] if j.nb_contenants > capa_max]
     if jobs_hors_capa:
         _log(f"  ⚠️ {len(jobs_hors_capa)} job(s) avec nb_contenants > capacité ({capa_max}) :", 'error')
         for j in jobs_hors_capa[:10]:
-            _log(f"    Job {j.job_id} : {j.origine}→{j.destination}, {j.nb_contenants} contenants (max={capa_max})", 'error')
+            _log(f"    Job {j.job_id} : {j.origine}→{j.destination}, "
+                 f"{j.nb_contenants} contenants (max={capa_max})", 'error')
     else:
-        total = sum(abs(d) for d in data['demands'] if d > 0)
-        _log(f"  📊 Demande totale : {total} | Capacité totale : {capa_max * nmax} ({nmax}×{capa_max})", 'info')
-        _log("  💡 Cause probable : le cumul de capacité descend en dessous de 0 (demands négatifs)."
-             " Essayez d'augmenter le slack_max de la dimension Capacity.", 'warning')
+        total = sum(d for d in data['demands'] if d > 0)
+        _log(f"  📊 Demande totale : {total} | Capacité totale : {capa_max * n_v}", 'info')
     return None
 
 
