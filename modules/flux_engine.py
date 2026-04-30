@@ -1344,8 +1344,10 @@ def _solve_type_iteratif(
         "info"
     )
 
-    # ── Tentative principale : ceil(Nmax × 1.2) ─────────────────────────────
-    n_v = min(n_jobs, math.ceil(nmax * 1.2))
+    # ── Tentative principale : ceil(Nmax_theorique × 1.2) ──────────────────
+    # On utilise nmax_theorique (pic de charge / 15min) comme base,
+    # pas nmax (= nmax_theorique × 2) qui est trop conservateur.
+    n_v = min(n_jobs, max(1, math.ceil(nmax_theorique * 1.2)))
     _log(f"  🔄 Tentative avec {n_v} véhicule(s) (budget : {time_limit_seconds}s)...", "info")
     sol = _solve_type({**data, 'n_vehicles': n_v}, time_limit_seconds=time_limit_seconds)
     if sol is not None:
@@ -1353,7 +1355,7 @@ def _solve_type_iteratif(
         return sol
 
     # ── Filet de sécurité : ceil(Nmax × 1.5) ───────────────────────────────
-    n_v2 = min(n_jobs, math.ceil(nmax * 1.5))
+    n_v2 = min(n_jobs, max(1, math.ceil(nmax_theorique * 1.5)))
     if n_v2 > n_v:
         _log(f"  ↳ Échec avec {n_v}, filet : {n_v2} véhicule(s)...", "warning")
         sol = _solve_type({**data, 'n_vehicles': n_v2}, time_limit_seconds=time_limit_seconds)
