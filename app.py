@@ -377,25 +377,33 @@ elif selected == "Synthèse transport":
             if nb_np > 0:
                 st.warning(f"⚠️ {nb_np} job(s) n'ont pas pu être planifiés.")
                 with st.expander(f"🔍 Voir les {nb_np} jobs non planifiés", expanded=True):
-                    jobs_np = rapport.get("jobs_non_planifies", [])
+                    jobs_np = rapport.get("jobs_non_planifies_detail", [])
                     if jobs_np:
                         rows_np = []
                         for item in jobs_np:
-                            j = item["job"]
+                            # Compatibilité : item peut être un dict ou un JobElementaire
+                            if isinstance(item, dict):
+                                j      = item["job"]
+                                raison = item.get("raison", "Non planifié")
+                                v_type = item.get("v_type", j.v_type_requis)
+                            else:
+                                j      = item
+                                raison = "Non planifié par OR-Tools"
+                                v_type = j.v_type_requis
                             rows_np.append({
-                                "Job ID"        : j.job_id,
-                                "Flux ID"       : j.flux_id,
-                                "Origine"       : j.origine,
-                                "Destination"   : j.destination,
-                                "Contenant"     : j.type_contenant,
-                                "Qté"           : j.nb_contenants,
-                                "Propre/Sale"   : j.propre_sale,
-                                "Véhicule requis": item["v_type"],
-                                "Fenêtre"       : (
+                                "Job ID"         : j.job_id,
+                                "Flux ID"        : j.flux_id,
+                                "Origine"        : j.origine,
+                                "Destination"    : j.destination,
+                                "Contenant"      : j.type_contenant,
+                                "Qté"            : j.nb_contenants,
+                                "Propre/Sale"    : j.propre_sale,
+                                "Véhicule requis": v_type,
+                                "Fenêtre"        : (
                                     f"{int(j.h_dispo//60):02d}h{int(j.h_dispo%60):02d}"
                                     f" → {int(j.h_deadline//60):02d}h{int(j.h_deadline%60):02d}"
                                 ),
-                                "Raison"        : item["raison"],
+                                "Raison"         : raison,
                             })
                         st.dataframe(
                             pd.DataFrame(rows_np),
