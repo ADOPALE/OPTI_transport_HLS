@@ -755,33 +755,71 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     ]
 
     solution = None
+    status_labels = {
+        0: "ROUTING_NOT_SOLVED",
+        1: "ROUTING_SUCCESS",
+        2: "ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED",
+        3: "ROUTING_FAIL",
+        4: "ROUTING_FAIL_TIMEOUT",
+        5: "ROUTING_INVALID",
+        6: "ROUTING_INFEASIBLE",
+    }
+
     for strategy in strategies:
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = strategy
         params.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        # Budget divisé entre les stratégies, minimum 10s chacune
         params.time_limit.seconds = max(10, time_limit_seconds // len(strategies))
         params.log_search = False
         solution = routing.SolveWithParameters(params)
+        status = routing.status()
+        _log(
+            f"    Stratégie {strategy} → statut : "
+            f"{status_labels.get(status, str(status))} "
+            f"({'✓' if solution else '✗'})",
+            "info"
+        )
         if solution is not None:
             break
 
-    # Si toujours rien, une dernière tentative avec le budget complet
+    # Dernière tentative budget complet
     if solution is None:
         params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
-        )
-        params.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
-        )
+        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
+        params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
         params.time_limit.seconds = time_limit_seconds
         params.log_search = False
         solution = routing.SolveWithParameters(params)
+        status = routing.status()
+        _log(
+            f"    Stratégie AUTOMATIC → statut : "
+            f"{status_labels.get(status, str(status))} "
+            f"({'✓' if solution else '✗'})",
+            "info"
+        )
 
     if solution is None:
+        # Diagnostic supplémentaire
+        status = routing.status()
+        status_label = status_labels.get(status, str(status))
+        if status == 6:  # ROUTING_INFEASIBLE
+            _log(
+                f"    ⛔ Modèle INFAISABLE (contraintes contradictoires). "
+                f"Inutile d'augmenter le budget temps. "
+                f"Vérifiez : fenêtres horaires trop serrées, "
+                f"amplitude poste insuffisante, ou trop peu de véhicules.",
+                "error"
+            )
+        elif status == 4:  # ROUTING_FAIL_TIMEOUT
+            _log(
+                f"    ⏱️ Timeout — le solveur n'a pas eu assez de temps. "
+                f"Augmentez le budget.",
+                "warning"
+            )
+        else:
+            _log(f"    ⚠️ Statut final : {status_label}", "warning")
         return None
 
     # ── Extraction de la solution ────────────────────────────────────────────
