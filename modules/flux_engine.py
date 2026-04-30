@@ -1,1534 +1,485 @@
-"""
-flux_engine.py
-==============
-Moteur d'optimisation des tournées de distribution logistique.
-Utilise OR-Tools (VRPTW + Pickup & Delivery) pour trouver le plan optimal :
-  - Nombre minimal de véhicules par type
-  - Nombre minimal de chauffeurs (postes)
-  - Horaires de chaque poste
-
-Compatible avec les données de st.session_state issues de Import.py :
-  - st.session_state["data"]["m_flux"]          → DataFrame des flux
-  - st.session_state["data"]["param_vehicules"]  → DataFrame des véhicules
-  - st.session_state["data"]["param_contenants"] → DataFrame des contenants
-  - st.session_state["data"]["param_sites"]      → DataFrame des sites
-  - st.session_state["data"]["matrice_duree"]    → DataFrame des durées
-  - st.session_state["params_logistique"]        → dict des paramètres RH
-
-Installation :
-    pip install ortools pandas numpy
-"""
-
-from __future__ import annotations
-
-import math
-import warnings
-from dataclasses import dataclass, field
-from typing import Any
-
-import numpy as np
+import streamlit as st
+from streamlit_option_menu import option_menu
+from pathlib import Path
+from streamlit_folium import st_folium
+import folium
 import pandas as pd
+import plotly.express as px
+import math
 
-try:
-    from ortools.constraint_solver import pywrapcp, routing_enums_pb2
-    ORTOOLS_AVAILABLE = True
-except Exception:
-    pywrapcp = None
-    routing_enums_pb2 = None
-    ORTOOLS_AVAILABLE = False
-    warnings.warn(
-        "OR-Tools non disponible. Installez-le : pip install ortools",
-        ImportWarning, stacklevel=2
-    )
+# --- IMPORTS DES MODULES ---
+from modules.GeoMatrix import run_matrix_tool
+from modules.Import import show_import
+from modules.check_flux import show_flux_control_charts
+from modules.param_bio import show_biologie_page
+from modules.biologie_engine import run_optimization
+from modules.resultats_bio import (
+    afficher_stats_vehicules, 
+    afficher_stats_chauffeurs, 
+    afficher_stats_sites, 
+    afficher_detail_flotte_vehicules, 
+    afficher_detail_itineraire
+)
+from modules.param_flux import afficher_parametres_logistique
+from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
+from modules.flux_engine import run_flux_optimization, verifier_faisabilite, precalculer_capacites
 
-try:
-    import streamlit as st
-    _ST = True
-except Exception:
-    st = None
-    _ST = False
-
-
-# ============================================================
-# UTILITAIRES
-# ============================================================
-
-def _log(msg: str, level: str = "info") -> None:
-    """Affiche dans Streamlit si disponible, sinon print."""
-    print(msg)
-    if not _ST or st is None:
-        return
-    try:
-        if level == "success":
-            st.success(msg)
-        elif level == "warning":
-            st.warning(msg)
-        elif level == "error":
-            st.error(msg)
-        else:
-            st.info(msg)
-    except Exception:
-        pass
-
-
-def _excel_time_to_minutes(val: Any, default: float = 360.0) -> float:
-    """
-    Convertit une valeur temporelle Excel en minutes depuis minuit.
-    Formats acceptés :
-      - float/int  : fraction de journée (0.25 → 360 min = 6h00)
-      - str        : "HH:MM" ou "HH:MM:SS"
-      - time/datetime : objet Python
-    """
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return default
-    if hasattr(val, 'hour'):
-        return val.hour * 60 + val.minute + val.second / 60
-    if isinstance(val, str) and ':' in val:
-        parts = val.split(':')
-        return int(parts[0]) * 60 + int(parts[1]) + (int(parts[2]) / 60 if len(parts) > 2 else 0)
-    try:
-        f = float(val)
-        return f * 1440  # fraction de journée → minutes
-    except (ValueError, TypeError):
-        return default
-
-
-def _norm(s: Any) -> str:
-    """
-    Normalise un nom de site/véhicule/contenant.
-    Supprime les espaces, met en majuscules et retire les accents
-    pour éviter les problèmes de correspondance (ex: 'Sté' vs 'STE').
-    """
-    import unicodedata
-    val = str(s).strip().upper()
-    # Décomposition unicode puis suppression des caractères de combinaison (accents)
-    return ''.join(
-        c for c in unicodedata.normalize('NFD', val)
-        if unicodedata.category(c) != 'Mn'
-    )
-
-
-# ============================================================
-# PHASE 0 — BIN-PACKING 2D (TETRIS / GUILLOTINE CUT)
-# ============================================================
-
-def calculer_capacite_max_2d(vehicule: pd.Series, contenant: pd.Series) -> int:
-    """
-    Calcule le nombre maximum de contenants dans un véhicule par découpe guillotine 2D.
-    Prend en compte les deux orientations possibles du contenant.
-    Limite ensuite par le poids maximum autorisé.
-
-    Paramètres
-    ----------
-    vehicule  : ligne du DataFrame param_vehicules
-    contenant : ligne du DataFrame param_contenants
-
-    Retourne
-    --------
-    int  capacité maximale (0 si incompatible)
-    """
-    v = {_norm(k): v for k, v in vehicule.items()}
-    c = {_norm(k): v for k, v in contenant.items()}
-
-    # Vérification compatibilité (colonne = libellé du contenant → "OUI")
-    nom_cont = c.get('LIBELLÉ') or c.get('LIBELLE')
-    if not nom_cont:
-        return 0
-    if v.get(_norm(nom_cont)) != 'OUI':
-        return 0
-
-    try:
-        L_v = float(v['DIM LONGUEUR INTERNE (M)'])
-        l_v = float(v['DIM LARGEUR INTERNE (M)'])
-        P_max = float(v['POIDS MAX CHARGEMENT'])
-        L_c = float(c['DIM LONGUEUR (M)'])
-        l_c = float(c['DIM LARGEUR (M)'])
-        p_c = float(c['POIDS PLEIN (T)'])
-    except (KeyError, ValueError, TypeError):
-        return 0
-
-    memo: dict = {}
-
-    def solve(L: float, l: float) -> int:
-        if (L < L_c and L < l_c) or (l < L_c and l < l_c):
-            return 0
-        state = (round(L, 4), round(l, 4))
-        if state in memo:
-            return memo[state]
-        res = 0
-        # Orientation normale
-        if L >= L_c and l >= l_c:
-            res = max(res,
-                      1 + solve(L - L_c, l) + solve(L_c, l - l_c),
-                      1 + solve(L, l - l_c) + solve(L - L_c, l_c))
-        # Orientation pivotée 90°
-        if L >= l_c and l >= L_c:
-            res = max(res,
-                      1 + solve(L - l_c, l) + solve(l_c, l - L_c),
-                      1 + solve(L, l - L_c) + solve(L - l_c, L_c))
-        memo[state] = res
-        return res
-
-    nb_sol = solve(L_v, l_v)
-    nb_poids = int(P_max / p_c) if p_c > 0 else nb_sol
-    return max(0, min(nb_sol, nb_poids))
-
-
-def precalculer_capacites(
-    df_vehicules: pd.DataFrame,
-    df_contenants: pd.DataFrame
-) -> dict[str, dict[str, int]]:
-    """
-    Pré-calcule la matrice de capacités : capacites[v_type][c_type] = N.
-    Appelé une seule fois, le résultat est réutilisé par tout le moteur.
-    """
-    capacites: dict[str, dict[str, int]] = {}
-    for _, v in df_vehicules.iterrows():
-        v_type = _norm(v.iloc[0])
-        capacites[v_type] = {}
-        for _, c in df_contenants.iterrows():
-            c_type = _norm(c.iloc[0])
-            capacites[v_type][c_type] = calculer_capacite_max_2d(v, c)
-    return capacites
-
-
-# ============================================================
-# PHASE 1 — DÉCOMPOSITION DES FLUX EN JOBS ÉLÉMENTAIRES
-# ============================================================
-
-@dataclass
-class JobElementaire:
-    """
-    Un trajet élémentaire : charger N contenants en A, les livrer en B.
-    Correspond à un nœud de pickup (chargement) + un nœud de delivery (livraison)
-    dans le modèle OR-Tools Pickup & Delivery.
-    """
-    job_id: int
-    flux_id: int                   # index dans df_flux
-    origine: str                   # site de chargement
-    destination: str               # site de livraison
-    type_contenant: str
-    nb_contenants: int             # quantité dans ce job (≤ capacité utile)
-    h_dispo: float                 # minutes depuis minuit : au plus tôt pour charger
-    h_deadline: float              # minutes depuis minuit : livraison terminée avant
-    propre_sale: str               # "PROPRE" ou "SALE"
-    v_type_requis: str             # type de véhicule requis (peut être "TOUT")
-    est_urgent: bool = False
-    surface_sol: float = 0.0       # surface occupée au sol en m² (bin-packing)
-
-
-def _choisir_vehicule(
-    origine: str,
-    destination: str,
-    type_contenant: str,
-    v_type_demande: str,
-    df_vehicules: pd.DataFrame,
-    df_sites: pd.DataFrame,
-    capacites: dict,
-    vehicules_autorises: list[str],
-    taux_remplissage: float,
-) -> tuple[str, int]:
-    """
-    Choisit le meilleur type de véhicule pour un flux donné.
-    Retourne (v_type, capacite_utile).
-    Priorité : v_type_demande si fourni et accessible, sinon le plus grand compatible.
-    """
-    col_lib = next(
-        (c for c in df_sites.columns if 'LIBEL' in c.upper() or c.upper() == 'LIBELLÉ'),
-        df_sites.columns[0]
-    )
-
-    # Mapping colonnes normalisées → colonnes originales dans df_sites
-    _cols_sites_norm = {_norm(c): c for c in df_sites.columns}
-
-    def est_accessible(v_nom_norm: str) -> bool:
-        """
-        Vérifie si le véhicule (type normalisé) peut accéder aux deux sites.
-        Cherche la colonne véhicule dans df_sites par correspondance normalisée.
-        """
-        try:
-            row_o = df_sites[df_sites[col_lib].apply(_norm) == _norm(origine)]
-            row_d = df_sites[df_sites[col_lib].apply(_norm) == _norm(destination)]
-            if row_o.empty or row_d.empty:
-                return False
-            # Trouver la colonne originale correspondant au type véhicule normalisé
-            col_orig = _cols_sites_norm.get(v_nom_norm)
-            if col_orig is None:
-                return False
-            return (str(row_o[col_orig].values[0]).upper() == 'OUI' and
-                    str(row_d[col_orig].values[0]).upper() == 'OUI')
-        except Exception:
-            return False
-
-    # Collecter tous les véhicules compatibles avec leur capacité
-    vehicules_compatibles = []  # list of (v_nom, capa)
-
-    for _, v in df_vehicules.iterrows():
-        v_nom = _norm(v.iloc[0])
-        if v_nom not in vehicules_autorises:
-            continue
-        if v_type_demande and v_type_demande not in ('', 'NAN', 'NC'):
-            if _norm(v_type_demande) not in v_nom and v_nom not in _norm(v_type_demande):
-                continue
-        if not est_accessible(v_nom):
-            continue
-        capa = capacites.get(v_nom, {}).get(_norm(type_contenant), 0)
-        if capa > 0:
-            vehicules_compatibles.append((v_nom, capa))
-
-    if not vehicules_compatibles:
-        return '', 0
-
-    # Stratégie : choisir le véhicule le plus capacitaire compatible.
-    # → minimise le nombre de trajets pour transporter le flux.
-    vehicules_compatibles.sort(key=lambda x: x[1], reverse=True)
-    meilleur_type, meilleure_capa = vehicules_compatibles[0]
-
-    capa_utile = max(1, math.floor(meilleure_capa * taux_remplissage))
-    return meilleur_type, capa_utile
-
-
-def decomposer_flux_en_jobs(
-    df_flux: pd.DataFrame,
-    df_vehicules: pd.DataFrame,
-    df_contenants: pd.DataFrame,
-    df_sites: pd.DataFrame,
-    df_contenants_indexed: dict,
-    capacites: dict,
-    params_logistique: dict,
-    jour: str = "Lundi",
-) -> list[JobElementaire]:
-    """
-    Transforme chaque ligne du tableau M flux en N jobs élémentaires
-    en tenant compte de la capacité utile du véhicule.
-
-    Paramètres
-    ----------
-    df_flux             : onglet M flux
-    df_vehicules        : onglet param Véhicules
-    df_contenants       : onglet param Contenants
-    df_sites            : onglet param Sites
-    df_contenants_indexed : dict {c_type: Series} pour accès rapide aux dimensions
-    capacites           : sortie de precalculer_capacites()
-    params_logistique   : dict de st.session_state["params_logistique"]
-    jour                : "Lundi", "Mardi", ..., "Dimanche"
-
-    Retourne
-    --------
-    list[JobElementaire]
-    """
-    rh = params_logistique.get('rh', {})
-    h_debut_defaut = _excel_time_to_minutes(rh.get('h_prise_min'), 360.0)
-    h_fin_defaut   = _excel_time_to_minutes(rh.get('h_fin_max'),   1260.0)
-    taux_remplissage = params_logistique.get('securite_remplissage', 0.85)
-    vehicules_autorises = [_norm(v) for v in params_logistique.get('vehicules_selectionnes', [])]
-
-    col_qte = f'Quantité {jour}'
-    jobs: list[JobElementaire] = []
-    job_id = 0
-
-    for flux_id, row in df_flux.iterrows():
-        # Filtrage nature du flux : on ne traite que les flux "Volume"
-        nature = str(row.get(
-            "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)",
-            "Volume"
-        )).strip()
-        if nature.lower() not in ('volume', 'nan', ''):
-            continue
-
-        # Quantité du jour
-        try:
-            raw_qte = row.get(col_qte, 0)
-            qte = 0.0 if (raw_qte is None or (isinstance(raw_qte, float) and math.isnan(raw_qte))) else float(raw_qte)
-        except (ValueError, TypeError):
-            qte = 0.0
-        if qte <= 0:
-            continue
-
-        origine      = _norm(row.get('Point de départ', ''))
-        destination  = _norm(row.get('Point de destination', ''))
-        type_cont    = _norm(row.get('Nature de contenant', ''))
-        propre_sale  = _norm(row.get('Sale / propre', 'PROPRE'))
-        # La colonne 'Type de transporteur' peut contenir des heures (datetime.time)
-        # par erreur de saisie Excel — on ignore ces valeurs et on traite comme vide
-        _v_type_raw = row.get('Type de transporteur (camion VL frigo)', '')
-        import datetime as _dt
-        if isinstance(_v_type_raw, _dt.time) or isinstance(_v_type_raw, _dt.datetime):
-            _v_type_raw = ''
-        v_type_req = _norm(str(_v_type_raw or ''))
-        est_urgent   = str(row.get('Urgence / flux prioritaire   (Oui/Non)', 'Non')).upper() == 'OUI'
-
-        # Fenêtres horaires
-        h_dispo   = _excel_time_to_minutes(row.get('Heure de mise à disposition min départ'), h_debut_defaut)
-        h_deadline = _excel_time_to_minutes(row.get('Plage horaire en semaine (Heure fin)'), h_fin_defaut)
-        if h_deadline <= h_dispo:
-            h_deadline = h_dispo + 120
-
-        # Sélection du véhicule et capacité
-        v_type, capa_utile = _choisir_vehicule(
-            origine, destination, type_cont, v_type_req,
-            df_vehicules, df_sites, capacites,
-            vehicules_autorises, taux_remplissage
-        )
-        if not v_type or capa_utile <= 0:
-            warnings.warn(
-                f"Flux {flux_id} ({origine}→{destination}, {type_cont}) : "
-                f"aucun véhicule compatible trouvé parmi {vehicules_autorises}. "
-                f"Capacités disponibles : { {v: capacites.get(v,{}).get(_norm(type_cont),0) for v in vehicules_autorises} }",
-                RuntimeWarning, stacklevel=2
+# --------- FONCTIONS UI ------------
+def show_home():
+    st.title("📍 Optimisation des flux logistiques")
+    st.markdown("---")
+    st.markdown("""
+    ### Bienvenue sur l'outil de simulation ADOPALE x CHU de Nantes
+    Cet outil vous permet de modéliser, visualiser et optimiser vos tournées de distribution et de biologie.
+    """)
+    if TEMPLATE_FILE.exists():
+        with open(TEMPLATE_FILE, "rb") as file:
+            st.download_button(
+                label="📥 Télécharger le fichier de paramétrage vierge",
+                data=file,
+                file_name="template_parametrage_ADOPALE.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            continue
-
-        # Surface au sol du contenant (pour info / affichage)
-        cont_info = df_contenants_indexed.get(_norm(type_cont))
-        surface_unit = 0.0
-        if cont_info is not None:
-            try:
-                surface_unit = float(cont_info.get('DIM LONGUEUR (M)', 0)) * \
-                               float(cont_info.get('DIM LARGEUR (M)', 0))
-            except Exception:
-                pass
-
-        # Décomposition en jobs élémentaires
-        nb_jobs = math.ceil(qte / capa_utile)
-        for k in range(nb_jobs):
-            nb_cont_job = capa_utile if k < nb_jobs - 1 else (int(qte) - k * capa_utile)
-            jobs.append(JobElementaire(
-                job_id=job_id,
-                flux_id=flux_id,
-                origine=origine,
-                destination=destination,
-                type_contenant=_norm(type_cont),
-                nb_contenants=nb_cont_job,
-                h_dispo=h_dispo,
-                h_deadline=h_deadline,
-                propre_sale=propre_sale,
-                v_type_requis=v_type,
-                est_urgent=est_urgent,
-                surface_sol=surface_unit * nb_cont_job,
-            ))
-            job_id += 1
-
-    return jobs
-
-
-# ============================================================
-# PHASE 2 — MODÈLE OR-TOOLS
-# ============================================================
-
-SCALE = 10  # précision à 0.1 minute
-
-
-def _sc(minutes: float) -> int:
-    """Convertit des minutes en entier scalé pour OR-Tools."""
-    return int(round(minutes * SCALE))
-
-
-def _build_model_data(
-    jobs: list[JobElementaire],
-    matrice_duree: pd.DataFrame,
-    capacites: dict,
-    params_logistique: dict,
-    v_type: str,
-    alea: float = 0.0,
-) -> dict:
-    """
-    Construit les structures de données pour OR-Tools à partir des jobs
-    d'un seul type de véhicule.
-
-    Le modèle est un Pickup & Delivery Problem with Time Windows (PDPTW) :
-    - Pour chaque job : nœud de pickup (chargement en origine) + nœud de delivery (livraison)
-    - Contrainte : pickup doit précéder delivery sur le même véhicule
-    - Contrainte : capacité cumulée ≤ capacité du véhicule
-    - Contrainte : exclusion propre/sale (pas de mélange sur le même véhicule)
-
-    Structure retournée
-    -------------------
-    dict avec :
-        n_nodes         : nombre total de nœuds (dépôt + 2 × n_jobs)
-        n_vehicles      : borne haute du nombre de véhicules
-        depot           : index du dépôt (0)
-        time_matrix     : list[list[int]]  durées scalées entre nœuds
-        time_windows    : list[(int,int)]  fenêtres par nœud
-        pickups_deliveries : list[(int,int)]  paires pickup→delivery
-        demands         : list[int]  +n_cont au pickup, -n_cont à la delivery
-        vehicle_capacity: int  capacité max par véhicule (en nombre de contenants)
-        max_poste_sc    : int  amplitude max d'un poste (scalée)
-        pause_seuil_sc  : int  seuil déclenchement pause (scalé)
-        pause_duree_sc  : int  durée pause (scalée)
-        jobs            : list[JobElementaire]  les jobs dans l'ordre des nœuds
-        node_to_job     : list[int|None]  mapping nœud → index job
-        node_is_pickup  : list[bool]
-        propre_sale_par_job : list[str]
-        SCALE           : int
-    """
-    rh = params_logistique.get('rh', {})
-    h_debut = _excel_time_to_minutes(rh.get('h_prise_min'), 360.0)
-    h_fin   = _excel_time_to_minutes(rh.get('h_fin_max'),   1260.0)
-    # Amplitude effective = durée poste - pause - temps fixes
-    # On utilise temps_productif_max si calculé par param_flux, sinon amplitude_totale
-    amplitude_max = float(
-        rh.get('temps_productif_max') or
-        rh.get('amplitude_totale', 450)
-    )
-    # Temps de nettoyage (sale → propre) = temps de fin de poste
-    temps_nettoyage = float(rh.get('temps_fixes_fin', 15))
-    pause_seuil   = 180.0
-    pause_duree   = float(rh.get('pause', 30))
-
-    # Nettoyage de la matrice de durée
-    df = matrice_duree.copy()
-    col0 = df.columns[0]
-    df = df.set_index(col0)
-    df.index   = df.index.astype(str).str.strip().str.upper()
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-
-    facteur = 1 + alea
-
-    def duree(a: str, b: str) -> int:
-        if a == b:
-            return 0
-        try:
-            return _sc(float(df.loc[a, b]) * facteur)
-        except Exception:
-            return _sc(30 * facteur)  # fallback 30 min
-
-    # Filtrer les jobs pour ce type de véhicule
-    jobs_v = [j for j in jobs if j.v_type_requis == v_type]
-    if not jobs_v:
-        return {}
-
-    # Capacité du véhicule pour OR-Tools
-    # = capacité brute du véhicule pour le contenant le plus contraignant
-    # On prend le MIN de la capacité brute sur tous les types de contenants
-    # présents dans les jobs, ce qui garantit qu'aucun job ne dépasse
-    capa_v_brute = min(
-        (capacites.get(v_type, {}).get(j.type_contenant, 1) for j in jobs_v),
-        default=1
-    )
-    # Capacité utile (avec taux de remplissage)
-    taux_remplissage_local = 0.85  # sera affiné si passé en paramètre
-    capa_v = max(1, capa_v_brute)
-
-    # Vérification : s'assurer qu'aucun job n'a nb_contenants > capa_v
-    # Si c'est le cas, re-découper le job
-    jobs_v_corriges = []
-    job_id_offset = max((j.job_id for j in jobs_v), default=0) + 1000
-    for j in jobs_v:
-        if j.nb_contenants <= capa_v:
-            jobs_v_corriges.append(j)
-        else:
-            # Re-découper ce job
-            qte_restante = j.nb_contenants
-            k = 0
-            while qte_restante > 0:
-                nb = min(qte_restante, capa_v)
-                from copy import copy as _copy
-                j_new = _copy(j)
-                j_new = JobElementaire(
-                    job_id=job_id_offset, flux_id=j.flux_id,
-                    origine=j.origine, destination=j.destination,
-                    type_contenant=j.type_contenant, nb_contenants=nb,
-                    h_dispo=j.h_dispo, h_deadline=j.h_deadline,
-                    propre_sale=j.propre_sale, v_type_requis=j.v_type_requis,
-                    est_urgent=j.est_urgent, surface_sol=j.surface_sol * nb / j.nb_contenants
-                )
-                jobs_v_corriges.append(j_new)
-                job_id_offset += 1
-                qte_restante -= nb
-                k += 1
-    jobs_v = jobs_v_corriges
-
-    # Construction des nœuds
-    # Index 0 = dépôt
-    # Index 2k+1 = pickup du job k
-    # Index 2k+2 = delivery du job k
-    depot = 0
-    n_jobs = len(jobs_v)
-    n_nodes = 1 + 2 * n_jobs  # dépôt + paires
-
-    # Récupération du site dépôt (stationnement initial du véhicule)
-    depot_site = "HLS"  # valeur par défaut
-
-    # Noms de sites par nœud
-    node_sites = [depot_site]
-    for j in jobs_v:
-        node_sites.append(j.origine)     # pickup
-        node_sites.append(j.destination) # delivery
-
-    # Matrice de durée entre nœuds
-    time_matrix = [[0] * n_nodes for _ in range(n_nodes)]
-    for i in range(n_nodes):
-        for k in range(n_nodes):
-            if i != k:
-                time_matrix[i][k] = duree(node_sites[i], node_sites[k])
-
-    # Fenêtres temporelles
-    # Dépôt : disponible toute la journée
-    time_windows = [(_sc(h_debut), _sc(h_fin))]
-    for j in jobs_v:
-        # Pickup : entre h_dispo du flux et deadline
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
-        # Delivery : entre h_dispo et deadline (le pickup doit précéder)
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
-
-    # Paires pickup → delivery
-    pickups_deliveries = []
-    for idx in range(n_jobs):
-        pickup_node   = 1 + 2 * idx
-        delivery_node = 2 + 2 * idx
-        pickups_deliveries.append((pickup_node, delivery_node))
-
-    # Demandes de capacité (+n au pickup, -n à la delivery)
-    demands = [0]  # dépôt
-    for j in jobs_v:
-        demands.append(j.nb_contenants)   # pickup : charge
-        demands.append(-j.nb_contenants)  # delivery : décharge
-
-    # Mapping nœud → job
-    node_to_job = [None]
-    node_is_pickup = [False]
-    propre_sale_par_noeud = ['']
-    for idx, j in enumerate(jobs_v):
-        node_to_job.extend([idx, idx])
-        node_is_pickup.extend([True, False])
-        propre_sale_par_noeud.extend([j.propre_sale, j.propre_sale])
-
-    # ── Calcul de Nmax par pic de charge lissée ────────────────────────────
-    # 1. Pour chaque job, lisser sa durée sur sa plage horaire [h_dispo, h_deadline]
-    #    → contribution uniforme par créneau de RESOLUTION minutes
-    # 2. Pic de charge = max de la somme cumulée sur tous les créneaux
-    # 3. Nmax = 2 × ceil(pic / amplitude_productive)
-    DEPOT      = 0
-    RESOLUTION = 15  # granularité en minutes
-
-    slots      = max(1, int((h_fin - h_debut) / RESOLUTION) + 1)
-    charge_par_slot = [0.0] * slots
-
-    for j_idx, j in enumerate(jobs_v):
-        pickup_node   = 1 + 2 * j_idx
-        delivery_node = 2 + 2 * j_idx
-        # Durée totale du job : dépôt→pickup→delivery→dépôt
-        duree_min = (
-            time_matrix[DEPOT][pickup_node] +
-            time_matrix[pickup_node][delivery_node] +
-            time_matrix[delivery_node][DEPOT]
-        ) / SCALE
-
-        # Plage horaire du job
-        tw_open  = time_windows[pickup_node][0] / SCALE   # minutes
-        tw_close = time_windows[pickup_node][1] / SCALE
-        plage    = max(tw_close - tw_open, RESOLUTION)
-
-        # Contribution lissée : duree_min répartie uniformément sur la plage
-        contrib_par_slot = (duree_min / plage) * RESOLUTION
-
-        slot_start = max(0, int((tw_open  - h_debut) / RESOLUTION))
-        slot_end   = min(slots - 1, int((tw_close - h_debut) / RESOLUTION))
-        for s in range(slot_start, slot_end + 1):
-            charge_par_slot[s] += contrib_par_slot
-
-    pic_charge     = max(charge_par_slot) if charge_par_slot else 1.0
-    # pic_charge = charge cumulée sur un créneau de RESOLUTION minutes
-    # Nmax = combien de véhicules simultanés pour absorber ce pic
-    nmax_theorique = max(1, math.ceil(pic_charge / RESOLUTION))
-    nmax           = min(n_jobs, nmax_theorique * 2)
-
-    # n_vehicles = nmax est la borne haute pour l'itération de _solve_type_iteratif
-    # L'itération teste 1, 2, ..., nmax véhicules et s'arrête dès qu'une solution existe
-    n_vehicles = nmax
-
-    return {
-        'n_nodes'            : n_nodes,
-        'n_vehicles'         : n_vehicles,
-        'nmax'               : nmax,
-        'nmax_theorique'     : nmax_theorique,
-        'pic_charge_min'     : round(pic_charge, 1),
-        'depot'              : depot,
-        'time_matrix'        : time_matrix,
-        'time_windows'       : time_windows,
-        'pickups_deliveries' : pickups_deliveries,
-        'demands'            : demands,
-        'vehicle_capacity'   : capa_v,
-        'max_poste_sc'       : _sc(amplitude_max),
-        'pause_seuil_sc'     : _sc(pause_seuil),
-        'pause_duree_sc'     : _sc(pause_duree),
-        'h_debut_sc'         : _sc(h_debut),
-        'h_fin_sc'           : _sc(h_fin),
-        'jobs'               : jobs_v,
-        'node_sites'         : node_sites,
-        'node_to_job'        : node_to_job,
-        'node_is_pickup'     : node_is_pickup,
-        'propre_sale_par_noeud': propre_sale_par_noeud,
-        'temps_nettoyage_sc' : _sc(temps_nettoyage),
-        'SCALE'              : SCALE,
-    }
-
-
-def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
-    """
-    Résout le PDPTW pour un type de véhicule avec OR-Tools.
-    Ordre correct des opérations :
-      1. Manager + RoutingModel
-      2. Callback transit avec nettoyage (propre/sale)
-      3. Dimension temporelle (basée sur ce callback)
-      4. Fenêtres temporelles sur les nœuds
-      5. Amplitude max par poste
-      6. Capacité
-      7. Contraintes Pickup & Delivery
-      8. Objectif
-      9. Résolution
-    """
-    if not data:
-        return None
-
-    SCALE      = data['SCALE']
-    n_nodes    = data['n_nodes']
-    n_vehicles = data['n_vehicles']
-    depot      = data['depot']
-
-    manager = pywrapcp.RoutingIndexManager(n_nodes, n_vehicles, depot)
-    routing = pywrapcp.RoutingModel(manager)
-
-    # ── 1. Callback transit avec temps de nettoyage sale→propre ────────────
-    ps             = data['propre_sale_par_noeud']
-    node_is_pickup = data['node_is_pickup']
-    T_NET          = data['temps_nettoyage_sc']
-
-    def transit_avec_nettoyage(from_idx, to_idx):
-        from_node = manager.IndexToNode(from_idx)
-        to_node   = manager.IndexToNode(to_idx)
-        transit   = data['time_matrix'][from_node][to_node]
-        # Nettoyage si delivery SALE → pickup PROPRE
-        if (from_node > 0 and not node_is_pickup[from_node]
-                and ps[from_node] == 'SALE'
-                and to_node > 0 and node_is_pickup[to_node]
-                and ps[to_node] == 'PROPRE'):
-            return transit + T_NET
-        return transit
-
-    cb_transit = routing.RegisterTransitCallback(transit_avec_nettoyage)
-    routing.SetArcCostEvaluatorOfAllVehicles(cb_transit)
-
-    # ── 2. Dimension temporelle (doit être créée AVANT d'appliquer les TW) ─
-    routing.AddDimension(
-        cb_transit,
-        slack_max=_sc(120),
-        capacity=_sc(1440),
-        fix_start_cumul_to_zero=False,
-        name='Time'
-    )
-    time_dim = routing.GetDimensionOrDie('Time')
-
-    # ── 3. Fenêtres temporelles sur les nœuds ──────────────────────────────
-    for node in range(1, n_nodes):
-        idx = manager.NodeToIndex(node)
-        tw  = data['time_windows'][node]
-        time_dim.CumulVar(idx).SetRange(tw[0], tw[1])
-
-    # Fenêtres du dépôt (départ et retour)
-    for v in range(n_vehicles):
-        time_dim.CumulVar(routing.Start(v)).SetRange(
-            data['h_debut_sc'], data['h_fin_sc']
-        )
-        time_dim.CumulVar(routing.End(v)).SetRange(
-            data['h_debut_sc'], data['h_fin_sc']
-        )
-
-    # ── 4. Amplitude maximale par poste ────────────────────────────────────
-    solver = routing.solver()
-    for v in range(n_vehicles):
-        solver.Add(
-            time_dim.CumulVar(routing.End(v)) -
-            time_dim.CumulVar(routing.Start(v))
-            <= data['max_poste_sc']
-        )
-
-    # ── 5. Capacité par véhicule ────────────────────────────────────────────
-    def demand_callback(from_idx):
-        return data['demands'][manager.IndexToNode(from_idx)]
-
-    cb_demand = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        cb_demand,
-        0,
-        [data['vehicle_capacity']] * n_vehicles,
-        True,
-        'Capacity'
-    )
-
-    # ── 6. Contraintes Pickup & Delivery ───────────────────────────────────
-    for pickup_node, delivery_node in data['pickups_deliveries']:
-        pickup_idx   = manager.NodeToIndex(pickup_node)
-        delivery_idx = manager.NodeToIndex(delivery_node)
-        routing.AddPickupAndDelivery(pickup_idx, delivery_idx)
-        solver.Add(
-            routing.VehicleVar(pickup_idx) == routing.VehicleVar(delivery_idx)
-        )
-        solver.Add(
-            time_dim.CumulVar(pickup_idx) <= time_dim.CumulVar(delivery_idx)
-        )
-
-    # ── 7. Objectif : coût fixe fort par véhicule ──────────────────────────
-    COUT_FIXE_VEH = int(1e8)
-    for v in range(n_vehicles):
-        routing.SetFixedCostOfVehicle(COUT_FIXE_VEH, v)
-
-    # ── Résolution ──────────────────────────────────────────────────────────
-    # Stratégies testées dans l'ordre jusqu'à trouver une solution
-    strategies = [
-        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
-        routing_enums_pb2.FirstSolutionStrategy.CHRISTOFIDES,
-    ]
-
-    solution = None
-    status_labels = {
-        0: "ROUTING_NOT_SOLVED",
-        1: "ROUTING_SUCCESS",
-        2: "ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED",
-        3: "ROUTING_FAIL",
-        4: "ROUTING_FAIL_TIMEOUT",
-        5: "ROUTING_INVALID",
-        6: "ROUTING_INFEASIBLE",
-    }
-
-    # Stratégie unique adaptée au PDPTW + budget complet time_limit_seconds
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-    )
-    params.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    params.time_limit.seconds = time_limit_seconds
-    params.log_search = False
-    solution = routing.SolveWithParameters(params)
-    status = routing.status()
-    _log(
-        f"    PARALLEL_CHEAPEST_INSERTION → statut : "
-        f"{status_labels.get(status, str(status))} "
-        f"({'✓' if solution else '✗'})",
-        "info"
-    )
-
-    if solution is None:
-        # Diagnostic supplémentaire
-        status = routing.status()
-        status_label = status_labels.get(status, str(status))
-        if status == 6:  # ROUTING_INFEASIBLE
-            _log(
-                f"    ⛔ Modèle INFAISABLE (contraintes contradictoires). "
-                f"Inutile d'augmenter le budget temps. "
-                f"Vérifiez : fenêtres horaires trop serrées, "
-                f"amplitude poste insuffisante, ou trop peu de véhicules.",
-                "error"
-            )
-        elif status == 4:  # ROUTING_FAIL_TIMEOUT
-            _log(
-                f"    ⏱️ Timeout — le solveur n'a pas eu assez de temps. "
-                f"Augmentez le budget.",
-                "warning"
-            )
-        else:
-            _log(f"    ⚠️ Statut final : {status_label}", "warning")
-        return None
-
-    # ── Extraction de la solution ────────────────────────────────────────────
-    routes = []
-    for v in range(n_vehicles):
-        index = routing.Start(v)
-        route_nodes, route_times = [], []
-        while not routing.IsEnd(index):
-            node = manager.IndexToNode(index)
-            t    = solution.Min(time_dim.CumulVar(index)) / SCALE
-            route_nodes.append(node)
-            route_times.append(t)
-            index = solution.Value(routing.NextVar(index))
-        # Nœud final
-        node = manager.IndexToNode(index)
-        t    = solution.Min(time_dim.CumulVar(index)) / SCALE
-        route_nodes.append(node)
-        route_times.append(t)
-
-        # Ignorer les routes vides (dépôt→dépôt)
-        if all(n == depot for n in route_nodes):
-            continue
-
-        h_debut_poste = route_times[0]
-        h_fin_poste   = route_times[-1]
-        amplitude     = h_fin_poste - h_debut_poste
-
-        routes.append({
-            'nodes'         : route_nodes,
-            'times'         : route_times,
-            'sites'         : [data['node_sites'][n] for n in route_nodes],
-            'h_debut'       : h_debut_poste,
-            'h_fin'         : h_fin_poste,
-            'amplitude'     : amplitude,
-        })
-
-    return {
-        'routes'         : routes,
-        'n_vehicules'    : len(routes),
-        'n_postes'       : len(routes),   # 1 poste = 1 tournée dans ce modèle
-        'jobs_resolus'   : data['jobs'],
-    }
-
-
-# ============================================================
-# PHASE 3 — POST-TRAITEMENT ET CALCUL DES MÉTRIQUES
-# ============================================================
-
-@dataclass
-class PosteChauffeur:
-    """Représente le planning d'un chauffeur pour la journée."""
-    poste_id: str
-    v_type: str
-    h_debut: float
-    h_fin: float
-    amplitude: float
-    missions: list[dict] = field(default_factory=list)
-    taux_occupation: float = 0.0
-
-
-def _calculer_taux_occupation(route: dict, data: dict, params_logistique: dict) -> float:
-    """
-    Taux d'occupation = (temps en mission + temps de trajet) / amplitude_max_poste.
-    """
-    rh = params_logistique.get('rh', {})
-    # Amplitude effective = durée poste - pause - temps fixes
-    # On utilise temps_productif_max si calculé par param_flux, sinon amplitude_totale
-    amplitude_max = float(
-        rh.get('temps_productif_max') or
-        rh.get('amplitude_totale', 450)
-    )
-    # Temps de nettoyage (sale → propre) = temps de fin de poste
-    temps_nettoyage = float(rh.get('temps_fixes_fin', 15))
-
-    temps_productif = 0.0
-    times = route['times']
-    for i in range(len(times) - 1):
-        temps_productif += (times[i + 1] - times[i])  # inclut trajets + manutention
-
-    return min(temps_productif / amplitude_max, 1.0) if amplitude_max > 0 else 0.0
-
-
-def construire_postes(
-    resultats_par_type: dict[str, dict],
-    data_par_type: dict[str, dict],
-    params_logistique: dict,
-) -> list[PosteChauffeur]:
-    """
-    Construit la liste des postes chauffeurs à partir des résultats OR-Tools.
-    """
-    postes = []
-    compteur = 1
-
-    for v_type, res in resultats_par_type.items():
-        if res is None:
-            continue
-        data = data_par_type[v_type]
-        for route in res['routes']:
-            taux = _calculer_taux_occupation(route, data, params_logistique)
-            missions = []
-            for i, (node, site, t) in enumerate(
-                zip(route['nodes'], route['sites'], route['times'])
-            ):
-                if node == data['depot']:
-                    continue
-                job_idx = data['node_to_job'][node]
-                if job_idx is None:
-                    continue
-                job = data['jobs'][job_idx]
-                missions.append({
-                    'heure'         : t,
-                    'site'          : site,
-                    'job_id'        : job.job_id,
-                    'flux_id'       : job.flux_id,
-                    'type_contenant': job.type_contenant,
-                    'nb_contenants' : job.nb_contenants,
-                    'is_pickup'     : data['node_is_pickup'][node],
-                    'propre_sale'   : job.propre_sale,
-                })
-            missions.sort(key=lambda x: x['heure'])
-
-            postes.append(PosteChauffeur(
-                poste_id        = f"{v_type}_{compteur:03d}",
-                v_type          = v_type,
-                h_debut         = route['h_debut'],
-                h_fin           = route['h_fin'],
-                amplitude       = route['amplitude'],
-                missions        = missions,
-                taux_occupation = taux,
-            ))
-            compteur += 1
-
-    return postes
-
-
-def calculer_rapport(
-    postes: list[PosteChauffeur],
-    jobs_par_type: dict[str, list[JobElementaire]],
-    resultats_par_type: dict[str, dict | None],
-) -> dict:
-    """
-    Calcule le rapport global de la simulation.
-    Retourne un dict compatible avec st.session_state["flux_rapport"].
-    """
-    nb_vehicules_par_type: dict[str, int] = {}
-    nb_postes_par_type: dict[str, int] = {}
-    taux_par_poste: list[float] = []
-
-    for p in postes:
-        nb_vehicules_par_type[p.v_type] = nb_vehicules_par_type.get(p.v_type, 0) + 1
-        nb_postes_par_type[p.v_type]    = nb_postes_par_type.get(p.v_type, 0) + 1
-        taux_par_poste.append(p.taux_occupation)
-
-    # Jobs non planifiés
-    jobs_planifies = {p.missions[i]['job_id'] for p in postes for i in range(len(p.missions))}
-    jobs_non_planifies = []
-    for v_type, jlist in jobs_par_type.items():
-        res_v = resultats_par_type.get(v_type)
-        if res_v is None:
-            raison = "Aucune solution OR-Tools trouvée pour ce type de véhicule"
-        else:
-            raison = "Non planifié par OR-Tools (fenêtre horaire ou capacité)"
-        for j in jlist:
-            if j.job_id not in jobs_planifies:
-                jobs_non_planifies.append({
-                    "job"    : j,
-                    "raison" : raison,
-                    "v_type" : v_type,
-                })
-
-    taux_tries  = sorted(taux_par_poste, reverse=True)
-    taux_moyen  = sum(taux_tries) / len(taux_tries) if taux_tries else 0.0
-
-    return {
-        'nb_vehicules_par_type' : nb_vehicules_par_type,
-        'nb_postes_par_type'    : nb_postes_par_type,
-        'nb_vehicules_total'    : sum(nb_vehicules_par_type.values()),
-        'nb_postes_total'       : sum(nb_postes_par_type.values()),
-        'taux_moyen'            : taux_moyen,
-        'taux_par_poste'        : taux_tries,
-        'jobs_non_planifies'    : jobs_non_planifies,
-        'nb_jobs_non_planifies' : len(jobs_non_planifies),  # list of dicts
-        'solveur'               : 'OR-Tools' if ORTOOLS_AVAILABLE else 'indisponible',
-    }
-
-
-
-# ============================================================
-# CONTRÔLE DE FAISABILITÉ (à appeler avant run_flux_optimization)
-# ============================================================
-
-@dataclass
-class ProblemeFaisabilite:
-    """Décrit un problème de faisabilité détecté."""
-    flux_id: int
-    origine: str
-    destination: str
-    type_contenant: str
-    site_bloquant: str       # site qui pose problème
-    raison: str              # "SITE_INCONNU" | "AUCUN_VEHICULE_ACCESSIBLE" | "AUCUNE_CAPACITE"
-    vehicules_testes: list[str]
-    detail: str              # message lisible
-
-
-def verifier_faisabilite(
-    df_flux: pd.DataFrame,
-    df_vehicules: pd.DataFrame,
-    df_contenants: pd.DataFrame,
-    df_sites: pd.DataFrame,
-    capacites: dict,
-    params_logistique: dict,
-    jour: str = "Lundi",
-) -> dict:
-    """
-    Vérifie que chaque flux du jour est réalisable avec la flotte sélectionnée.
-
-    Pour chaque flux, contrôle :
-      1. Les deux sites (origine et destination) existent dans param_sites
-      2. Au moins un véhicule sélectionné est accessible sur LES DEUX sites
-      3. Ce véhicule peut transporter le contenant (capacité > 0)
-
-    Paramètres
-    ----------
-    df_flux, df_vehicules, df_contenants, df_sites : DataFrames issus de session_state
-    capacites           : sortie de precalculer_capacites()
-    params_logistique   : dict de session_state["params_logistique"]
-    jour                : "Lundi", "Mardi", etc.
-
-    Retourne
-    --------
-    dict {
-        "faisable"    : bool          True si aucun problème bloquant
-        "problemes"   : list[ProblemeFaisabilite]
-        "resume"      : str           message court pour affichage Streamlit
-        "nb_flux_ok"  : int
-        "nb_flux_ko"  : int
-        "details_df"  : pd.DataFrame  tableau affichable dans st.dataframe()
-    }
-    """
-    vehicules_autorises = [_norm(v) for v in params_logistique.get('vehicules_selectionnes', [])]
-    col_qte = f'Quantité {jour}'
-
-    # Mapping colonnes normalisées → colonnes originales dans df_sites
-    col_lib = next(
-        (c for c in df_sites.columns if _norm(c) in ('LIBELLE', 'LIBELLE', 'NOM', 'SITE')),
-        df_sites.columns[0]
-    )
-    cols_sites_norm = {_norm(c): c for c in df_sites.columns}
-    sites_connus    = {_norm(s) for s in df_sites[col_lib].dropna()}
-
-    problemes: list[ProblemeFaisabilite] = []
-    nb_ok = 0
-
-    for flux_id, row in df_flux.iterrows():
-        # Filtrer les flux sans quantité ce jour-là
-        try:
-            raw = row.get(col_qte, 0)
-            qte = 0.0 if (raw is None or (isinstance(raw, float) and math.isnan(raw))) else float(raw)
-        except (ValueError, TypeError):
-            qte = 0.0
-        if qte <= 0:
-            continue
-
-        # Filtrer les flux non-Volume
-        nature = str(row.get(
-            "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)",
-            "Volume"
-        )).strip().lower()
-        if nature not in ('volume', 'nan', ''):
-            continue
-
-        origine     = _norm(row.get('Point de départ', ''))
-        destination = _norm(row.get('Point de destination', ''))
-        type_cont   = _norm(row.get('Nature de contenant', ''))
-
-        # ── Contrôle 1 : sites connus ────────────────────────────────────────
-        for site, role in [(origine, 'départ'), (destination, 'destination')]:
-            if site not in sites_connus:
-                problemes.append(ProblemeFaisabilite(
-                    flux_id=flux_id, origine=origine, destination=destination,
-                    type_contenant=type_cont, site_bloquant=site,
-                    raison="SITE_INCONNU",
-                    vehicules_testes=[],
-                    detail=f"Le site de {role} '{site}' est absent de param_sites."
-                ))
-
-        if any(p.flux_id == flux_id and p.raison == "SITE_INCONNU" for p in problemes):
-            continue  # pas la peine de continuer si le site est inconnu
-
-        # ── Contrôle 2 & 3 : véhicule accessible + capacité ─────────────────
-        vehicules_accessibles  = []
-        vehicules_avec_capa    = []
-
-        for v_nom in vehicules_autorises:
-            # Accessibilité origine
-            col_orig_v = cols_sites_norm.get(v_nom)
-            if col_orig_v is None:
-                continue
-            row_o = df_sites[df_sites[col_lib].apply(_norm) == origine]
-            row_d = df_sites[df_sites[col_lib].apply(_norm) == destination]
-            if row_o.empty or row_d.empty:
-                continue
-            try:
-                acc_o = str(row_o[col_orig_v].values[0]).upper() == 'OUI'
-                acc_d = str(row_d[col_orig_v].values[0]).upper() == 'OUI'
-            except Exception:
-                continue
-
-            if acc_o and acc_d:
-                vehicules_accessibles.append(v_nom)
-                # Capacité
-                capa = capacites.get(v_nom, {}).get(type_cont, 0)
-                if capa > 0:
-                    vehicules_avec_capa.append(v_nom)
-
-        if not vehicules_accessibles:
-            problemes.append(ProblemeFaisabilite(
-                flux_id=flux_id, origine=origine, destination=destination,
-                type_contenant=type_cont, site_bloquant=f"{origine}↔{destination}",
-                raison="AUCUN_VEHICULE_ACCESSIBLE",
-                vehicules_testes=vehicules_autorises,
-                detail=(
-                    f"Aucun véhicule sélectionné ne peut accéder aux deux sites. "
-                    f"Vérifiez les colonnes d'accessibilité dans param_sites."
-                )
-            ))
-        elif not vehicules_avec_capa:
-            problemes.append(ProblemeFaisabilite(
-                flux_id=flux_id, origine=origine, destination=destination,
-                type_contenant=type_cont, site_bloquant=f"{origine}↔{destination}",
-                raison="AUCUNE_CAPACITE",
-                vehicules_testes=vehicules_accessibles,
-                detail=(
-                    f"Véhicules accessibles ({', '.join(vehicules_accessibles)}) "
-                    f"mais aucun ne peut transporter '{type_cont}' "
-                    f"(colonne 'NON' dans param_vehicules ou dimensions incompatibles)."
-                )
-            ))
-        else:
-            nb_ok += 1
-
-    nb_ko = len(problemes)
-    faisable = nb_ko == 0
-
-    # Tableau résumé pour st.dataframe()
-    rows_df = []
-    for p in problemes:
-        rows_df.append({
-            'Flux ID'       : p.flux_id,
-            'Origine'       : p.origine,
-            'Destination'   : p.destination,
-            'Contenant'     : p.type_contenant,
-            'Problème'      : p.raison,
-            'Détail'        : p.detail,
-        })
-    details_df = pd.DataFrame(rows_df) if rows_df else pd.DataFrame()
-
-    if faisable:
-        resume = f"✅ Tous les {nb_ok} flux du {jour} sont faisables avec la flotte sélectionnée."
     else:
-        resume = (
-            f"⚠️ {nb_ko} flux non faisable(s) sur {nb_ok + nb_ko} flux actifs le {jour}. "
-            f"La simulation sera lancée mais ces flux seront ignorés."
-        )
+        st.error("Le fichier template est introuvable.")
 
-    return {
-        "faisable"  : faisable,
-        "problemes" : problemes,
-        "resume"    : resume,
-        "nb_flux_ok": nb_ok,
-        "nb_flux_ko": nb_ko,
-        "details_df": details_df,
-    }
-
-
-# ============================================================
-# DIAGNOSTIC D'INFAISABILITÉ
-# ============================================================
-
-def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 20) -> None:
-    """
-    Teste les contraintes une par une pour identifier celle qui rend
-    le modèle infaisable. Affiche le résultat dans Streamlit.
-    """
-    if not data or not ORTOOLS_AVAILABLE:
+def show_simulation_page():
+    st.title("🏎️ Optimisation des tournées Biologie")
+    st.markdown("---")
+    if "data" not in st.session_state or "matrice_duree" not in st.session_state["data"]:
+        st.error("⚠️ Matrice de durée manquante. Importez vos données d'abord.")
         return
-
-    SCALE      = data['SCALE']
-    n_nodes    = data['n_nodes']
-    n_vehicles = data['n_vehicles']
-    depot      = data['depot']
-
-    def _tester(label, avec_tw=True, avec_amplitude=True,
-                avec_capacite=True, avec_pd=True, avec_nettoyage=True):
-        mgr = pywrapcp.RoutingIndexManager(n_nodes, n_vehicles, depot)
-        rte = pywrapcp.RoutingModel(mgr)
-        ps             = data['propre_sale_par_noeud']
-        node_is_pickup = data['node_is_pickup']
-        T_NET          = data['temps_nettoyage_sc'] if avec_nettoyage else 0
-
-        def cb_t(fi, ti):
-            fn = mgr.IndexToNode(fi)
-            tn = mgr.IndexToNode(ti)
-            t  = data['time_matrix'][fn][tn]
-            if (avec_nettoyage and fn > 0 and not node_is_pickup[fn]
-                    and ps[fn] == 'SALE' and tn > 0
-                    and node_is_pickup[tn] and ps[tn] == 'PROPRE'):
-                return t + T_NET
-            return t
-
-        cb = rte.RegisterTransitCallback(cb_t)
-        rte.SetArcCostEvaluatorOfAllVehicles(cb)
-        rte.AddDimension(cb, _sc(120), _sc(1440), False, 'TimeDiag')
-        td = rte.GetDimensionOrDie('TimeDiag')
-
-        if avec_tw:
-            for node in range(1, n_nodes):
-                idx = mgr.NodeToIndex(node)
-                tw  = data['time_windows'][node]
-                td.CumulVar(idx).SetRange(tw[0], tw[1])
-            for v in range(n_vehicles):
-                td.CumulVar(rte.Start(v)).SetRange(data['h_debut_sc'], data['h_fin_sc'])
-                td.CumulVar(rte.End(v)).SetRange(data['h_debut_sc'], data['h_fin_sc'])
-
-        slv = rte.solver()
-        if avec_amplitude:
-            for v in range(n_vehicles):
-                slv.Add(
-                    td.CumulVar(rte.End(v)) - td.CumulVar(rte.Start(v))
-                    <= data['max_poste_sc']
-                )
-
-        if avec_capacite:
-            def cb_d(fi):
-                return data['demands'][mgr.IndexToNode(fi)]
-            cbd = rte.RegisterUnaryTransitCallback(cb_d)
-            rte.AddDimensionWithVehicleCapacity(
-                cbd, 0, [data['vehicle_capacity']] * n_vehicles, True, 'CapDiag'
-            )
-
-        if avec_pd:
-            for pickup_node, delivery_node in data['pickups_deliveries']:
-                pi = mgr.NodeToIndex(pickup_node)
-                di = mgr.NodeToIndex(delivery_node)
-                rte.AddPickupAndDelivery(pi, di)
-                slv.Add(rte.VehicleVar(pi) == rte.VehicleVar(di))
-                slv.Add(td.CumulVar(pi) <= td.CumulVar(di))
-
-        for v in range(n_vehicles):
-            rte.SetFixedCostOfVehicle(int(1e8), v)
-
-        params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
-        params.time_limit.seconds = time_limit_seconds
-        params.log_search = False
-        sol = rte.SolveWithParameters(params)
-        statuts = {0:"NON_RESOLU",1:"OK",2:"PARTIEL",3:"ECHEC",4:"TIMEOUT",6:"INFAISABLE"}
-        statut = statuts.get(rte.status(), str(rte.status()))
-        ok = "✅" if sol else "❌"
-        _log(f"    {ok} {label} → {statut}", "success" if sol else "warning")
-        return sol is not None
-
-    n_v  = data['n_vehicles']
-    n_j  = (data['n_nodes'] - 1) // 2
-    amp  = data['max_poste_sc'] // SCALE
-    capa = data['vehicle_capacity']
-    _log(f"  🔬 Diagnostic : {n_j} jobs, {n_v} véhicules, amplitude={amp}min, capacité={capa}", "info")
-
-    _tester("Sans aucune contrainte",         False, False, False, False, False)
-    _tester("+ Fenêtres temporelles seules",  True,  False, False, False, False)
-    _tester("+ Amplitude poste",              True,  True,  False, False, False)
-    _tester("+ Capacité",                     True,  True,  True,  False, False)
-    _tester("+ Pickup & Delivery",            True,  True,  True,  True,  False)
-    _tester("+ Nettoyage (toutes contraintes)",True,  True,  True,  True,  True)
-
-# ============================================================
-# RÉSOLUTION ITÉRATIVE : 1 → Nmax véhicules
-# ============================================================
-
-def _solve_type_iteratif(
-    data: dict,
-    time_limit_seconds: int = 60,
-) -> dict | None:
-    """
-    Lance une unique tentative OR-Tools avec ceil(Nmax × 1.2) véhicules.
-    OR-Tools minimise lui-même le nombre utilisés via le coût fixe élevé.
-    Filet de sécurité à ceil(Nmax × 1.5) si la première tentative échoue.
-    """
-    if not data:
-        return None
-
-    nmax           = data.get('nmax', data['n_vehicles'])
-    nmax_theorique = data.get('nmax_theorique', 1)
-    pic_charge     = data.get('pic_charge_min', 0)
-    n_jobs         = len(data.get('jobs', []))
-
-    _log(
-        f"  📊 Pic de charge lissée : {pic_charge:.1f} min | "
-        f"Nmax théorique : {nmax_theorique} | "
-        f"Borne haute : {nmax} véhicules",
-        "info"
-    )
-
-    # ── Tentative principale : ceil(Nmax_theorique × 1.2) ──────────────────
-    # On utilise nmax_theorique (pic de charge / 15min) comme base,
-    # pas nmax (= nmax_theorique × 2) qui est trop conservateur.
-    n_v = min(n_jobs, max(1, math.ceil(nmax_theorique * 1.2)))
-    _log(f"  🔄 Tentative avec {n_v} véhicule(s) (budget : {time_limit_seconds}s)...", "info")
-    sol = _solve_type({**data, 'n_vehicles': n_v}, time_limit_seconds=time_limit_seconds)
-    if sol is not None:
-        _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
-        return sol
-
-    # ── Filet de sécurité : ceil(Nmax × 1.5) ───────────────────────────────
-    n_v2 = min(n_jobs, max(1, math.ceil(nmax_theorique * 1.5)))
-    if n_v2 > n_v:
-        _log(f"  ↳ Échec avec {n_v}, filet : {n_v2} véhicule(s)...", "warning")
-        sol = _solve_type({**data, 'n_vehicles': n_v2}, time_limit_seconds=time_limit_seconds)
-        if sol is not None:
-            _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
-            return sol
-        n_v = n_v2
-
-    # ── Diagnostic ───────────────────────────────────────────────────────────
-    _log(f"  ❌ Aucune solution trouvée.", "error")
-    _log("  🔬 Lancement du diagnostic d'infaisabilité...", "info")
-    diagnostiquer_infaisabilite({**data, 'n_vehicles': n_v}, time_limit_seconds=20)
-    capa_max = data['vehicle_capacity']
-    jobs_hors_capa = [j for j in data['jobs'] if j.nb_contenants > capa_max]
-    if jobs_hors_capa:
-        _log(f"  ⚠️ {len(jobs_hors_capa)} job(s) avec nb_contenants > capacité ({capa_max}) :", 'error')
-        for j in jobs_hors_capa[:10]:
-            _log(f"    Job {j.job_id} : {j.origine}→{j.destination}, "
-                 f"{j.nb_contenants} contenants (max={capa_max})", 'error')
+    if "biologie_config" not in st.session_state:
+        st.warning("⚠️ Configuration manquante. Validez vos paramètres dans l'onglet 'Paramétrage BIO'.")
+        return
+     # Vérification de la présence de 'param_sites'
+    if 'param_sites' not in st.session_state['data']:
+        st.error("⚠️ 'param_sites' est manquant dans les données. Veuillez vérifier votre fichier d'import.")
+        return  # Sortir de la fonction si la clé est manquante
     else:
-        total = sum(d for d in data['demands'] if d > 0)
-        _log(f"  📊 Demande totale : {total} | Capacité totale : {capa_max * n_v}", 'info')
-    return None
-
-
-# ============================================================
-# POINT D'ENTRÉE PRINCIPAL
-# ============================================================
-
-def run_flux_optimization(
-    df_flux: pd.DataFrame,
-    df_vehicules: pd.DataFrame,
-    df_contenants: pd.DataFrame,
-    df_sites: pd.DataFrame,
-    matrice_duree: pd.DataFrame,
-    params_logistique: dict,
-    jour: str = "Lundi",
-    time_limit_seconds: int = 60,
-) -> dict:
-    """
-    Optimise les tournées de distribution pour une journée donnée.
-
-    Paramètres
-    ----------
-    df_flux             : st.session_state["data"]["m_flux"]
-    df_vehicules        : st.session_state["data"]["param_vehicules"]
-    df_contenants       : st.session_state["data"]["param_contenants"]
-    df_sites            : st.session_state["data"]["param_sites"]
-    matrice_duree       : st.session_state["data"]["matrice_duree"]
-    params_logistique   : st.session_state["params_logistique"]
-    jour                : "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"
-    time_limit_seconds  : budget temps du solveur OR-Tools par type de véhicule
-
-    Retourne
-    --------
-    dict {
-        "postes"          : list[PosteChauffeur]   plannings chauffeurs
-        "rapport"         : dict                   métriques globales
-        "jobs_par_type"   : dict                   jobs par type de véhicule
-    }
-    Stocké dans st.session_state["flux_resultats"] par app.py.
-    """
-    if not ORTOOLS_AVAILABLE:
-        _log("⚠️ OR-Tools non disponible. Installez ortools pour utiliser ce moteur.", "error")
-        return {}
-
-    _log(f"🔍 Démarrage de l'optimisation — {jour}", "info")
-
-    # Log des paramètres reçus pour déboguer
-    vehicules_selectionnes = params_logistique.get('vehicules_selectionnes', [])
-    _log(f"🚛 Véhicules sélectionnés : {vehicules_selectionnes}", "info")
-
-    # ── 0. Pré-calcul bin-packing ────────────────────────────────────────────
-    _log("📦 Calcul des capacités véhicules × contenants (bin-packing 2D)...", "info")
-    capacites = precalculer_capacites(df_vehicules, df_contenants)
-
-    df_cont_indexed = {
-        _norm(row.iloc[0]): {_norm(k): v for k, v in row.items()}
-        for _, row in df_contenants.iterrows()
-    }
-
-    # ── 1. Décomposition des flux en jobs élémentaires ───────────────────────
-    _log(f"⚙️ Décomposition des flux du {jour} en jobs élémentaires...", "info")
-    tous_les_jobs = decomposer_flux_en_jobs(
-        df_flux, df_vehicules, df_contenants, df_sites,
-        df_cont_indexed, capacites, params_logistique, jour
-    )
-    _log(f"  → {len(tous_les_jobs)} jobs élémentaires générés", "info")
-
-    # ── Diagnostic répartition par type de véhicule ──────────────────────────
-    from collections import Counter
-    repartition = Counter(j.v_type_requis for j in tous_les_jobs)
-    for v_type, nb in sorted(repartition.items(), key=lambda x: -x[1]):
-        _log(f"  📦 {v_type} : {nb} jobs", "info")
-
-    if not tous_les_jobs:
-        _log("⚠️ Aucun job à planifier pour ce jour.", "warning")
-        return {}
-
-    # Regroupement par type de véhicule
-    jobs_par_type: dict[str, list[JobElementaire]] = {}
-    for j in tous_les_jobs:
-        jobs_par_type.setdefault(j.v_type_requis, []).append(j)
-
-    # ── 2. Résolution OR-Tools par type de véhicule ──────────────────────────
-    vehicules_autorises = [_norm(v) for v in params_logistique.get('vehicules_selectionnes', [])]
-    alea = params_logistique.get('alea_circulation', 0.0)
-
-    resultats_par_type: dict[str, dict | None] = {}
-    data_par_type: dict[str, dict] = {}
-
-    for v_type, jobs_v in jobs_par_type.items():
-        if v_type not in vehicules_autorises:
-            _log(f"  ⏭️ {v_type} non sélectionné dans la flotte, ignoré.", "warning")
-            continue
-
-        _log(f"🚛 Optimisation {v_type} ({len(jobs_v)} jobs)...", "info")
-        data = _build_model_data(
-            jobs_v, matrice_duree, capacites,
-            params_logistique, v_type, alea
-        )
-        if not data:
-            resultats_par_type[v_type] = None
-            continue
-
-        data_par_type[v_type] = data
-        # Recherche itérative : 1 → nmax véhicules
-        res = _solve_type_iteratif(data, time_limit_seconds=time_limit_seconds)
-
-        if res is not None:
-            resultats_par_type[v_type] = res
-            _log(
-                f"  ✅ {v_type} : {res['n_vehicules']} véhicule(s), "
-                f"{res['n_postes']} poste(s)",
-                "success"
-            )
+        param_sites = st.session_state['data']['param_sites']
+        if not isinstance(param_sites, pd.DataFrame):
+            st.error("⚠️ Les données de 'param_sites' ne sont pas un DataFrame.")
+            return  # Sortir de la fonction si ce n'est pas un DataFrame
+        elif 'Libellé' not in param_sites.columns:
+            st.error("⚠️ La colonne 'Libellé' est manquante dans 'param_sites'.")
+            return  # Sortir de la fonction si la colonne 'Libellé' est manquante
         else:
-            resultats_par_type[v_type] = None
-            # Diagnostic : afficher la borne utilisée
-            if data:
-                n_v = data.get('n_vehicles', '?')
-                n_j = len(data.get('jobs', []))
-                amp = data.get('max_poste_sc', 0) // data.get('SCALE', 1)
-                _log(
-                    f"  ❌ {v_type} : pas de solution trouvée. "
-                    f"(modèle : {n_j} jobs, {n_v} véhicules max, "
-                    f"amplitude={amp} min) "
-                    f"→ Essayez d'augmenter le budget temps ou l'amplitude de poste.",
-                    "error"
+            st.write(f"'param_sites' est correctement chargé avec {len(param_sites)} lignes.")
+
+    config = st.session_state["biologie_config"]
+    btn_label = "🚀 Relancer la simulation" if st.session_state.get("sim_lancee") else "🚀 Lancer la simulation"
+    
+    if st.button(btn_label, use_container_width=True, type="primary"):
+        with st.spinner("🧠 Calcul de l'itinéraire optimal..."):
+            try:
+                resultats = run_optimization(
+                    m_duree_df=st.session_state["data"]["matrice_duree"],
+                    sites_config=config["sites"],
+                    temps_collecte=config["temps_collecte"],
+                    max_tournee=config["duree_max"],
+                    souplesse=st.session_state.get("souplesse_fusion", False)
                 )
+                st.session_state.resultat_flotte = resultats
+                st.session_state.sim_lancee = True
+                # Stocker le solveur utilisé pour l'afficher après rerun
+                from modules.biologie_engine import ORTOOLS_AVAILABLE
+                st.session_state["solveur_utilise"] = "ortools" if ORTOOLS_AVAILABLE else "greedy"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erreur : {e}")
 
-    # ── 3. Post-traitement ───────────────────────────────────────────────────
-    postes = construire_postes(resultats_par_type, data_par_type, params_logistique)
-    rapport = calculer_rapport(postes, jobs_par_type, resultats_par_type)
+    if st.session_state.get("sim_lancee"):
+        st.success(f"✅ Simulation réussie ! {len(st.session_state.resultat_flotte)} véhicules identifiés.")
+        if st.session_state.get("solveur_utilise") == "ortools":
+            st.info("🧠 Solution calculée par **OR-Tools** (solveur optimal)")
+        elif st.session_state.get("solveur_utilise") == "greedy":
+            st.warning("⚠️ Solution calculée par **l'heuristique gloutonne** (OR-Tools indisponible ou sans solution)")
+        # Affichage du rapport détaillé stocké par biologie_engine
+        rapport = st.session_state.get("bio_rapport")
+        if rapport:
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("🚐 Véhicules", rapport["nb_vehicules"])
+            col2.metric("👤 Postes chauffeurs", rapport["nb_postes"])
+            col3.metric("⏱️ Taux occupation moyen", f"{rapport['taux_occupation']:.1%}")
+            col4.metric("⏳ Palier optimal", f"{rapport['palier']} min")
+            if rapport.get("repassage"):
+                st.caption("⚠️ Repassage autorisé sur certains sites (fenêtres incompatibles)")
 
-    # Stockage dans session_state si disponible
-    if _ST and st is not None:
-        try:
-            st.session_state["flux_resultats"] = {
-                "postes"       : postes,
-                "rapport"      : rapport,
-                "jobs_par_type": jobs_par_type,
-                "jour"         : jour,
-            }
-            st.session_state["flux_rapport"] = rapport
-        except Exception:
-            pass
+# ------------ INITIALISATION APP ---------------
+st.set_page_config(layout="wide", page_title="Logistique CHU Nantes & ADOPALE")
 
-    # Rapport final
-    _log(
-        f"✅ Optimisation terminée — "
-        f"{rapport['nb_vehicules_total']} véhicule(s), "
-        f"{rapport['nb_postes_total']} poste(s), "
-        f"taux moyen {rapport['taux_moyen']:.1%}"
-        + (f" — ⚠️ {rapport['nb_jobs_non_planifies']} job(s) non planifié(s)"
-           if rapport['nb_jobs_non_planifies'] > 0 else ""),
-        "success" if rapport['nb_jobs_non_planifies'] == 0 else "warning"
-    )
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
+LOGO_ADOPALE = ASSETS_DIR / "ADOPALE.jpg"
+LOGO_CHU = ASSETS_DIR / "CHU Nantes.png"
+TEMPLATE_FILE = ASSETS_DIR / "Template_vierge.xlsx"
 
-    return {
-        "postes"       : postes,
-        "rapport"      : rapport,
-        "jobs_par_type": jobs_par_type,
-        "jour"         : jour,
+if "active_menu" not in st.session_state:
+    st.session_state.active_menu = "Accueil"
+
+with st.sidebar:
+    col1, col2 = st.columns(2)
+    with col1:
+        if LOGO_ADOPALE.exists(): st.image(str(LOGO_ADOPALE), use_container_width=True)
+    with col2:
+        if LOGO_CHU.exists(): st.image(str(LOGO_CHU), use_container_width=True)
+
+    st.divider()
+    menu_styles = {
+        "container": {"background-color": "white", "padding": "0"},
+        "icon": {"color": "#00558E", "font-size": "18px"},
+        "nav-link": {"color": "black", "font-size": "14px", "font-weight": "bold", "margin": "0px"},
+        "nav-link-selected": {"background-color": "#e1e4e8", "color": "black"},
     }
+
+    st.markdown("### 💾 DONNÉES DE BASE")
+    sel_data = option_menu(None, ["Accueil", "Outil calcul matrices", "Importer Données"], 
+                           icons=["house", "grid", "cloud-upload"], styles=menu_styles, key="m1")
+
+    st.markdown("### 🧪 BIOLOGIE")
+    sel_bio = option_menu(None, ["Paramétrage BIO", "Simul tournées BIO", "Synthèse BIO", "Détail tournées BIO"], 
+                          icons=["gear", "play", "graph-up", "map"], styles=menu_styles, key="m2")
+
+    st.markdown("### 🚚 DISTRIBUTION")
+    sel_dist = option_menu(None, ["Vérif volumes à distribuer", "Véhicules et paramètres", "Simul tournées", "Synthèse transport", "Détail tournées"], 
+                           icons=["bar-chart", "truck", "play", "clipboard", "list-task"], styles=menu_styles, key="m3")
+
+    # LOGIQUE DE SYNCHRONISATION
+    if sel_data != st.session_state.get('p_data'):
+        st.session_state.active_menu = sel_data
+        st.session_state.p_data = sel_data
+    elif sel_bio != st.session_state.get('p_bio'):
+        st.session_state.active_menu = sel_bio
+        st.session_state.p_bio = sel_bio
+    elif sel_dist != st.session_state.get('p_dist'):
+        st.session_state.active_menu = sel_dist
+        st.session_state.p_dist = sel_dist
+
+    selected = st.session_state.active_menu
+
+# --- ROUTAGE DES PAGES ---
+if selected == "Accueil":
+    show_home()
+elif selected == "Outil calcul matrices":
+    run_matrix_tool()
+elif selected == "Importer Données":
+    show_import()
+elif selected == "Vérif volumes à distribuer":
+    st.title("📦 Contrôle des volumes")
+    if "data" in st.session_state: show_flux_control_charts()
+    else: st.warning("Importez des données d'abord.")
+
+elif selected == "Paramétrage BIO":
+    show_biologie_page()
+elif selected == "Simul tournées BIO":
+    show_simulation_page()
+elif selected == "Synthèse BIO":
+    st.title("📊 Synthèse Biologie")
+    if st.session_state.get("sim_lancee"):
+        afficher_stats_vehicules(st.session_state.resultat_flotte, st.session_state["data"]["matrice_distance"])
+        afficher_stats_chauffeurs(st.session_state.resultat_flotte, st.session_state["biologie_config"]["rh"])
+        afficher_stats_sites(st.session_state.resultat_flotte)
+    else: st.info("Lancez la simulation BIO.")
+
+elif selected == "Détail tournées BIO":
+    st.title("📋 Détail BIO")
+    if st.session_state.get("sim_lancee"):
+        res = st.session_state.resultat_flotte
+        df_dist = st.session_state["data"]["matrice_distance"]
+        df_adresses = st.session_state["data"].get("adresses", st.session_state["data"].get("df_sites"))
+        sites_adresses = pd.Series(df_adresses.adresse.values, index=df_adresses.site.str.upper()).to_dict()
+        v_sel, vac_sel = afficher_detail_flotte_vehicules(res, df_dist)
+        if v_sel: afficher_detail_itineraire(v_sel, vac_sel, sites_adresses, sites_adresses.get("HLS"))
+    else: st.info("Lancez la simulation BIO.")
+
+elif selected == "Véhicules et paramètres":
+    afficher_parametres_logistique()
+
+elif selected == "Simul tournées":
+    st.title("🚀 Simulation Transport Lourd")
+    
+    if 'data' in st.session_state:
+        df_flux_brut = st.session_state['data']['m_flux']
+        
+        # --- MODIFICATION ICI : SAUVEGARDE SYSTÉMATIQUE ---
+        with st.expander("📊 Détails de la segmentation des flux", expanded=False):
+            df_recurrent, df_specifique = segmenter_flux(df_flux_brut)
+            
+            # On les enregistre dans le session_state pour qu'ils survivent aux boutons
+            st.session_state['df_recurrent'] = df_recurrent
+            st.session_state['df_flux_specifique'] = df_specifique
+            
+            col1, col2 = st.columns(2)
+            col1.metric("Flux Récurrents (L-V)", len(df_recurrent))
+            col2.metric("Flux Spécifiques", len(df_specifique))
+        
+        st.divider()
+
+        # 3. Calcul de la Séquence Type (Etape 2.a.ii)
+        st.subheader("📌 Génération de la Séquence Type (Jmax)")
+        
+        if st.button("Lancer le calcul du Jmax", type="primary", use_container_width=True):
+            with st.spinner("🧠 Analyse des poids fictifs..."):
+                try:
+                    # Utiliser les DataFrames du session_state
+                    df_sequence_type = choix_Jmax(
+                        df_recurrent=st.session_state['df_recurrent'], # Version persistante
+                        df_vehicules=st.session_state['data']['param_vehicules'],
+                        df_contenants=st.session_state['data']['param_contenants'],
+                        matrice_duree=st.session_state['data']['matrice_duree'],
+                        df_sites=st.session_state['data']['param_sites']
+                    )
+                    
+                    st.session_state['df_sequence_type'] = df_sequence_type
+                    st.success("✅ Séquence type générée !")
+                except Exception as e:
+                    st.error(f"Erreur lors du calcul : {e}")
+                
+    else: 
+        st.error("⚠️ Veuillez importer les données dans l'onglet 'Importer Données' avant de continuer.")
+        
+elif selected == "Synthèse transport":
+    st.title("🚚 Synthèse Transport — Optimisation OR-Tools")
+
+    # Vérification des prérequis
+    donnees_ok = (
+        "data" in st.session_state
+        and "m_flux"           in st.session_state["data"]
+        and "param_vehicules"  in st.session_state["data"]
+        and "param_contenants" in st.session_state["data"]
+        and "param_sites"      in st.session_state["data"]
+        and "matrice_duree"    in st.session_state["data"]
+    )
+    params_ok = "params_logistique" in st.session_state
+
+    if not donnees_ok:
+        st.warning("⚠️ Importez vos données Excel avant de lancer la simulation.")
+    elif not params_ok:
+        st.warning("⚠️ Validez vos paramètres logistiques dans l'onglet 'Véhicules et paramètres'.")
+    else:
+        # Sélection du jour
+        jour_choisi = st.selectbox(
+            "Jour à simuler",
+            ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"],
+            key="flux_jour_choisi"
+        )
+
+        # Budget temps solveur
+        time_limit = st.slider(
+            "Budget temps OR-Tools par type de véhicule (secondes)",
+            min_value=15, max_value=180, value=60, step=15,
+            help="Plus la valeur est élevée, plus la solution sera proche de l'optimal."
+        )
+
+        # ── Contrôle de faisabilité ────────────────────────────────────────
+        if st.button("🔍 Vérifier la faisabilité", use_container_width=True):
+            with st.spinner("Vérification en cours..."):
+                try:
+                    cap = precalculer_capacites(
+                        st.session_state["data"]["param_vehicules"],
+                        st.session_state["data"]["param_contenants"],
+                    )
+                    controle = verifier_faisabilite(
+                        df_flux           = st.session_state["data"]["m_flux"],
+                        df_vehicules      = st.session_state["data"]["param_vehicules"],
+                        df_contenants     = st.session_state["data"]["param_contenants"],
+                        df_sites          = st.session_state["data"]["param_sites"],
+                        capacites         = cap,
+                        params_logistique = st.session_state["params_logistique"],
+                        jour              = jour_choisi,
+                    )
+                    st.session_state["flux_controle"] = controle
+                except Exception as e:
+                    st.error(f"Erreur lors du contrôle : {e}")
+                    st.exception(e)
+
+        # Affichage du rapport de faisabilité
+        if "flux_controle" in st.session_state:
+            ctrl = st.session_state["flux_controle"]
+            if ctrl["faisable"]:
+                st.success(ctrl["resume"])
+            else:
+                st.warning(ctrl["resume"])
+                with st.expander(f"📋 Voir les {ctrl['nb_flux_ko']} flux non faisables", expanded=False):
+                    if not ctrl["details_df"].empty:
+                        # Grouper par raison pour un affichage clair
+                        for raison, grp in ctrl["details_df"].groupby("Problème"):
+                            labels = {
+                                "SITE_INCONNU"             : "🔴 Sites inconnus dans param_sites",
+                                "AUCUN_VEHICULE_ACCESSIBLE": "🟠 Aucun véhicule accessible sur la liaison",
+                                "AUCUNE_CAPACITE"          : "🟡 Véhicule accessible mais capacité incompatible",
+                            }
+                            st.subheader(labels.get(raison, raison))
+                            st.dataframe(
+                                grp.drop(columns=["Problème"]),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+
+        st.divider()
+
+        btn_label = (
+            "🔄 Relancer la simulation"
+            if st.session_state.get("flux_sim_lancee")
+            else "🚀 Lancer la simulation"
+        )
+
+        if st.button(btn_label, type="primary", use_container_width=True):
+            with st.spinner("🧠 Optimisation OR-Tools en cours..."):
+                try:
+                    resultats = run_flux_optimization(
+                        df_flux           = st.session_state["data"]["m_flux"],
+                        df_vehicules      = st.session_state["data"]["param_vehicules"],
+                        df_contenants     = st.session_state["data"]["param_contenants"],
+                        df_sites          = st.session_state["data"]["param_sites"],
+                        matrice_duree     = st.session_state["data"]["matrice_duree"],
+                        params_logistique = st.session_state["params_logistique"],
+                        jour              = jour_choisi,
+                        time_limit_seconds= time_limit,
+                    )
+                    st.session_state["flux_resultats"]  = resultats
+                    st.session_state["flux_sim_lancee"] = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erreur lors de l'optimisation : {e}")
+                    st.exception(e)
+
+        # ── AFFICHAGE DES RÉSULTATS (après rerun) ──────────────────────────
+        if st.session_state.get("flux_sim_lancee") and "flux_resultats" in st.session_state:
+            res     = st.session_state["flux_resultats"]
+            rapport = res.get("rapport", {})
+            postes  = res.get("postes", [])
+            jour_res = res.get("jour", jour_choisi)
+
+            st.divider()
+
+            # ── Métriques globales ──────────────────────────────────────────
+            st.subheader(f"📊 Résultats — {jour_res}")
+
+            nb_v_par_type = rapport.get("nb_vehicules_par_type", {})
+            nb_p_par_type = rapport.get("nb_postes_par_type", {})
+            all_types     = sorted(set(list(nb_v_par_type.keys()) + list(nb_p_par_type.keys())))
+
+            if all_types:
+                cols = st.columns(len(all_types) + 2)
+                for i, v_type in enumerate(all_types):
+                    cols[i].metric(
+                        f"🚛 {v_type}",
+                        f"{nb_v_par_type.get(v_type, 0)} véh.",
+                        f"{nb_p_par_type.get(v_type, 0)} poste(s)"
+                    )
+                cols[-2].metric("👤 Postes total",   rapport.get("nb_postes_total", 0))
+                cols[-1].metric("⏱️ Taux moyen",     f"{rapport.get('taux_moyen', 0):.1%}")
+
+            # Alerte jobs non planifiés
+            nb_np = rapport.get("nb_jobs_non_planifies", 0)
+            if nb_np > 0:
+                st.warning(f"⚠️ {nb_np} job(s) n'ont pas pu être planifiés.")
+                with st.expander(f"🔍 Voir les {nb_np} jobs non planifiés", expanded=True):
+                    jobs_np = rapport.get("jobs_non_planifies_detail", [])
+                    if jobs_np:
+                        rows_np = []
+                        for item in jobs_np:
+                            j = item["job"]
+                            rows_np.append({
+                                "Job ID"        : j.job_id,
+                                "Flux ID"       : j.flux_id,
+                                "Origine"       : j.origine,
+                                "Destination"   : j.destination,
+                                "Contenant"     : j.type_contenant,
+                                "Qté"           : j.nb_contenants,
+                                "Propre/Sale"   : j.propre_sale,
+                                "Véhicule requis": item["v_type"],
+                                "Fenêtre"       : (
+                                    f"{int(j.h_dispo//60):02d}h{int(j.h_dispo%60):02d}"
+                                    f" → {int(j.h_deadline//60):02d}h{int(j.h_deadline%60):02d}"
+                                ),
+                                "Raison"        : item["raison"],
+                            })
+                        st.dataframe(
+                            pd.DataFrame(rows_np),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+            else:
+                st.success("✅ Tous les flux ont été planifiés.")
+
+            # ── Détail des postes chauffeurs ────────────────────────────────
+            if postes:
+                st.divider()
+                st.subheader("📅 Planning des postes chauffeurs")
+
+                # Filtrage par type de véhicule
+                types_dispo = sorted({p.v_type for p in postes})
+                type_filtre = st.selectbox("Filtrer par type de véhicule", ["Tous"] + types_dispo,
+                                           key="flux_type_filtre")
+                postes_affiches = postes if type_filtre == "Tous" else [p for p in postes if p.v_type == type_filtre]
+
+                # Tableau récapitulatif des postes
+                rows = []
+                for p in postes_affiches:
+                    h_deb = f"{int(p.h_debut // 60):02d}h{int(p.h_debut % 60):02d}"
+                    h_fin = f"{int(p.h_fin   // 60):02d}h{int(p.h_fin   % 60):02d}"
+                    rows.append({
+                        "Poste"           : p.poste_id,
+                        "Type véhicule"   : p.v_type,
+                        "Début"           : h_deb,
+                        "Fin"             : h_fin,
+                        "Amplitude (min)" : round(p.amplitude, 0),
+                        "Taux occupation" : f"{p.taux_occupation:.1%}",
+                        "Nb missions"     : len(p.missions),
+                    })
+                if rows:
+                    st.dataframe(
+                        pd.DataFrame(rows),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                # Détail mission d'un poste sélectionné
+                st.divider()
+                st.subheader("🔍 Détail d'un poste")
+                poste_ids = [p.poste_id for p in postes_affiches]
+                if poste_ids:
+                    poste_sel_id = st.selectbox("Choisir un poste", poste_ids, key="flux_poste_sel")
+                    poste_sel = next((p for p in postes_affiches if p.poste_id == poste_sel_id), None)
+                    if poste_sel and poste_sel.missions:
+                        rows_m = []
+                        for m in poste_sel.missions:
+                            heure = f"{int(m['heure'] // 60):02d}h{int(m['heure'] % 60):02d}"
+                            action = "📦 Chargement" if m['is_pickup'] else "🏁 Livraison"
+                            rows_m.append({
+                                "Heure"         : heure,
+                                "Action"        : action,
+                                "Site"          : m['site'],
+                                "Contenant"     : m['type_contenant'],
+                                "Qté"           : m['nb_contenants'],
+                                "Propre/Sale"   : m['propre_sale'],
+                            })
+                        st.dataframe(
+                            pd.DataFrame(rows_m),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+            # ── Graphique de charge par type de véhicule ────────────────────
+            jobs_par_type = res.get("jobs_par_type", {})
+            if jobs_par_type:
+                st.divider()
+                st.subheader("📈 Charge horaire théorique par type de véhicule")
+                import numpy as np
+                heures = list(range(24))
+                chart_data = {}
+                for v_type, jlist in jobs_par_type.items():
+                    vecteur = np.zeros(24)
+                    for j in jlist:
+                        h_start = max(0, min(23, int(j.h_dispo   / 60)))
+                        h_end   = max(0, min(23, int(j.h_deadline / 60)))
+                        if h_end > h_start:
+                            vecteur[h_start:h_end] += j.nb_contenants / max(h_end - h_start, 1)
+                    if vecteur.sum() > 0:
+                        chart_data[v_type] = vecteur
+                if chart_data:
+                    labels = [f"{h:02d}h" for h in heures]
+                    st.bar_chart(pd.DataFrame(chart_data, index=labels))
