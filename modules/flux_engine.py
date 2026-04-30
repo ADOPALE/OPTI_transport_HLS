@@ -553,39 +553,54 @@ def _build_model_data(
         node_is_pickup.extend([True, False])
         propre_sale_par_noeud.extend([j.propre_sale, j.propre_sale])
 
-    # ── Borne supérieure réaliste du nombre de véhicules ───────────────────
-    # n_vehicles = n_jobs est trop large et rend le modèle explosif.
-    # On calcule une borne basée sur la charge totale des jobs.
-    #
-    # Charge d'un job = durée de trajet aller + durée de trajet retour dépôt
-    # (approximation : on prend le trajet depuis le dépôt)
-    DEPOT = 0
-    charge_totale_sc = 0
+    # ── Calcul de Nmax par pic de charge lissée ────────────────────────────
+    # 1. Pour chaque job, lisser sa durée sur sa plage horaire [h_dispo, h_deadline]
+    #    → contribution uniforme par créneau de RESOLUTION minutes
+    # 2. Pic de charge = max de la somme cumulée sur tous les créneaux
+    # 3. Nmax = 2 × ceil(pic / amplitude_productive)
+    DEPOT      = 0
+    RESOLUTION = 15  # granularité en minutes
+
+    slots      = max(1, int((h_fin - h_debut) / RESOLUTION) + 1)
+    charge_par_slot = [0.0] * slots
+
     for j_idx, j in enumerate(jobs_v):
         pickup_node   = 1 + 2 * j_idx
         delivery_node = 2 + 2 * j_idx
-        # trajet dépôt → pickup + pickup → delivery + delivery → dépôt
-        charge_totale_sc += (
+        # Durée totale du job : dépôt→pickup→delivery→dépôt
+        duree_min = (
             distance_matrix[DEPOT][pickup_node] +
             distance_matrix[pickup_node][delivery_node] +
             distance_matrix[delivery_node][DEPOT]
-        )
+        ) / SCALE
 
-    # Amplitude productive par véhicule
-    amplitude_productive_sc = max(1, int(amplitude_max * SCALE))
+        # Plage horaire du job
+        tw_open  = time_windows[pickup_node][0] / SCALE   # minutes
+        tw_close = time_windows[pickup_node][1] / SCALE
+        plage    = max(tw_close - tw_open, RESOLUTION)
 
-    # Borne min théorique (arrondie au supérieur)
-    borne_min = max(1, math.ceil(charge_totale_sc / amplitude_productive_sc))
+        # Contribution lissée : duree_min répartie uniformément sur la plage
+        contrib_par_slot = (duree_min / plage) * RESOLUTION
 
-    # On ajoute une marge de 50% pour donner de la souplesse à OR-Tools
-    # et couvrir les contraintes de fenêtres temporelles
-    borne_max = min(n_jobs, max(borne_min + 2, math.ceil(borne_min * 1.5)))
+        slot_start = max(0, int((tw_open  - h_debut) / RESOLUTION))
+        slot_end   = min(slots - 1, int((tw_close - h_debut) / RESOLUTION))
+        for s in range(slot_start, slot_end + 1):
+            charge_par_slot[s] += contrib_par_slot
 
-    n_vehicles = borne_max
+    pic_charge       = max(charge_par_slot) if charge_par_slot else 1.0
+    nmax_theorique   = max(1, math.ceil(pic_charge / max(1, amplitude_max)))
+    nmax             = min(n_jobs, nmax_theorique * 2)
+
+    # n_vehicles = nmax est la borne haute pour l'itération de _solve_type_iteratif
+    # L'itération teste 1, 2, ..., nmax véhicules et s'arrête dès qu'une solution existe
+    n_vehicles = nmax
 
     return {
         'n_nodes'            : n_nodes,
         'n_vehicles'         : n_vehicles,
+        'nmax'               : nmax,
+        'nmax_theorique'     : nmax_theorique,
+        'pic_charge_min'     : round(pic_charge, 1),
         'depot'              : depot,
         'time_matrix'        : time_matrix,
         'time_windows'       : time_windows,
@@ -1131,6 +1146,69 @@ def verifier_faisabilite(
     }
 
 # ============================================================
+# RÉSOLUTION ITÉRATIVE : 1 → Nmax véhicules
+# ============================================================
+
+def _solve_type_iteratif(
+    data: dict,
+    time_limit_seconds: int = 60,
+) -> dict | None:
+    """
+    Itère de 1 à nmax véhicules et s'arrête dès qu'OR-Tools
+    trouve une solution valide.
+
+    Pour chaque valeur de n_v :
+      - On reconstruit un RoutingModel avec exactement n_v véhicules
+      - On lance le solveur avec time_limit_seconds / nmax secondes
+      - Si solution trouvée → on retourne immédiatement
+      - Sinon → on essaie avec n_v + 1
+
+    Si aucune solution jusqu'à nmax → retourne None.
+    """
+    if not data:
+        return None
+
+    nmax           = data.get('nmax', data['n_vehicles'])
+    nmax_theorique = data.get('nmax_theorique', 1)
+    pic_charge     = data.get('pic_charge_min', 0)
+    SCALE          = data['SCALE']
+
+    _log(
+        f"  📊 Pic de charge lissée : {pic_charge:.1f} min | "
+        f"Nmax théorique : {nmax_theorique} | "
+        f"Borne haute : {nmax} véhicules",
+        "info"
+    )
+
+    # Budget temps par tentative : au moins 15s, partagé équitablement
+    budget_par_tentative = max(15, time_limit_seconds // max(1, nmax))
+
+    for n_v in range(1, nmax + 1):
+        _log(f"  🔄 Tentative avec {n_v} véhicule(s)...", "info")
+
+        # Construire le modèle avec exactement n_v véhicules
+        data_nv = {**data, 'n_vehicles': n_v}
+        solution_data = _solve_type(data_nv, time_limit_seconds=budget_par_tentative)
+
+        if solution_data is not None:
+            _log(
+                f"  ✅ Solution trouvée avec {n_v} véhicule(s) "
+                f"(budget utilisé : {budget_par_tentative}s/tentative)",
+                "success"
+            )
+            return solution_data
+
+        _log(f"  ↳ Pas de solution avec {n_v} véhicule(s), on essaie {n_v+1}...", "info")
+
+    _log(
+        f"  ❌ Aucune solution trouvée jusqu'à {nmax} véhicules. "
+        f"Augmentez le budget temps ou vérifiez les fenêtres horaires.",
+        "error"
+    )
+    return None
+
+
+# ============================================================
 # POINT D'ENTRÉE PRINCIPAL
 # ============================================================
 
@@ -1225,7 +1303,8 @@ def run_flux_optimization(
             continue
 
         data_par_type[v_type] = data
-        res = _solve_type(data, time_limit_seconds=time_limit_seconds)
+        # Recherche itérative : 1 → nmax véhicules
+        res = _solve_type_iteratif(data, time_limit_seconds=time_limit_seconds)
 
         if res is not None:
             resultats_par_type[v_type] = res
