@@ -1351,6 +1351,7 @@ def _solve_type_iteratif(
 
     # Plage de recherche : Nmax → 1.5×Nmax (arrondi au supérieur)
     # On part de la meilleure estimation et on monte si nécessaire.
+    n_jobs    = len(data.get("jobs", []))
     nmax_haut = min(n_jobs, math.ceil(nmax * 1.5))
     _log(f"  🔍 Plage de recherche : {nmax} → {nmax_haut} véhicules", "info")
 
