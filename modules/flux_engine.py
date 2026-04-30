@@ -1180,6 +1180,107 @@ def verifier_faisabilite(
         "details_df": details_df,
     }
 
+
+# ============================================================
+# DIAGNOSTIC D'INFAISABILITÉ
+# ============================================================
+
+def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 20) -> None:
+    """
+    Teste les contraintes une par une pour identifier celle qui rend
+    le modèle infaisable. Affiche le résultat dans Streamlit.
+    """
+    if not data or not ORTOOLS_AVAILABLE:
+        return
+
+    SCALE      = data['SCALE']
+    n_nodes    = data['n_nodes']
+    n_vehicles = data['n_vehicles']
+    depot      = data['depot']
+
+    def _tester(label, avec_tw=True, avec_amplitude=True,
+                avec_capacite=True, avec_pd=True, avec_nettoyage=True):
+        mgr = pywrapcp.RoutingIndexManager(n_nodes, n_vehicles, depot)
+        rte = pywrapcp.RoutingModel(mgr)
+        ps             = data['propre_sale_par_noeud']
+        node_is_pickup = data['node_is_pickup']
+        T_NET          = data['temps_nettoyage_sc'] if avec_nettoyage else 0
+
+        def cb_t(fi, ti):
+            fn = mgr.IndexToNode(fi)
+            tn = mgr.IndexToNode(ti)
+            t  = data['time_matrix'][fn][tn]
+            if (avec_nettoyage and fn > 0 and not node_is_pickup[fn]
+                    and ps[fn] == 'SALE' and tn > 0
+                    and node_is_pickup[tn] and ps[tn] == 'PROPRE'):
+                return t + T_NET
+            return t
+
+        cb = rte.RegisterTransitCallback(cb_t)
+        rte.SetArcCostEvaluatorOfAllVehicles(cb)
+        rte.AddDimension(cb, _sc(120), _sc(1440), False, 'TimeDiag')
+        td = rte.GetDimensionOrDie('TimeDiag')
+
+        if avec_tw:
+            for node in range(1, n_nodes):
+                idx = mgr.NodeToIndex(node)
+                tw  = data['time_windows'][node]
+                td.CumulVar(idx).SetRange(tw[0], tw[1])
+            for v in range(n_vehicles):
+                td.CumulVar(rte.Start(v)).SetRange(data['h_debut_sc'], data['h_fin_sc'])
+                td.CumulVar(rte.End(v)).SetRange(data['h_debut_sc'], data['h_fin_sc'])
+
+        slv = rte.solver()
+        if avec_amplitude:
+            for v in range(n_vehicles):
+                slv.Add(
+                    td.CumulVar(rte.End(v)) - td.CumulVar(rte.Start(v))
+                    <= data['max_poste_sc']
+                )
+
+        if avec_capacite:
+            def cb_d(fi):
+                return data['demands'][mgr.IndexToNode(fi)]
+            cbd = rte.RegisterUnaryTransitCallback(cb_d)
+            rte.AddDimensionWithVehicleCapacity(
+                cbd, 0, [data['vehicle_capacity']] * n_vehicles, True, 'CapDiag'
+            )
+
+        if avec_pd:
+            for pickup_node, delivery_node in data['pickups_deliveries']:
+                pi = mgr.NodeToIndex(pickup_node)
+                di = mgr.NodeToIndex(delivery_node)
+                rte.AddPickupAndDelivery(pi, di)
+                slv.Add(rte.VehicleVar(pi) == rte.VehicleVar(di))
+                slv.Add(td.CumulVar(pi) <= td.CumulVar(di))
+
+        for v in range(n_vehicles):
+            rte.SetFixedCostOfVehicle(int(1e8), v)
+
+        params = pywrapcp.DefaultRoutingSearchParameters()
+        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
+        params.time_limit.seconds = time_limit_seconds
+        params.log_search = False
+        sol = rte.SolveWithParameters(params)
+        statuts = {0:"NON_RESOLU",1:"OK",2:"PARTIEL",3:"ECHEC",4:"TIMEOUT",6:"INFAISABLE"}
+        statut = statuts.get(rte.status(), str(rte.status()))
+        ok = "✅" if sol else "❌"
+        _log(f"    {ok} {label} → {statut}", "success" if sol else "warning")
+        return sol is not None
+
+    n_v  = data['n_vehicles']
+    n_j  = (data['n_nodes'] - 1) // 2
+    amp  = data['max_poste_sc'] // SCALE
+    capa = data['vehicle_capacity']
+    _log(f"  🔬 Diagnostic : {n_j} jobs, {n_v} véhicules, amplitude={amp}min, capacité={capa}", "info")
+
+    _tester("Sans aucune contrainte",         False, False, False, False, False)
+    _tester("+ Fenêtres temporelles seules",  True,  False, False, False, False)
+    _tester("+ Amplitude poste",              True,  True,  False, False, False)
+    _tester("+ Capacité",                     True,  True,  True,  False, False)
+    _tester("+ Pickup & Delivery",            True,  True,  True,  True,  False)
+    _tester("+ Nettoyage (toutes contraintes)",True,  True,  True,  True,  True)
+
 # ============================================================
 # RÉSOLUTION ITÉRATIVE : 1 → Nmax véhicules
 # ============================================================
@@ -1231,10 +1332,11 @@ def _solve_type_iteratif(
         _log(f"  ↳ Pas de solution avec {n_v} véhicule(s), on essaie {n_v+1}...", "info")
 
     _log(
-        f"  ❌ Aucune solution trouvée jusqu'à {nmax} véhicules. "
-        f"Augmentez le budget temps ou vérifiez les fenêtres horaires.",
+        f"  ❌ Aucune solution trouvée jusqu'à {nmax} véhicules.",
         "error"
     )
+    _log("  🔬 Lancement du diagnostic d'infaisabilité...", "info")
+    diagnostiquer_infaisabilite({**data, 'n_vehicles': nmax}, time_limit_seconds=20)
     return None
 
 
