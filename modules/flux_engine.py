@@ -459,7 +459,12 @@ def _build_model_data(
     rh = params_logistique.get('rh', {})
     h_debut = _excel_time_to_minutes(rh.get('h_prise_min'), 360.0)
     h_fin   = _excel_time_to_minutes(rh.get('h_fin_max'),   1260.0)
-    amplitude_max = float(rh.get('amplitude_totale', 450))
+    # Amplitude effective = durée poste - pause - temps fixes
+    # On utilise temps_productif_max si calculé par param_flux, sinon amplitude_totale
+    amplitude_max = float(
+        rh.get('temps_productif_max') or
+        rh.get('amplitude_totale', 450)
+    )
     pause_seuil   = 180.0
     pause_duree   = float(rh.get('pause', 30))
 
@@ -643,36 +648,14 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             <= data['max_poste_sc']
         )
 
-    # ── Pauses obligatoires (conditionnelles : seulement si amplitude > 3h) ─
-    # On utilise une IntervalVar optionnelle : la pause n'est imposée
-    # que si le chauffeur travaille plus de pause_seuil minutes.
-    for v in range(n_vehicles):
-        break_start  = solver.IntVar(
-            data['pause_seuil_sc'],
-            data['max_poste_sc'],
-            f'break_start_{v}'
-        )
-        # IntervalVar optionnelle (is_performed = variable booléenne)
-        break_perf   = solver.BoolVar(f'break_perf_{v}')
-        break_iv     = solver.IntervalVar(
-            break_start,
-            data['pause_duree_sc'],
-            solver.Sum([break_start, data['pause_duree_sc']]),
-            break_perf,
-            f'break_{v}'
-        )
-        # Contrainte : pause obligatoire si amplitude > pause_seuil
-        amplitude_v = solver.Difference(
-            time_dim.CumulVar(routing.End(v)),
-            time_dim.CumulVar(routing.Start(v))
-        )
-        solver.Add(
-            break_perf >= (amplitude_v > data['pause_seuil_sc'])
-        )
-        time_dim.SetBreakIntervalsOfVehicle(
-            [break_iv], v,
-            node_visit_transits=[_sc(5)] * n_nodes
-        )
+    # ── Pauses obligatoires ──────────────────────────────────────────────────
+    # Les pauses sont gérées en post-traitement (construire_postes) plutôt
+    # que dans OR-Tools, car l'API SetBreakIntervalsOfVehicle change
+    # fréquemment entre versions et génère des erreurs difficiles à déboguer.
+    # OR-Tools se concentre sur l'ordonnancement des jobs.
+    # La contrainte d'amplitude max intègre déjà la pause :
+    # amplitude_max = duree_poste - pause (calculé dans params_logistique).
+    # Ici on utilise directement temps_productif_max si disponible.
 
     # ── Capacité par véhicule ───────────────────────────────────────────────
     def demand_callback(from_idx):
@@ -822,7 +805,12 @@ def _calculer_taux_occupation(route: dict, data: dict, params_logistique: dict) 
     Taux d'occupation = (temps en mission + temps de trajet) / amplitude_max_poste.
     """
     rh = params_logistique.get('rh', {})
-    amplitude_max = float(rh.get('amplitude_totale', 450))
+    # Amplitude effective = durée poste - pause - temps fixes
+    # On utilise temps_productif_max si calculé par param_flux, sinon amplitude_totale
+    amplitude_max = float(
+        rh.get('temps_productif_max') or
+        rh.get('amplitude_totale', 450)
+    )
 
     temps_productif = 0.0
     times = route['times']
