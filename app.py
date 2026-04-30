@@ -375,8 +375,33 @@ elif selected == "Synthèse transport":
             # Alerte jobs non planifiés
             nb_np = rapport.get("nb_jobs_non_planifies", 0)
             if nb_np > 0:
-                st.warning(f"⚠️ {nb_np} job(s) n'ont pas pu être planifiés "
-                           "(vérifiez les fenêtres horaires et l'accessibilité des sites).")
+                st.warning(f"⚠️ {nb_np} job(s) n'ont pas pu être planifiés.")
+                with st.expander(f"🔍 Voir les {nb_np} jobs non planifiés", expanded=True):
+                    jobs_np = rapport.get("jobs_non_planifies", [])
+                    if jobs_np:
+                        rows_np = []
+                        for item in jobs_np:
+                            j = item["job"]
+                            rows_np.append({
+                                "Job ID"        : j.job_id,
+                                "Flux ID"       : j.flux_id,
+                                "Origine"       : j.origine,
+                                "Destination"   : j.destination,
+                                "Contenant"     : j.type_contenant,
+                                "Qté"           : j.nb_contenants,
+                                "Propre/Sale"   : j.propre_sale,
+                                "Véhicule requis": item["v_type"],
+                                "Fenêtre"       : (
+                                    f"{int(j.h_dispo//60):02d}h{int(j.h_dispo%60):02d}"
+                                    f" → {int(j.h_deadline//60):02d}h{int(j.h_deadline%60):02d}"
+                                ),
+                                "Raison"        : item["raison"],
+                            })
+                        st.dataframe(
+                            pd.DataFrame(rows_np),
+                            use_container_width=True,
+                            hide_index=True
+                        )
             else:
                 st.success("✅ Tous les flux ont été planifiés.")
 
