@@ -888,7 +888,7 @@ def calculer_rapport(
 # ============================================================
 
 @dataclass
-class ProblèmeFaisabilité:
+class ProblemeFaisabilite:
     """Décrit un problème de faisabilité détecté."""
     flux_id: int
     origine: str
@@ -928,7 +928,7 @@ def verifier_faisabilite(
     --------
     dict {
         "faisable"    : bool          True si aucun problème bloquant
-        "problemes"   : list[ProblèmeFaisabilité]
+        "problemes"   : list[ProblemeFaisabilite]
         "resume"      : str           message court pour affichage Streamlit
         "nb_flux_ok"  : int
         "nb_flux_ko"  : int
@@ -946,7 +946,7 @@ def verifier_faisabilite(
     cols_sites_norm = {_norm(c): c for c in df_sites.columns}
     sites_connus    = {_norm(s) for s in df_sites[col_lib].dropna()}
 
-    problemes: list[ProblèmeFaisabilité] = []
+    problemes: list[ProblemeFaisabilite] = []
     nb_ok = 0
 
     for flux_id, row in df_flux.iterrows():
@@ -974,7 +974,7 @@ def verifier_faisabilite(
         # ── Contrôle 1 : sites connus ────────────────────────────────────────
         for site, role in [(origine, 'départ'), (destination, 'destination')]:
             if site not in sites_connus:
-                problemes.append(ProblèmeFaisabilité(
+                problemes.append(ProblemeFaisabilite(
                     flux_id=flux_id, origine=origine, destination=destination,
                     type_contenant=type_cont, site_bloquant=site,
                     raison="SITE_INCONNU",
@@ -1012,7 +1012,7 @@ def verifier_faisabilite(
                     vehicules_avec_capa.append(v_nom)
 
         if not vehicules_accessibles:
-            problemes.append(ProblèmeFaisabilité(
+            problemes.append(ProblemeFaisabilite(
                 flux_id=flux_id, origine=origine, destination=destination,
                 type_contenant=type_cont, site_bloquant=f"{origine}↔{destination}",
                 raison="AUCUN_VEHICULE_ACCESSIBLE",
@@ -1023,7 +1023,7 @@ def verifier_faisabilite(
                 )
             ))
         elif not vehicules_avec_capa:
-            problemes.append(ProblèmeFaisabilité(
+            problemes.append(ProblemeFaisabilite(
                 flux_id=flux_id, origine=origine, destination=destination,
                 type_contenant=type_cont, site_bloquant=f"{origine}↔{destination}",
                 raison="AUCUNE_CAPACITE",
