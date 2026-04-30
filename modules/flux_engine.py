@@ -19,7 +19,6 @@ Installation :
     pip install ortools pandas numpy
 """
 
-
 from __future__ import annotations
 
 import math
@@ -990,9 +989,18 @@ def calculer_rapport(
     jobs_planifies = {p.missions[i]['job_id'] for p in postes for i in range(len(p.missions))}
     jobs_non_planifies = []
     for v_type, jlist in jobs_par_type.items():
+        res_v = resultats_par_type.get(v_type)
+        if res_v is None:
+            raison = "Aucune solution OR-Tools trouvée pour ce type de véhicule"
+        else:
+            raison = "Non planifié par OR-Tools (fenêtre horaire ou capacité)"
         for j in jlist:
             if j.job_id not in jobs_planifies:
-                jobs_non_planifies.append(j)
+                jobs_non_planifies.append({
+                    "job"    : j,
+                    "raison" : raison,
+                    "v_type" : v_type,
+                })
 
     taux_tries  = sorted(taux_par_poste, reverse=True)
     taux_moyen  = sum(taux_tries) / len(taux_tries) if taux_tries else 0.0
@@ -1005,7 +1013,7 @@ def calculer_rapport(
         'taux_moyen'            : taux_moyen,
         'taux_par_poste'        : taux_tries,
         'jobs_non_planifies'    : jobs_non_planifies,
-        'nb_jobs_non_planifies' : len(jobs_non_planifies),
+        'nb_jobs_non_planifies' : len(jobs_non_planifies),  # list of dicts
         'solveur'               : 'OR-Tools' if ORTOOLS_AVAILABLE else 'indisponible',
     }
 
