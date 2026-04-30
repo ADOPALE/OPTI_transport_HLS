@@ -793,42 +793,24 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         6: "ROUTING_INFEASIBLE",
     }
 
-    for strategy in strategies:
-        params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = strategy
-        params.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        )
-        # Pas de limite de temps — OR-Tools cherche jusqu'à trouver
-        # params.time_limit.seconds = ...  # désactivé
-        params.log_search = False
-        solution = routing.SolveWithParameters(params)
-        status = routing.status()
-        _log(
-            f"    Stratégie {strategy} → statut : "
-            f"{status_labels.get(status, str(status))} "
-            f"({'✓' if solution else '✗'})",
-            "info"
-        )
-        if solution is not None:
-            break
-
-    # Dernière tentative budget complet
-    if solution is None:
-        params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
-        params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
-        # Pas de limite de temps sur la dernière tentative non plus
-        # params.time_limit.seconds = time_limit_seconds
-        params.log_search = False
-        solution = routing.SolveWithParameters(params)
-        status = routing.status()
-        _log(
-            f"    Stratégie AUTOMATIC → statut : "
-            f"{status_labels.get(status, str(status))} "
-            f"({'✓' if solution else '✗'})",
-            "info"
-        )
+    # Stratégie unique adaptée au PDPTW + budget complet time_limit_seconds
+    params = pywrapcp.DefaultRoutingSearchParameters()
+    params.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+    )
+    params.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    )
+    params.time_limit.seconds = time_limit_seconds
+    params.log_search = False
+    solution = routing.SolveWithParameters(params)
+    status = routing.status()
+    _log(
+        f"    PARALLEL_CHEAPEST_INSERTION → statut : "
+        f"{status_labels.get(status, str(status))} "
+        f"({'✓' if solution else '✗'})",
+        "info"
+    )
 
     if solution is None:
         # Diagnostic supplémentaire
