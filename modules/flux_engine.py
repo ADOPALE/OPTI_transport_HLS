@@ -19,6 +19,7 @@ Installation :
     pip install ortools pandas numpy
 """
 
+
 from __future__ import annotations
 
 import math
