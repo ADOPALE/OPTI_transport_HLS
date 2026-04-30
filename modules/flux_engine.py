@@ -882,6 +882,194 @@ def calculer_rapport(
     }
 
 
+
+# ============================================================
+# CONTRÔLE DE FAISABILITÉ (à appeler avant run_flux_optimization)
+# ============================================================
+
+@dataclass
+class ProblèmeFaisabilité:
+    """Décrit un problème de faisabilité détecté."""
+    flux_id: int
+    origine: str
+    destination: str
+    type_contenant: str
+    site_bloquant: str       # site qui pose problème
+    raison: str              # "SITE_INCONNU" | "AUCUN_VEHICULE_ACCESSIBLE" | "AUCUNE_CAPACITE"
+    vehicules_testes: list[str]
+    detail: str              # message lisible
+
+
+def verifier_faisabilite(
+    df_flux: pd.DataFrame,
+    df_vehicules: pd.DataFrame,
+    df_contenants: pd.DataFrame,
+    df_sites: pd.DataFrame,
+    capacites: dict,
+    params_logistique: dict,
+    jour: str = "Lundi",
+) -> dict:
+    """
+    Vérifie que chaque flux du jour est réalisable avec la flotte sélectionnée.
+
+    Pour chaque flux, contrôle :
+      1. Les deux sites (origine et destination) existent dans param_sites
+      2. Au moins un véhicule sélectionné est accessible sur LES DEUX sites
+      3. Ce véhicule peut transporter le contenant (capacité > 0)
+
+    Paramètres
+    ----------
+    df_flux, df_vehicules, df_contenants, df_sites : DataFrames issus de session_state
+    capacites           : sortie de precalculer_capacites()
+    params_logistique   : dict de session_state["params_logistique"]
+    jour                : "Lundi", "Mardi", etc.
+
+    Retourne
+    --------
+    dict {
+        "faisable"    : bool          True si aucun problème bloquant
+        "problemes"   : list[ProblèmeFaisabilité]
+        "resume"      : str           message court pour affichage Streamlit
+        "nb_flux_ok"  : int
+        "nb_flux_ko"  : int
+        "details_df"  : pd.DataFrame  tableau affichable dans st.dataframe()
+    }
+    """
+    vehicules_autorises = [_norm(v) for v in params_logistique.get('vehicules_selectionnes', [])]
+    col_qte = f'Quantité {jour}'
+
+    # Mapping colonnes normalisées → colonnes originales dans df_sites
+    col_lib = next(
+        (c for c in df_sites.columns if _norm(c) in ('LIBELLE', 'LIBELLE', 'NOM', 'SITE')),
+        df_sites.columns[0]
+    )
+    cols_sites_norm = {_norm(c): c for c in df_sites.columns}
+    sites_connus    = {_norm(s) for s in df_sites[col_lib].dropna()}
+
+    problemes: list[ProblèmeFaisabilité] = []
+    nb_ok = 0
+
+    for flux_id, row in df_flux.iterrows():
+        # Filtrer les flux sans quantité ce jour-là
+        try:
+            raw = row.get(col_qte, 0)
+            qte = 0.0 if (raw is None or (isinstance(raw, float) and math.isnan(raw))) else float(raw)
+        except (ValueError, TypeError):
+            qte = 0.0
+        if qte <= 0:
+            continue
+
+        # Filtrer les flux non-Volume
+        nature = str(row.get(
+            "Nature du flux (les tournées sont elles à prévoir avec une obligation de transport ou une obligation de passage?)",
+            "Volume"
+        )).strip().lower()
+        if nature not in ('volume', 'nan', ''):
+            continue
+
+        origine     = _norm(row.get('Point de départ', ''))
+        destination = _norm(row.get('Point de destination', ''))
+        type_cont   = _norm(row.get('Nature de contenant', ''))
+
+        # ── Contrôle 1 : sites connus ────────────────────────────────────────
+        for site, role in [(origine, 'départ'), (destination, 'destination')]:
+            if site not in sites_connus:
+                problemes.append(ProblèmeFaisabilité(
+                    flux_id=flux_id, origine=origine, destination=destination,
+                    type_contenant=type_cont, site_bloquant=site,
+                    raison="SITE_INCONNU",
+                    vehicules_testes=[],
+                    detail=f"Le site de {role} '{site}' est absent de param_sites."
+                ))
+
+        if any(p.flux_id == flux_id and p.raison == "SITE_INCONNU" for p in problemes):
+            continue  # pas la peine de continuer si le site est inconnu
+
+        # ── Contrôle 2 & 3 : véhicule accessible + capacité ─────────────────
+        vehicules_accessibles  = []
+        vehicules_avec_capa    = []
+
+        for v_nom in vehicules_autorises:
+            # Accessibilité origine
+            col_orig_v = cols_sites_norm.get(v_nom)
+            if col_orig_v is None:
+                continue
+            row_o = df_sites[df_sites[col_lib].apply(_norm) == origine]
+            row_d = df_sites[df_sites[col_lib].apply(_norm) == destination]
+            if row_o.empty or row_d.empty:
+                continue
+            try:
+                acc_o = str(row_o[col_orig_v].values[0]).upper() == 'OUI'
+                acc_d = str(row_d[col_orig_v].values[0]).upper() == 'OUI'
+            except Exception:
+                continue
+
+            if acc_o and acc_d:
+                vehicules_accessibles.append(v_nom)
+                # Capacité
+                capa = capacites.get(v_nom, {}).get(type_cont, 0)
+                if capa > 0:
+                    vehicules_avec_capa.append(v_nom)
+
+        if not vehicules_accessibles:
+            problemes.append(ProblèmeFaisabilité(
+                flux_id=flux_id, origine=origine, destination=destination,
+                type_contenant=type_cont, site_bloquant=f"{origine}↔{destination}",
+                raison="AUCUN_VEHICULE_ACCESSIBLE",
+                vehicules_testes=vehicules_autorises,
+                detail=(
+                    f"Aucun véhicule sélectionné ne peut accéder aux deux sites. "
+                    f"Vérifiez les colonnes d'accessibilité dans param_sites."
+                )
+            ))
+        elif not vehicules_avec_capa:
+            problemes.append(ProblèmeFaisabilité(
+                flux_id=flux_id, origine=origine, destination=destination,
+                type_contenant=type_cont, site_bloquant=f"{origine}↔{destination}",
+                raison="AUCUNE_CAPACITE",
+                vehicules_testes=vehicules_accessibles,
+                detail=(
+                    f"Véhicules accessibles ({', '.join(vehicules_accessibles)}) "
+                    f"mais aucun ne peut transporter '{type_cont}' "
+                    f"(colonne 'NON' dans param_vehicules ou dimensions incompatibles)."
+                )
+            ))
+        else:
+            nb_ok += 1
+
+    nb_ko = len(problemes)
+    faisable = nb_ko == 0
+
+    # Tableau résumé pour st.dataframe()
+    rows_df = []
+    for p in problemes:
+        rows_df.append({
+            'Flux ID'       : p.flux_id,
+            'Origine'       : p.origine,
+            'Destination'   : p.destination,
+            'Contenant'     : p.type_contenant,
+            'Problème'      : p.raison,
+            'Détail'        : p.detail,
+        })
+    details_df = pd.DataFrame(rows_df) if rows_df else pd.DataFrame()
+
+    if faisable:
+        resume = f"✅ Tous les {nb_ok} flux du {jour} sont faisables avec la flotte sélectionnée."
+    else:
+        resume = (
+            f"⚠️ {nb_ko} flux non faisable(s) sur {nb_ok + nb_ko} flux actifs le {jour}. "
+            f"La simulation sera lancée mais ces flux seront ignorés."
+        )
+
+    return {
+        "faisable"  : faisable,
+        "problemes" : problemes,
+        "resume"    : resume,
+        "nb_flux_ok": nb_ok,
+        "nb_flux_ko": nb_ko,
+        "details_df": details_df,
+    }
+
 # ============================================================
 # POINT D'ENTRÉE PRINCIPAL
 # ============================================================
@@ -1024,4 +1212,3 @@ def run_flux_optimization(
         "jobs_par_type": jobs_par_type,
         "jour"         : jour,
     }
-          
