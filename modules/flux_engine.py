@@ -260,24 +260,32 @@ def _choisir_vehicule(
         except Exception:
             return False
 
-    meilleur_type, meilleure_capa = None, 0
+    # Collecter tous les véhicules compatibles avec leur capacité
+    vehicules_compatibles = []  # list of (v_nom, capa)
 
     for _, v in df_vehicules.iterrows():
         v_nom = _norm(v.iloc[0])
         if v_nom not in vehicules_autorises:
             continue
-        # Filtrage par type demandé si renseigné
         if v_type_demande and v_type_demande not in ('', 'NAN', 'NC'):
             if _norm(v_type_demande) not in v_nom and v_nom not in _norm(v_type_demande):
                 continue
         if not est_accessible(v_nom):
             continue
         capa = capacites.get(v_nom, {}).get(_norm(type_contenant), 0)
-        if capa > meilleure_capa:
-            meilleure_capa, meilleur_type = capa, v_nom
+        if capa > 0:
+            vehicules_compatibles.append((v_nom, capa))
 
-    if meilleur_type is None:
+    if not vehicules_compatibles:
         return '', 0
+
+    # Stratégie : choisir le PLUS PETIT véhicule suffisant pour le flux.
+    # "Suffisant" = capacité utile >= 1 contenant (déjà filtré ci-dessus).
+    # On trie par capacité croissante et on prend le premier.
+    # Cela évite d'entasser tous les flux sur le plus grand véhicule.
+    vehicules_compatibles.sort(key=lambda x: x[1])
+    meilleur_type, meilleure_capa = vehicules_compatibles[0]
+
     capa_utile = max(1, math.floor(meilleure_capa * taux_remplissage))
     return meilleur_type, capa_utile
 
@@ -1384,4 +1392,3 @@ def run_flux_optimization(
         "jobs_par_type": jobs_par_type,
         "jour"         : jour,
     }
-  
