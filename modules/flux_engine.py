@@ -465,6 +465,8 @@ def _build_model_data(
         rh.get('temps_productif_max') or
         rh.get('amplitude_totale', 450)
     )
+    # Temps de nettoyage (sale → propre) = temps de fin de poste
+    temps_nettoyage = float(rh.get('temps_fixes_fin', 15))
     pause_seuil   = 180.0
     pause_duree   = float(rh.get('pause', 30))
 
@@ -617,6 +619,7 @@ def _build_model_data(
         'node_to_job'        : node_to_job,
         'node_is_pickup'     : node_is_pickup,
         'propre_sale_par_noeud': propre_sale_par_noeud,
+        'temps_nettoyage_sc' : _sc(temps_nettoyage),
         'SCALE'              : SCALE,
     }
 
@@ -657,27 +660,21 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     cb_time = routing.RegisterTransitCallback(time_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(cb_time)
 
-    # ── Dimension temporelle ────────────────────────────────────────────────
-    routing.AddDimension(
-        cb_time,
-        slack_max=_sc(120),           # attente max avant fenêtre
-        capacity=_sc(1440),           # horizon journée
-        fix_start_cumul_to_zero=False,
-        name='Time'
-    )
-    time_dim = routing.GetDimensionOrDie('Time')
+    # La dimension temporelle est créée après la contrainte propre/sale
+    # (callback transit_avec_nettoyage) pour inclure le temps de nettoyage.
+    # Voir bloc "Contrainte propre/sale avec temps de nettoyage" ci-dessous.
 
     for node in range(1, n_nodes):
         idx = manager.NodeToIndex(node)
         tw = data['time_windows'][node]
-        time_dim.CumulVar(idx).SetRange(tw[0], tw[1])
+        time_dim_net.CumulVar(idx).SetRange(tw[0], tw[1])
 
     # Fenêtre du dépôt
     for v in range(n_vehicles):
-        time_dim.CumulVar(routing.Start(v)).SetRange(
+        time_dim_net.CumulVar(routing.Start(v)).SetRange(
             data['h_debut_sc'], data['h_fin_sc']
         )
-        time_dim.CumulVar(routing.End(v)).SetRange(
+        time_dim_net.CumulVar(routing.End(v)).SetRange(
             data['h_debut_sc'], data['h_fin_sc']
         )
 
@@ -685,8 +682,8 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     solver = routing.solver()
     for v in range(n_vehicles):
         solver.Add(
-            time_dim.CumulVar(routing.End(v)) -
-            time_dim.CumulVar(routing.Start(v))
+            time_dim_net.CumulVar(routing.End(v)) -
+            time_dim_net.CumulVar(routing.Start(v))
             <= data['max_poste_sc']
         )
 
@@ -723,30 +720,59 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         )
         # Pickup avant delivery (dimension temporelle)
         solver.Add(
-            time_dim.CumulVar(pickup_idx) <= time_dim.CumulVar(delivery_idx)
+            time_dim_net.CumulVar(pickup_idx) <= time_dim_net.CumulVar(delivery_idx)
         )
 
-    # ── Contrainte d'exclusion propre/sale ──────────────────────────────────
-    # RemoveValue() sur les arcs propre↔sale peut rendre le modèle infaisable
-    # si les nœuds d'un même type ne forment pas un graphe connexe suffisant.
-    # On utilise à la place une pénalité forte sur le coût d'arc,
-    # ce qui laisse OR-Tools trouver une solution même dans les cas difficiles
-    # (il choisira de ne jamais emprunter ces arcs sauf en dernier recours).
-    ps = data['propre_sale_par_noeud']
-    COUT_MIXTE = int(1e7)  # fort mais pas infini → solution dégradée plutôt qu'infaisable
+    # ── Contrainte propre/sale avec temps de nettoyage ─────────────────────
+    # Règle métier :
+    #   - Un véhicule peut enchaîner n'importe quels trajets (graphe complet)
+    #   - Si un nœud FROM est la DELIVERY d'un job SALE
+    #     ET le nœud TO est le PICKUP d'un job PROPRE
+    #     → on ajoute temps_nettoyage au temps de transit
+    #   - Sens inverse (propre → sale) : pas de nettoyage
+    #   - Chargement mixte simultané (propre + sale) : géré par la capacité
+    #     et l'ordonnancement pickup-before-delivery
 
-    def penalite_callback(from_idx, to_idx):
+    ps            = data['propre_sale_par_noeud']
+    node_is_pickup = data['node_is_pickup']
+    T_NET         = data['temps_nettoyage_sc']
+
+    def transit_avec_nettoyage(from_idx, to_idx):
         from_node = manager.IndexToNode(from_idx)
         to_node   = manager.IndexToNode(to_idx)
         transit   = data['time_matrix'][from_node][to_node]
-        # Pénalité si mélange propre/sale
-        if (ps[from_node] and ps[to_node]
-                and ps[from_node] != ps[to_node]):
-            return transit + COUT_MIXTE
+
+        # Nettoyage requis si :
+        # - from_node est une DELIVERY de job SALE (le véhicule vient de déposer du sale)
+        # - to_node est un PICKUP de job PROPRE (il va charger du propre)
+        from_is_delivery_sale = (
+            from_node > 0
+            and not node_is_pickup[from_node]
+            and ps[from_node] == 'SALE'
+        )
+        to_is_pickup_propre = (
+            to_node > 0
+            and node_is_pickup[to_node]
+            and ps[to_node] == 'PROPRE'
+        )
+
+        if from_is_delivery_sale and to_is_pickup_propre:
+            return transit + T_NET
+
         return transit
 
-    cb_penalite = routing.RegisterTransitCallback(penalite_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(cb_penalite)
+    cb_transit = routing.RegisterTransitCallback(transit_avec_nettoyage)
+    routing.SetArcCostEvaluatorOfAllVehicles(cb_transit)
+
+    # Réenregistrer aussi pour la dimension Time (elle doit utiliser le même callback)
+    routing.AddDimension(
+        cb_transit,
+        slack_max=_sc(120),
+        capacity=_sc(1440),
+        fix_start_cumul_to_zero=False,
+        name='TimeNet'
+    )
+    time_dim_net = routing.GetDimensionOrDie('TimeNet')
 
     # ── Objectif : coût fixe fort par véhicule ──────────────────────────────
     COUT_FIXE_VEH = int(1e8)
@@ -836,13 +862,13 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         route_nodes, route_times = [], []
         while not routing.IsEnd(index):
             node = manager.IndexToNode(index)
-            t    = solution.Min(time_dim.CumulVar(index)) / SCALE
+            t    = solution.Min(time_dim_net.CumulVar(index)) / SCALE
             route_nodes.append(node)
             route_times.append(t)
             index = solution.Value(routing.NextVar(index))
         # Nœud final
         node = manager.IndexToNode(index)
-        t    = solution.Min(time_dim.CumulVar(index)) / SCALE
+        t    = solution.Min(time_dim_net.CumulVar(index)) / SCALE
         route_nodes.append(node)
         route_times.append(t)
 
@@ -898,6 +924,8 @@ def _calculer_taux_occupation(route: dict, data: dict, params_logistique: dict) 
         rh.get('temps_productif_max') or
         rh.get('amplitude_totale', 450)
     )
+    # Temps de nettoyage (sale → propre) = temps de fin de poste
+    temps_nettoyage = float(rh.get('temps_fixes_fin', 15))
 
     temps_productif = 0.0
     times = route['times']
