@@ -1349,17 +1349,19 @@ def _solve_type_iteratif(
         "info"
     )
 
-    for n_v in range(1, nmax + 1):
+    # Plage de recherche : Nmax → 1.5×Nmax (arrondi au supérieur)
+    # On part de la meilleure estimation et on monte si nécessaire.
+    nmax_haut = min(n_jobs, math.ceil(nmax * 1.5))
+    _log(f"  🔍 Plage de recherche : {nmax} → {nmax_haut} véhicules", "info")
+
+    for n_v in range(nmax, nmax_haut + 1):
         _log(f"  🔄 Tentative avec {n_v} véhicule(s) (budget : {time_limit_seconds}s)...", "info")
 
         data_nv = {**data, 'n_vehicles': n_v}
         solution_data = _solve_type(data_nv, time_limit_seconds=time_limit_seconds)
 
         if solution_data is not None:
-            _log(
-                f"  ✅ Solution trouvée avec {n_v} véhicule(s)",
-                "success"
-            )
+            _log(f"  ✅ Solution trouvée avec {n_v} véhicule(s)", "success")
             return solution_data
 
         _log(f"  ↳ Pas de solution avec {n_v} véhicule(s), on essaie {n_v+1}...", "info")
