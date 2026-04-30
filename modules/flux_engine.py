@@ -597,9 +597,11 @@ def _build_model_data(
         for s in range(slot_start, slot_end + 1):
             charge_par_slot[s] += contrib_par_slot
 
-    pic_charge       = max(charge_par_slot) if charge_par_slot else 1.0
-    nmax_theorique   = max(1, math.ceil(pic_charge / max(1, amplitude_max)))
-    nmax             = min(n_jobs, nmax_theorique * 2)
+    pic_charge     = max(charge_par_slot) if charge_par_slot else 1.0
+    # pic_charge = charge cumulée sur un créneau de RESOLUTION minutes
+    # Nmax = combien de véhicules simultanés pour absorber ce pic
+    nmax_theorique = max(1, math.ceil(pic_charge / RESOLUTION))
+    nmax           = min(n_jobs, nmax_theorique * 2)
 
     # n_vehicles = nmax est la borne haute pour l'itération de _solve_type_iteratif
     # L'itération teste 1, 2, ..., nmax véhicules et s'arrête dès qu'une solution existe
