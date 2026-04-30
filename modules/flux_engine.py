@@ -279,11 +279,9 @@ def _choisir_vehicule(
     if not vehicules_compatibles:
         return '', 0
 
-    # Stratégie : choisir le PLUS PETIT véhicule suffisant pour le flux.
-    # "Suffisant" = capacité utile >= 1 contenant (déjà filtré ci-dessus).
-    # On trie par capacité croissante et on prend le premier.
-    # Cela évite d'entasser tous les flux sur le plus grand véhicule.
-    vehicules_compatibles.sort(key=lambda x: x[1])
+    # Stratégie : choisir le véhicule le plus capacitaire compatible.
+    # → minimise le nombre de trajets pour transporter le flux.
+    vehicules_compatibles.sort(key=lambda x: x[1], reverse=True)
     meilleur_type, meilleure_capa = vehicules_compatibles[0]
 
     capa_utile = max(1, math.floor(meilleure_capa * taux_remplissage))
