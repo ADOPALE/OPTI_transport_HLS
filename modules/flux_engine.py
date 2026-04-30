@@ -343,7 +343,13 @@ def decomposer_flux_en_jobs(
         destination  = _norm(row.get('Point de destination', ''))
         type_cont    = _norm(row.get('Nature de contenant', ''))
         propre_sale  = _norm(row.get('Sale / propre', 'PROPRE'))
-        v_type_req   = _norm(str(row.get('Type de transporteur (camion VL frigo)', '') or ''))
+        # La colonne 'Type de transporteur' peut contenir des heures (datetime.time)
+        # par erreur de saisie Excel — on ignore ces valeurs et on traite comme vide
+        _v_type_raw = row.get('Type de transporteur (camion VL frigo)', '')
+        import datetime as _dt
+        if isinstance(_v_type_raw, _dt.time) or isinstance(_v_type_raw, _dt.datetime):
+            _v_type_raw = ''
+        v_type_req = _norm(str(_v_type_raw or ''))
         est_urgent   = str(row.get('Urgence / flux prioritaire   (Oui/Non)', 'Non')).upper() == 'OUI'
 
         # Fenêtres horaires
@@ -637,15 +643,31 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             <= data['max_poste_sc']
         )
 
-    # ── Pauses obligatoires ─────────────────────────────────────────────────
+    # ── Pauses obligatoires (conditionnelles : seulement si amplitude > 3h) ─
+    # On utilise une IntervalVar optionnelle : la pause n'est imposée
+    # que si le chauffeur travaille plus de pause_seuil minutes.
     for v in range(n_vehicles):
-        break_start = solver.IntVar(
+        break_start  = solver.IntVar(
             data['pause_seuil_sc'],
             data['max_poste_sc'],
             f'break_start_{v}'
         )
-        break_iv = solver.FixedDurationIntervalVar(
-            break_start, data['pause_duree_sc'], f'break_{v}'
+        # IntervalVar optionnelle (is_performed = variable booléenne)
+        break_perf   = solver.BoolVar(f'break_perf_{v}')
+        break_iv     = solver.IntervalVar(
+            break_start,
+            data['pause_duree_sc'],
+            solver.Sum([break_start, data['pause_duree_sc']]),
+            break_perf,
+            f'break_{v}'
+        )
+        # Contrainte : pause obligatoire si amplitude > pause_seuil
+        amplitude_v = solver.Difference(
+            time_dim.CumulVar(routing.End(v)),
+            time_dim.CumulVar(routing.Start(v))
+        )
+        solver.Add(
+            break_perf >= (amplitude_v > data['pause_seuil_sc'])
         )
         time_dim.SetBreakIntervalsOfVehicle(
             [break_iv], v,
@@ -700,17 +722,40 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         routing.SetFixedCostOfVehicle(COUT_FIXE_VEH, v)
 
     # ── Résolution ──────────────────────────────────────────────────────────
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-    )
-    params.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    params.time_limit.seconds = time_limit_seconds
-    params.log_search = False
+    # Stratégies testées dans l'ordre jusqu'à trouver une solution
+    strategies = [
+        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+        routing_enums_pb2.FirstSolutionStrategy.CHRISTOFIDES,
+    ]
 
-    solution = routing.SolveWithParameters(params)
+    solution = None
+    for strategy in strategies:
+        params = pywrapcp.DefaultRoutingSearchParameters()
+        params.first_solution_strategy = strategy
+        params.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        )
+        # Budget divisé entre les stratégies, minimum 10s chacune
+        params.time_limit.seconds = max(10, time_limit_seconds // len(strategies))
+        params.log_search = False
+        solution = routing.SolveWithParameters(params)
+        if solution is not None:
+            break
+
+    # Si toujours rien, une dernière tentative avec le budget complet
+    if solution is None:
+        params = pywrapcp.DefaultRoutingSearchParameters()
+        params.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
+        )
+        params.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.AUTOMATIC
+        )
+        params.time_limit.seconds = time_limit_seconds
+        params.log_search = False
+        solution = routing.SolveWithParameters(params)
+
     if solution is None:
         return None
 
