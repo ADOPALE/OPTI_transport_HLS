@@ -1302,6 +1302,12 @@ def run_flux_optimization(
     )
     _log(f"  → {len(tous_les_jobs)} jobs élémentaires générés", "info")
 
+    # ── Diagnostic répartition par type de véhicule ──────────────────────────
+    from collections import Counter
+    repartition = Counter(j.v_type_requis for j in tous_les_jobs)
+    for v_type, nb in sorted(repartition.items(), key=lambda x: -x[1]):
+        _log(f"  📦 {v_type} : {nb} jobs", "info")
+
     if not tous_les_jobs:
         _log("⚠️ Aucun job à planifier pour ce jour.", "warning")
         return {}
