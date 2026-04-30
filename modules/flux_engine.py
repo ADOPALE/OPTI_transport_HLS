@@ -1180,20 +1180,15 @@ def _solve_type_iteratif(
         "info"
     )
 
-    # Budget temps par tentative : au moins 15s, partagé équitablement
-    budget_par_tentative = max(15, time_limit_seconds // max(1, nmax))
-
     for n_v in range(1, nmax + 1):
-        _log(f"  🔄 Tentative avec {n_v} véhicule(s)...", "info")
+        _log(f"  🔄 Tentative avec {n_v} véhicule(s) (budget : {time_limit_seconds}s)...", "info")
 
-        # Construire le modèle avec exactement n_v véhicules
         data_nv = {**data, 'n_vehicles': n_v}
-        solution_data = _solve_type(data_nv, time_limit_seconds=budget_par_tentative)
+        solution_data = _solve_type(data_nv, time_limit_seconds=time_limit_seconds)
 
         if solution_data is not None:
             _log(
-                f"  ✅ Solution trouvée avec {n_v} véhicule(s) "
-                f"(budget utilisé : {budget_par_tentative}s/tentative)",
+                f"  ✅ Solution trouvée avec {n_v} véhicule(s)",
                 "success"
             )
             return solution_data
