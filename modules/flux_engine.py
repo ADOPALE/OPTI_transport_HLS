@@ -553,8 +553,35 @@ def _build_model_data(
         node_is_pickup.extend([True, False])
         propre_sale_par_noeud.extend([j.propre_sale, j.propre_sale])
 
-    # Nombre de véhicules (borne haute = nombre de jobs, OR-Tools minimisera)
-    n_vehicles = n_jobs
+    # ── Borne supérieure réaliste du nombre de véhicules ───────────────────
+    # n_vehicles = n_jobs est trop large et rend le modèle explosif.
+    # On calcule une borne basée sur la charge totale des jobs.
+    #
+    # Charge d'un job = durée de trajet aller + durée de trajet retour dépôt
+    # (approximation : on prend le trajet depuis le dépôt)
+    DEPOT = 0
+    charge_totale_sc = 0
+    for j_idx, j in enumerate(jobs_v):
+        pickup_node   = 1 + 2 * j_idx
+        delivery_node = 2 + 2 * j_idx
+        # trajet dépôt → pickup + pickup → delivery + delivery → dépôt
+        charge_totale_sc += (
+            distance_matrix[DEPOT][pickup_node] +
+            distance_matrix[pickup_node][delivery_node] +
+            distance_matrix[delivery_node][DEPOT]
+        )
+
+    # Amplitude productive par véhicule
+    amplitude_productive_sc = max(1, int(amplitude_max * SCALE))
+
+    # Borne min théorique (arrondie au supérieur)
+    borne_min = max(1, math.ceil(charge_totale_sc / amplitude_productive_sc))
+
+    # On ajoute une marge de 50% pour donner de la souplesse à OR-Tools
+    # et couvrir les contraintes de fenêtres temporelles
+    borne_max = min(n_jobs, max(borne_min + 2, math.ceil(borne_min * 1.5)))
+
+    n_vehicles = borne_max
 
     return {
         'n_nodes'            : n_nodes,
@@ -1209,7 +1236,18 @@ def run_flux_optimization(
             )
         else:
             resultats_par_type[v_type] = None
-            _log(f"  ❌ {v_type} : pas de solution trouvée.", "error")
+            # Diagnostic : afficher la borne utilisée
+            if data:
+                n_v = data.get('n_vehicles', '?')
+                n_j = len(data.get('jobs', []))
+                amp = data.get('max_poste_sc', 0) // data.get('SCALE', 1)
+                _log(
+                    f"  ❌ {v_type} : pas de solution trouvée. "
+                    f"(modèle : {n_j} jobs, {n_v} véhicules max, "
+                    f"amplitude={amp} min) "
+                    f"→ Essayez d'augmenter le budget temps ou l'amplitude de poste.",
+                    "error"
+                )
 
     # ── 3. Post-traitement ───────────────────────────────────────────────────
     postes = construire_postes(resultats_par_type, data_par_type, params_logistique)
