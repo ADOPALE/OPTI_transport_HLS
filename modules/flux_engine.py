@@ -569,9 +569,9 @@ def _build_model_data(
         delivery_node = 2 + 2 * j_idx
         # Durée totale du job : dépôt→pickup→delivery→dépôt
         duree_min = (
-            distance_matrix[DEPOT][pickup_node] +
-            distance_matrix[pickup_node][delivery_node] +
-            distance_matrix[delivery_node][DEPOT]
+            time_matrix[DEPOT][pickup_node] +
+            time_matrix[pickup_node][delivery_node] +
+            time_matrix[delivery_node][DEPOT]
         ) / SCALE
 
         # Plage horaire du job
