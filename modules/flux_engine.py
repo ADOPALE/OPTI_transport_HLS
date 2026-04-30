@@ -1337,6 +1337,19 @@ def _solve_type_iteratif(
     )
     _log("  🔬 Lancement du diagnostic d'infaisabilité...", "info")
     diagnostiquer_infaisabilite({**data, 'n_vehicles': nmax}, time_limit_seconds=20)
+
+    # Diagnostic capacité : vérifier si des jobs dépassent la capacité
+    capa_max = data['vehicle_capacity']
+    jobs_hors_capa = [j for j in data['jobs'] if j.nb_contenants > capa_max]
+    if jobs_hors_capa:
+        _log(f"  ⚠️ {len(jobs_hors_capa)} job(s) avec nb_contenants > capacité ({capa_max}) :", 'error')
+        for j in jobs_hors_capa[:10]:
+            _log(f"    Job {j.job_id} : {j.origine}→{j.destination}, {j.nb_contenants} contenants (max={capa_max})", 'error')
+    else:
+        total = sum(abs(d) for d in data['demands'] if d > 0)
+        _log(f"  📊 Demande totale : {total} | Capacité totale : {capa_max * nmax} ({nmax}×{capa_max})", 'info')
+        _log("  💡 Cause probable : le cumul de capacité descend en dessous de 0 (demands négatifs)."
+             " Essayez d'augmenter le slack_max de la dimension Capacity.", 'warning')
     return None
 
 
