@@ -630,14 +630,44 @@ def _build_model_data(
     # service_times = 0 pour tous les nœuds (on utilise l'offset dans time_matrix)
     service_times = [0] * n_nodes
 
-    # ── Appliquer l'offset sur les arcs entre sites (pas dépôt) ─────────────
-    # On ajoute offset_sc à time_matrix[i][j] si i≠dépôt ET j≠dépôt
-    # Cela modélise le temps de manutention moyen par job sans impacter
-    # les arcs de retour au dépôt (pas de manutention au dépôt HLS).
-    for i in range(1, n_nodes):   # depuis un site (pas dépôt)
-        for k in range(1, n_nodes):  # vers un site (pas dépôt)
-            if i != k:
+    # ── Appliquer l'offset UNIQUEMENT sur les arcs inter-jobs ───────────────
+    # L'offset représente le temps de manutention (chargement + déchargement).
+    # Il ne doit PAS s'appliquer sur l'arc pickup→delivery du même job
+    # (sinon il s'ajoute au trajet et fait dépasser la fenêtre horaire).
+    # Il s'applique sur :
+    #   - delivery_i → pickup_j  (transition entre deux jobs différents)
+    #   - dépôt → pickup_i       (premier job : inclut la mise à quai initiale)
+    #   - delivery_i → dépôt     (retour dépôt : inclut le déchargement final)
+    # 
+    # En pratique : arc depuis une delivery (nœud pair) vers tout autre nœud,
+    # OU depuis le dépôt vers un pickup.
+    node_is_pickup_local = [False] + [
+        True if (idx % 2 == 1) else False
+        for idx in range(1, n_nodes)
+    ]  # True pour les pickups (index impairs), False pour deliveries
+
+    # offset_sc = t_quai×2 + t_manu×2 (chargement + déchargement)
+    # On divise en deux demi-offsets selon le rôle de l'arc :
+    #   demi_offset_sc = t_quai + t_manu (une seule opération)
+    demi_offset_sc = offset_sc // 2
+
+    for i in range(n_nodes):
+        for k in range(n_nodes):
+            if i == k:
+                continue
+            is_from_delivery = (i > 0 and not node_is_pickup_local[i])
+            is_from_depot    = (i == 0)
+            is_to_depot      = (k == 0)
+
+            if is_from_delivery and not is_to_depot:
+                # delivery_i → pickup_j : déchargement en i + chargement en j
                 time_matrix[i][k] += offset_sc
+            elif is_from_delivery and is_to_depot:
+                # delivery_i → dépôt : déchargement en i seulement
+                time_matrix[i][k] += demi_offset_sc
+            elif is_from_depot:
+                # dépôt → pickup_i : chargement en i seulement
+                time_matrix[i][k] += demi_offset_sc
 
     # Paires pickup → delivery
     pickups_deliveries = []
