@@ -1023,17 +1023,25 @@ def calculer_rapport(
         taux_par_poste.append(p.taux_occupation)
 
     # Jobs non planifiés
-    jobs_planifies = {p.missions[i]['job_id'] for p in postes for i in range(len(p.missions))}
-    jobs_non_planifies        = []   # list[JobElementaire] — compatibilité interne
-    jobs_non_planifies_detail = []   # list[dict] — pour l'affichage Streamlit
+    # jobs_planifies : ensemble des flux_id planifiés
+    # On utilise flux_id (pas job_id) car les jobs re-découpés ont des job_id
+    # différents (10000+) des jobs originaux dans jobs_par_type
+    flux_planifies = {p.missions[i]['flux_id'] for p in postes for i in range(len(p.missions))}
+
+    jobs_non_planifies        = []
+    jobs_non_planifies_detail = []
     for v_type, jlist in jobs_par_type.items():
         res_v = resultats_par_type.get(v_type)
         if res_v is None:
             raison = "Aucune solution OR-Tools trouvée pour ce type de véhicule"
         else:
             raison = "Non planifié par OR-Tools (fenêtre horaire ou capacité)"
+        # Dédupliquer par flux_id : un flux est non planifié seulement si
+        # AUCUN de ses jobs (originaux ou re-découpés) n'est dans la solution
+        flux_vus = set()
         for j in jlist:
-            if j.job_id not in jobs_planifies:
+            if j.flux_id not in flux_planifies and j.flux_id not in flux_vus:
+                flux_vus.add(j.flux_id)
                 jobs_non_planifies.append(j)
                 jobs_non_planifies_detail.append({
                     "job"    : j,
