@@ -981,16 +981,61 @@ def construire_postes(
                 })
             missions.sort(key=lambda x: x['heure'])
 
-            postes.append(PosteChauffeur(
-                poste_id        = f"{v_type}_{compteur:03d}",
-                v_type          = v_type,
-                h_debut         = route['h_debut'],
-                h_fin           = route['h_fin'],
-                amplitude       = route['amplitude'],
-                missions        = missions,
-                taux_occupation = taux,
-            ))
-            compteur += 1
+            # Vérifier si la route dépasse l'amplitude max du poste
+            rh_cp         = params_logistique.get('rh', {})
+            amplitude_max = float(rh_cp.get('amplitude_totale', 450))
+            h_debut_route = route['h_debut']
+            h_fin_route   = route['h_fin']
+
+            if h_fin_route - h_debut_route <= amplitude_max:
+                # Cas normal : un seul poste
+                postes.append(PosteChauffeur(
+                    poste_id        = f"{v_type}_{compteur:03d}",
+                    v_type          = v_type,
+                    h_debut         = h_debut_route,
+                    h_fin           = h_fin_route,
+                    amplitude       = h_fin_route - h_debut_route,
+                    missions        = missions,
+                    taux_occupation = taux,
+                ))
+                compteur += 1
+            else:
+                # Route trop longue → découper en postes de amplitude_max
+                # Regrouper les missions par tranche horaire
+                releve = float(rh_cp.get('releve', 15))
+                h_debut_poste = h_debut_route
+                missions_poste = []
+                for m in missions:
+                    h_m = m['heure']
+                    if h_m - h_debut_poste > amplitude_max and missions_poste:
+                        # Clore le poste courant
+                        h_fin_poste = missions_poste[-1]['heure']
+                        postes.append(PosteChauffeur(
+                            poste_id        = f"{v_type}_{compteur:03d}",
+                            v_type          = v_type,
+                            h_debut         = h_debut_poste,
+                            h_fin           = h_fin_poste,
+                            amplitude       = h_fin_poste - h_debut_poste,
+                            missions        = missions_poste,
+                            taux_occupation = taux,
+                        ))
+                        compteur      += 1
+                        h_debut_poste  = h_fin_poste + releve
+                        missions_poste = []
+                    missions_poste.append(m)
+                # Dernier poste
+                if missions_poste:
+                    h_fin_poste = max(m['heure'] for m in missions_poste)
+                    postes.append(PosteChauffeur(
+                        poste_id        = f"{v_type}_{compteur:03d}",
+                        v_type          = v_type,
+                        h_debut         = h_debut_poste,
+                        h_fin           = h_fin_poste,
+                        amplitude       = h_fin_poste - h_debut_poste,
+                        missions        = missions_poste,
+                        taux_occupation = taux,
+                    ))
+                    compteur += 1
 
     return postes
 
