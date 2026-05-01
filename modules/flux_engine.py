@@ -442,6 +442,8 @@ def _build_model_data(
     params_logistique: dict,
     v_type: str,
     alea: float = 0.0,
+    df_vehicules: pd.DataFrame | None = None,
+    df_sites: pd.DataFrame | None = None,
 ) -> dict:
     """
     Construit les structures de données pour OR-Tools à partir des jobs
@@ -548,6 +550,118 @@ def _build_model_data(
         # Delivery : entre h_dispo et deadline (le pickup doit précéder)
         time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
 
+
+    # ── Durées de service par nœud (manutention réelle depuis param_vehicules) ──
+    # Règle métier :
+    #   - t_quai   = manœuvre + contact/admin (par visite sur site, pas par job)
+    #   - t_manu   = temps par contenant (avec quai si site a quai, sinon sans)
+    # Si un site accueille plusieurs jobs dans la même visite, t_quai n'est
+    # compté qu'une seule fois : on l'affecte au PREMIER job du site,
+    # les suivants n'ont que t_manu × nb_contenants.
+
+    def _time_val_to_min(val, default=0.0):
+        """Convertit datetime.time ou float en minutes."""
+        if val is None or (isinstance(val, float) and math.isnan(val)):
+            return default
+        if hasattr(val, 'hour'):
+            return val.hour * 60 + val.minute + val.second / 60
+        try:
+            return float(val) * 1440
+        except Exception:
+            return default
+
+    # Récupérer les paramètres du véhicule
+    t_quai_min  = 10.0   # défaut : 10 min
+    t_sans_quai = 0.25   # défaut : 15s/cont
+    t_avec_quai = 0.25   # défaut : 15s/cont
+    if df_vehicules is not None:
+        veh_row = df_vehicules[
+            df_vehicules.iloc[:, 0].apply(_norm) == _norm(v_type)
+        ]
+        if not veh_row.empty:
+            r = veh_row.iloc[0]
+            t_quai_min  = _time_val_to_min(
+                r.get('Temps de mise à quai - manœuvre, contact/admin (minutes)'), 10.0)
+            t_sans_quai = _time_val_to_min(
+                r.get('Manutention sans quai (minutes / contenants)'), 25/60)
+            t_avec_quai = _time_val_to_min(
+                r.get('Manutention avec quai (minutes / contenants)'), 15/60)
+
+    # Récupérer la présence de quai par site
+    sites_avec_quai = set()
+    if df_sites is not None:
+        col_lib = next(
+            (c for c in df_sites.columns if 'libel' in c.lower()),
+            df_sites.columns[0]
+        )
+        for _, row in df_sites.iterrows():
+            site = _norm(str(row[col_lib]))
+            quai = str(row.get('Présence de quai', 'NON')).upper() == 'OUI'
+            if quai:
+                sites_avec_quai.add(site)
+
+    # Calculer t_manu par site pour chaque job
+    # t_quai compté une seule fois par site (premier job du site dans la séquence)
+    # On groupe les jobs par site (origine pour pickup, destination pour delivery)
+    sites_visites_pickup   = {}  # site → premier job_idx qui y passe en pickup
+    sites_visites_delivery = {}
+
+    for idx, j in enumerate(jobs_v):
+        site_p = _norm(j.origine)
+        site_d = _norm(j.destination)
+        if site_p not in sites_visites_pickup:
+            sites_visites_pickup[site_p] = idx
+        if site_d not in sites_visites_delivery:
+            sites_visites_delivery[site_d] = idx
+
+    # ── Durée totale par job (intégrée dans l'arc pickup→delivery) ──────────
+    # Un job est soit COMPLET (nb_contenants == capa_utile) soit INCOMPLET
+    # (dernier job d'un flux, ou flux dont qte < capa_utile).
+    #
+    # Job COMPLET :
+    #   durée = t_quai_origine + t_manu_chargement
+    #         + trajet(origine→destination)   ← dans time_matrix
+    #         + t_quai_destination + t_manu_déchargement
+    #   → service_time[pickup]   = t_quai_origine + t_manu_chargement
+    #   → service_time[delivery] = t_quai_destination + t_manu_déchargement
+    #
+    # Job INCOMPLET (taux = nb_contenants / capa_utile) :
+    #   durée = taux × t_quai_origine + t_manu_chargement
+    #         + trajet(origine→destination)
+    #         + taux × t_quai_destination + t_manu_déchargement
+    #   → service_time[pickup]   = taux × t_quai_origine + t_manu_chargement
+    #   → service_time[delivery] = taux × t_quai_destination + t_manu_déchargement
+    #
+    # Identification job incomplet : nb_contenants < capa_utile
+    # (inclut dernier job d'un flux ET flux dont qte < capa_utile dès le départ)
+
+    taux_rempl = params_logistique.get('securite_remplissage', 0.85)
+
+    service_times = [0]  # dépôt : pas de service
+    for idx, j in enumerate(jobs_v):
+        site_p = _norm(j.origine)
+        site_d = _norm(j.destination)
+        quai_p = site_p in sites_avec_quai
+        quai_d = site_d in sites_avec_quai
+
+        # Taux de remplissage réel de ce job
+        # capa_utile = capacite brute × taux_rempl pour ce type de contenant
+        capa_brute_job = capacites.get(_norm(v_type), {}).get(j.type_contenant, 1)
+        capa_utile_job = max(1, math.floor(capa_brute_job * taux_rempl))
+        est_complet    = (j.nb_contenants >= capa_utile_job)
+        taux_job       = 1.0 if est_complet else (j.nb_contenants / capa_utile_job)
+
+        # Temps de manœuvre/quai (modulé par le taux si incomplet)
+        t_q_p = t_quai_min * (1.0 if est_complet else taux_job)
+        t_q_d = t_quai_min * (1.0 if est_complet else taux_job)
+
+        # Temps de manutention (proportionnel au nb de contenants, indépendant du taux)
+        t_m_p = j.nb_contenants * (t_avec_quai if quai_p else t_sans_quai)
+        t_m_d = j.nb_contenants * (t_avec_quai if quai_d else t_sans_quai)
+
+        service_times.append(_sc(t_q_p + t_m_p))   # service pickup  (chargement)
+        service_times.append(_sc(t_q_d + t_m_d))   # service delivery (déchargement)
+
     # Paires pickup → delivery
     pickups_deliveries = []
     for idx in range(n_jobs):
@@ -637,6 +751,7 @@ def _build_model_data(
         'node_is_pickup'     : node_is_pickup,
         'propre_sale_par_noeud': propre_sale_par_noeud,
         'temps_nettoyage_sc' : _sc(temps_nettoyage),
+        'service_times'      : service_times,
         'SCALE'              : SCALE,
     }
 
@@ -674,7 +789,10 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     def transit_avec_nettoyage(from_idx, to_idx):
         from_node = manager.IndexToNode(from_idx)
         to_node   = manager.IndexToNode(to_idx)
-        transit   = data['time_matrix'][from_node][to_node]
+        # Transit = trajet + temps de service sur le nœud d'origine
+        # (manœuvre + manutention des contenants)
+        transit = (data['time_matrix'][from_node][to_node]
+                   + data['service_times'][from_node])
         # Nettoyage si delivery SALE → pickup PROPRE
         if (from_node > 0 and not node_is_pickup[from_node]
                 and ps[from_node] == 'SALE'
@@ -1591,7 +1709,9 @@ def run_flux_optimization(
         _log(f"🚛 Optimisation {v_type} ({len(jobs_v)} jobs)...", "info")
         data = _build_model_data(
             jobs_v, matrice_duree, capacites,
-            params_logistique, v_type, alea
+            params_logistique, v_type, alea,
+            df_vehicules=df_vehicules,
+            df_sites=df_sites,
         )
         if not data:
             resultats_par_type[v_type] = None
