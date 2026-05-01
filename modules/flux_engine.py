@@ -499,44 +499,42 @@ def _build_model_data(
         return {}
 
     # Capacité du véhicule pour OR-Tools
-    # = capacité brute du véhicule pour le contenant le plus contraignant
-    # On prend le MIN de la capacité brute sur tous les types de contenants
-    # présents dans les jobs, ce qui garantit qu'aucun job ne dépasse
-    capa_v_brute = min(
-        (capacites.get(v_type, {}).get(j.type_contenant, 1) for j in jobs_v),
+    # = min de la capacité UTILE (avec taux de remplissage) sur tous les
+    # types de contenants présents, ce qui est cohérent avec decomposer_flux_en_jobs
+    taux = params_logistique.get('securite_remplissage', 0.85)
+    capa_v = min(
+        (max(1, math.floor(capacites.get(v_type, {}).get(j.type_contenant, 1) * taux))
+         for j in jobs_v),
         default=1
     )
-    # Capacité utile (avec taux de remplissage)
-    taux_remplissage_local = 0.85  # sera affiné si passé en paramètre
-    capa_v = max(1, capa_v_brute)
 
-    # Vérification : s'assurer qu'aucun job n'a nb_contenants > capa_v
-    # Si c'est le cas, re-découper le job
+    # Re-découper tout job dont nb_contenants > capa_v
+    # (peut arriver si différents contenants ont des capacités utiles différentes)
     jobs_v_corriges = []
-    job_id_offset = max((j.job_id for j in jobs_v), default=0) + 1000
+    job_id_offset = max((j.job_id for j in jobs_v), default=0) + 10000
     for j in jobs_v:
         if j.nb_contenants <= capa_v:
             jobs_v_corriges.append(j)
         else:
-            # Re-découper ce job
             qte_restante = j.nb_contenants
-            k = 0
             while qte_restante > 0:
                 nb = min(qte_restante, capa_v)
-                from copy import copy as _copy
-                j_new = _copy(j)
-                j_new = JobElementaire(
-                    job_id=job_id_offset, flux_id=j.flux_id,
-                    origine=j.origine, destination=j.destination,
-                    type_contenant=j.type_contenant, nb_contenants=nb,
-                    h_dispo=j.h_dispo, h_deadline=j.h_deadline,
-                    propre_sale=j.propre_sale, v_type_requis=j.v_type_requis,
-                    est_urgent=j.est_urgent, surface_sol=j.surface_sol * nb / j.nb_contenants
-                )
-                jobs_v_corriges.append(j_new)
+                jobs_v_corriges.append(JobElementaire(
+                    job_id       = job_id_offset,
+                    flux_id      = j.flux_id,
+                    origine      = j.origine,
+                    destination  = j.destination,
+                    type_contenant = j.type_contenant,
+                    nb_contenants  = nb,
+                    h_dispo      = j.h_dispo,
+                    h_deadline   = j.h_deadline,
+                    propre_sale  = j.propre_sale,
+                    v_type_requis= j.v_type_requis,
+                    est_urgent   = j.est_urgent,
+                    surface_sol  = j.surface_sol * nb / max(1, j.nb_contenants)
+                ))
                 job_id_offset += 1
-                qte_restante -= nb
-                k += 1
+                qte_restante  -= nb
     jobs_v = jobs_v_corriges
 
     # Construction des nœuds
