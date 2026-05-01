@@ -1457,6 +1457,46 @@ def run_flux_optimization(
     for v_type, nb in sorted(repartition.items(), key=lambda x: -x[1]):
         _log(f"  📦 {v_type} : {nb} jobs", "info")
 
+    # ── Tableau de debug : détail de chaque job élémentaire ─────────────────
+    # Affiché dans Streamlit avant le lancement du solveur OR-Tools
+    if _ST and st is not None and tous_les_jobs:
+        try:
+            taux_debug = params_logistique.get('securite_remplissage', 0.85)
+            rows_debug = []
+            for j in tous_les_jobs:
+                capa_brute = capacites.get(j.v_type_requis, {}).get(j.type_contenant, 0)
+                capa_utile = max(1, math.floor(capa_brute * taux_debug))
+                rows_debug.append({
+                    'Job ID'          : j.job_id,
+                    'Flux ID'         : j.flux_id,
+                    'Origine'         : j.origine,
+                    'Destination'     : j.destination,
+                    'Contenant'       : j.type_contenant,
+                    'Qté job'         : j.nb_contenants,
+                    'Véhicule'        : j.v_type_requis,
+                    'Capa brute'      : capa_brute,
+                    f'Capa utile ({int(taux_debug*100)}%)' : capa_utile,
+                    'Qté > capa utile': '⚠️ OUI' if j.nb_contenants > capa_utile else '✅ OK',
+                    'H dispo'         : f"{int(j.h_dispo//60):02d}h{int(j.h_dispo%60):02d}",
+                    'H deadline'      : f"{int(j.h_deadline//60):02d}h{int(j.h_deadline%60):02d}",
+                    'Propre/Sale'     : j.propre_sale,
+                    'Urgent'          : '🔴' if j.est_urgent else '',
+                })
+            df_debug = pd.DataFrame(rows_debug)
+            with st.expander(
+                f"🔍 Détail des {len(tous_les_jobs)} jobs élémentaires (avant solveur)",
+                expanded=False
+            ):
+                # Résumé rapide
+                nb_anomalies = sum(1 for r in rows_debug if r['Qté > capa utile'] == '⚠️ OUI')
+                if nb_anomalies:
+                    st.warning(f"⚠️ {nb_anomalies} job(s) ont une quantité supérieure à la capacité utile du véhicule.")
+                else:
+                    st.success("✅ Toutes les quantités respectent la capacité utile.")
+                st.dataframe(df_debug, use_container_width=True, hide_index=True)
+        except Exception as _e:
+            print(f"Erreur tableau debug jobs : {_e}")
+
     if not tous_les_jobs:
         _log("⚠️ Aucun job à planifier pour ce jour.", "warning")
         return {}
