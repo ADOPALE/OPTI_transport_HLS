@@ -510,43 +510,10 @@ def _build_model_data(
         return {}
 
     # Capacité du véhicule pour OR-Tools
-    # = min de la capacité UTILE (avec taux de remplissage) sur tous les
-    # types de contenants présents, ce qui est cohérent avec decomposer_flux_en_jobs
-    taux = params_logistique.get('securite_remplissage', 0.85)
-    capa_v = min(
-        (max(1, math.floor(capacites.get(v_type, {}).get(j.type_contenant, 1) * taux))
-         for j in jobs_v),
-        default=1
-    )
-
-    # Re-découper tout job dont nb_contenants > capa_v
-    # (peut arriver si différents contenants ont des capacités utiles différentes)
-    jobs_v_corriges = []
-    job_id_offset = max((j.job_id for j in jobs_v), default=0) + 10000
-    for j in jobs_v:
-        if j.nb_contenants <= capa_v:
-            jobs_v_corriges.append(j)
-        else:
-            qte_restante = j.nb_contenants
-            while qte_restante > 0:
-                nb = min(qte_restante, capa_v)
-                jobs_v_corriges.append(JobElementaire(
-                    job_id       = job_id_offset,
-                    flux_id      = j.flux_id,
-                    origine      = j.origine,
-                    destination  = j.destination,
-                    type_contenant = j.type_contenant,
-                    nb_contenants  = nb,
-                    h_dispo      = j.h_dispo,
-                    h_deadline   = j.h_deadline,
-                    propre_sale  = j.propre_sale,
-                    v_type_requis= j.v_type_requis,
-                    est_urgent   = j.est_urgent,
-                    surface_sol  = j.surface_sol * nb / max(1, j.nb_contenants)
-                ))
-                job_id_offset += 1
-                qte_restante  -= nb
-    jobs_v = jobs_v_corriges
+    # = max des nb_contenants des jobs (déjà découpés correctement par
+    # decomposer_flux_en_jobs avec capa_utile = floor(capa_brute × taux))
+    # Pas de re-découpage ici — decomposer_flux_en_jobs le fait déjà.
+    capa_v = max((j.nb_contenants for j in jobs_v), default=1)
 
     # Construction des nœuds
     # Index 0 = dépôt
