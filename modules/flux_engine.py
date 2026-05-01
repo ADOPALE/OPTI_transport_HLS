@@ -512,9 +512,11 @@ def _build_model_data(
         return {}
 
     # Capacité du véhicule pour OR-Tools
-    # = max des nb_contenants des jobs (déjà découpés correctement par
-    # decomposer_flux_en_jobs avec capa_utile = floor(capa_brute × taux))
-    # Pas de re-découpage ici — decomposer_flux_en_jobs le fait déjà.
+    # = charge max d'un seul job (nb_contenants max)
+    # Dans un PDPTW, la dimension capacité représente la charge COURANTE
+    # du véhicule : +nb au pickup, -nb à la delivery.
+    # Le cumul ne dépasse jamais le max des nb_contenants d'un job individuel
+    # car chaque pickup est livré avant que le véhicule soit plein à nouveau.
     capa_v = max((j.nb_contenants for j in jobs_v), default=1)
 
     # Construction des nœuds
@@ -700,9 +702,11 @@ def _build_model_data(
         delivery_node = 2 + 2 * j_idx
         # Durée totale du job : dépôt→pickup→delivery→dépôt
         duree_min = (
-            time_matrix[DEPOT][pickup_node] +
-            time_matrix[pickup_node][delivery_node] +
-            time_matrix[delivery_node][DEPOT]
+            time_matrix[DEPOT][pickup_node]          # trajet dépôt → chargement
+            + service_times[pickup_node]             # chargement sur site origine
+            + time_matrix[pickup_node][delivery_node] # trajet chargé
+            + service_times[delivery_node]           # déchargement sur site destination
+            + time_matrix[delivery_node][DEPOT]      # retour dépôt à vide
         ) / SCALE
 
         # Plage horaire du job
@@ -1553,8 +1557,13 @@ def _solve_type_iteratif(
             _log(f"    Job {j.job_id} : {j.origine}→{j.destination}, "
                  f"{j.nb_contenants} contenants (max={capa_max})", 'error')
     else:
-        total = sum(d for d in data['demands'] if d > 0)
-        _log(f"  📊 Demande totale : {total} | Capacité totale : {capa_max * n_v}", 'info')
+        charge_max_job = max((j.nb_contenants for j in data['jobs']), default=0)
+        _log(
+            f"  📊 Charge max par job : {charge_max_job} | "
+            f"vehicle_capacity : {capa_max} | "
+            f"{'✅ OK' if charge_max_job <= capa_max else '❌ PROBLÈME : job dépasse capacité'}",
+            'info'
+        )
     return None
 
 
