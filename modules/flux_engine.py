@@ -349,18 +349,29 @@ def decomposer_flux_en_jobs(
         destination  = _norm(row.get('Point de destination', ''))
         type_cont    = _norm(row.get('Nature de contenant', ''))
         propre_sale  = _norm(row.get('Sale / propre', 'PROPRE'))
-        # La colonne 'Type de transporteur' peut contenir des heures (datetime.time)
-        # par erreur de saisie Excel — on ignore ces valeurs et on traite comme vide
-        _v_type_raw = row.get('Type de transporteur (camion VL frigo)', '')
-        import datetime as _dt
-        if isinstance(_v_type_raw, _dt.time) or isinstance(_v_type_raw, _dt.datetime):
-            _v_type_raw = ''
-        v_type_req = _norm(str(_v_type_raw or ''))
+        type_cont    = _norm(row.get('Nature de contenant', ''))
+        propre_sale  = _norm(row.get('Sale / propre', 'PROPRE'))
         est_urgent   = str(row.get('Urgence / flux prioritaire   (Oui/Non)', 'Non')).upper() == 'OUI'
 
-        # Fenêtres horaires
-        h_dispo   = _excel_time_to_minutes(row.get('Heure de mise à disposition min départ'), h_debut_defaut)
-        h_deadline = _excel_time_to_minutes(row.get('Plage horaire en semaine (Heure fin)'), h_fin_defaut)
+        # ── Fenêtres horaires ─────────────────────────────────────────────────
+        # Col 26 = "Heure de mise à disposition min départ" → h_dispo (toujours renseignée)
+        # Col 27 = "Type de transporteur" → contient en réalité des heures de fin
+        #          (décalage de colonne dans l'Excel)
+        # Col 21 = "Plage horaire fin" → seulement 8 lignes renseignées, utilisée en fallback
+        import datetime as _dt
+        _col_dispo    = row.get('Heure de mise à disposition min départ', None)
+        _col_deadline = row.get('Heure max de livraison à la destination', None)
+        _col_vtype    = row.get('Type de transporteur (camion VL frigo)', None)
+
+        h_dispo    = _excel_time_to_minutes(_col_dispo,    h_debut_defaut)
+        h_deadline = _excel_time_to_minutes(_col_deadline, h_fin_defaut)                      if _col_deadline is not None and str(_col_deadline) not in ('nan', '')                      else h_fin_defaut
+
+        # Type de transporteur (ignorer si c'est une heure par erreur de saisie)
+        if isinstance(_col_vtype, (_dt.time, _dt.datetime)):
+            v_type_req = ''
+        else:
+            v_type_req = _norm(str(_col_vtype or ''))
+
         if h_deadline <= h_dispo:
             h_deadline = h_dispo + 120
 
