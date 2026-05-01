@@ -476,183 +476,34 @@ elif selected == "Synthèse transport":
 
                 gantt_rows = []
 
-                duree_poste = float(rh_params.get("amplitude_totale", 450))
-
-                # ── Pré-calcul des données nécessaires au Gantt ────────────
-                # Matrice de durées (pour les vrais trajets)
-                df_duree_gantt = st.session_state["data"]["matrice_duree"].copy()
-                _col0 = df_duree_gantt.columns[0]
-                df_duree_gantt = df_duree_gantt.set_index(_col0)
-                df_duree_gantt.index   = df_duree_gantt.index.str.strip().str.upper()
-                df_duree_gantt.columns = df_duree_gantt.columns.str.strip().str.upper()
-
-                def duree_trajet(site_a, site_b):
-                    try:
-                        return float(df_duree_gantt.loc[
-                            site_a.strip().upper(),
-                            site_b.strip().upper()
-                        ])
-                    except Exception:
-                        return 15.0  # fallback 15 min
-
-                # Paramètres de manutention par type de véhicule
-                df_veh_gantt  = st.session_state["data"]["param_vehicules"]
-                df_sites_gantt = st.session_state["data"]["param_sites"]
-
-                def _time_to_min(val):
-                    """Convertit datetime.time ou float en minutes."""
-                    if hasattr(val, 'hour'):
-                        return val.hour * 60 + val.minute + val.second / 60
-                    try:
-                        return float(val) * 1440
-                    except Exception:
-                        return 0.0
-
-                def params_manutention(v_type):
-                    """Retourne (t_quai_min, t_sans_quai_min/cont, t_avec_quai_min/cont)."""
-                    row = df_veh_gantt[
-                        df_veh_gantt.iloc[:, 0].str.strip().str.upper() == v_type.strip().upper()
-                    ]
-                    if row.empty:
-                        return 10.0, 25/60, 15/60
-                    r = row.iloc[0]
-                    t_quai      = _time_to_min(r.get('Temps de mise à quai - manœuvre, contact/admin (minutes)', 10))
-                    t_sans_quai = _time_to_min(r.get('Manutention sans quai (minutes / contenants)', 25/60))
-                    t_avec_quai = _time_to_min(r.get('Manutention avec quai (minutes / contenants)', 15/60))
-                    return t_quai, t_sans_quai, t_avec_quai
-
-                def a_quai(site):
-                    """Vérifie si un site a un quai."""
-                    try:
-                        col_lib = next(c for c in df_sites_gantt.columns
-                                      if 'libel' in c.lower() or c.lower() == 'libellé')
-                        row = df_sites_gantt[
-                            df_sites_gantt[col_lib].str.strip().str.upper() == site.strip().upper()
-                        ]
-                        if row.empty:
-                            return False
-                        val = str(row['Présence de quai'].values[0]).upper()
-                        return val == 'OUI'
-                    except Exception:
-                        return False
-
-                def duree_operation(site, nb_contenants, v_type):
-                    """Calcule la durée de manutention sur site en minutes."""
-                    t_quai, t_sans, t_avec = params_manutention(v_type)
-                    quai = a_quai(site)
-                    t_manu = nb_contenants * (t_avec if quai else t_sans)
-                    return round(t_quai + t_manu, 1)
-
-                # ── Construction du Gantt par poste ────────────────────────
+                # ── Construction des gantt_rows depuis les étapes pré-calculées ──
                 for p in postes_affiches:
                     label = f"{p.poste_id}"
-                    missions_sorted = sorted(p.missions, key=lambda m: m['heure'])
-
-                    t_debut_reel = p.h_debut
-                    t_fin_reel   = t_debut_reel + duree_poste
-
-                    # 1. Prise de poste
-                    gantt_rows.append(dict(
-                        Poste=label, Étape="Prise de poste",
-                        Début=min_to_dt(t_debut_reel),
-                        Fin=min_to_dt(t_debut_reel + t_prise),
-                        Info="Préparation / Check véhicule"
-                    ))
-
-                    # ── Ancrage sur les heures OR-Tools ────────────────
-                    # Les heures des missions viennent d'OR-Tools et sont
-                    # la référence absolue. On calcule les trajets et opérations
-                    # ENTRE ces ancres pour remplir le Gantt.
-                    curseur         = t_debut_reel + t_prise
-                    site_courant    = "HLS"
-                    charge_actuelle = 0
-                    pause_inseree   = False
-
-                    for i, m in enumerate(missions_sorted):
-                        site_dest = m['site']
-                        # Heure OR-Tools = moment où le véhicule arrive sur site
-                        h_ortools = m['heure']
-                        duree_op  = duree_operation(site_dest, m['nb_contenants'], p.v_type)
-
-                        # ── Trajet depuis site précédent ─────────────────────
-                        duree_traj = duree_trajet(site_courant, site_dest)
-                        # L'heure de départ réelle = h_ortools - duree_traj
-                        h_depart_trajet = max(curseur, h_ortools - duree_traj)
-                        if h_depart_trajet > curseur + 0.5:
+                    if p.etapes:
+                        for e in p.etapes:
+                            etype = e.get('type', 'attente')
+                            label_etape, _ = ETAPES_CONFIG.get(etype, (etype, "#888"))
                             gantt_rows.append(dict(
-                                Poste=label, Étape="Attente",
-                                Début=min_to_dt(curseur),
-                                Fin=min_to_dt(h_depart_trajet),
-                                Info=f"Attente sur {site_courant}"
+                                Poste  = label,
+                                Étape  = label_etape,
+                                Début  = min_to_dt(e['h_debut']),
+                                Fin    = min_to_dt(e['h_fin']),
+                                Info   = e.get('info', '')
                             ))
-                        if duree_traj > 0.5:
-                            type_trajet = "Trajet plein" if charge_actuelle > 0 else "Trajet vide"
-                            gantt_rows.append(dict(
-                                Poste=label, Étape=type_trajet,
-                                Début=min_to_dt(h_depart_trajet),
-                                Fin=min_to_dt(h_ortools),
-                                Info=f"{site_courant} → {site_dest} ({duree_traj:.0f} min)"
-                            ))
-
-                        # ── Pause si seuil dépassé avant cette mission ───────
-                        if not pause_inseree and (h_ortools - t_debut_reel) > t_pause_seuil:
-                            gantt_rows.append(dict(
-                                Poste=label, Étape="Pause",
-                                Début=min_to_dt(h_ortools),
-                                Fin=min_to_dt(h_ortools + t_pause),
-                                Info="Pause obligatoire"
-                            ))
-                            pause_inseree = True
-                            curseur = h_ortools + t_pause
-                        else:
-                            curseur = h_ortools
-
-                        # ── Opération sur site (ancrée sur h_ortools) ────────
-                        ps_label   = m.get('propre_sale', '')
-                        etape_type = "Chargement" if m['is_pickup'] else "Livraison"
+                    else:
+                        # Fallback si etapes absentes
                         gantt_rows.append(dict(
-                            Poste=label, Étape=etape_type,
-                            Début=min_to_dt(curseur),
-                            Fin=min_to_dt(curseur + duree_op),
-                            Info=f"{m['nb_contenants']} {m['type_contenant']} ({ps_label}) — {site_dest} ({duree_op:.1f} min)"
+                            Poste=label, Étape="Prise de poste",
+                            Début=min_to_dt(p.h_debut), Fin=min_to_dt(p.h_debut+20),
+                            Info="Préparation"
                         ))
-                        if m['is_pickup']:
-                            charge_actuelle += m['nb_contenants']
-                        else:
-                            charge_actuelle = max(0, charge_actuelle - m['nb_contenants'])
-                        curseur      += duree_op
-                        site_courant  = site_dest
-
-                    # ── Trajet retour HLS après dernière mission ─────────────
-                    if site_courant != "HLS":
-                        duree_retour = duree_trajet(site_courant, "HLS")
-                        if duree_retour > 0.5:
-                            type_trajet = "Trajet plein" if charge_actuelle > 0 else "Trajet vide"
+                        for m in sorted(p.missions, key=lambda x: x['heure']):
+                            et = "Chargement" if m['is_pickup'] else "Livraison"
                             gantt_rows.append(dict(
-                                Poste=label, Étape=type_trajet,
-                                Début=min_to_dt(curseur),
-                                Fin=min_to_dt(curseur + duree_retour),
-                                Info=f"Retour HLS ({duree_retour:.0f} min)"
+                                Poste=label, Étape=et,
+                                Début=min_to_dt(m['heure']), Fin=min_to_dt(m['heure']+10),
+                                Info=f"{m['nb_contenants']} {m['type_contenant']} — {m['site']}"
                             ))
-                            curseur += duree_retour
-
-                    # ── Attente jusqu'à fin officielle du poste ─────────────
-                    t_fin_officielle = t_fin_reel - t_fin
-                    if curseur < t_fin_officielle - 1:
-                        gantt_rows.append(dict(
-                            Poste=label, Étape="Attente",
-                            Début=min_to_dt(curseur),
-                            Fin=min_to_dt(t_fin_officielle),
-                            Info="En attente de fin de poste"
-                        ))
-
-                    # ── Fin de poste ─────────────────────────────────────────
-                    gantt_rows.append(dict(
-                        Poste=label, Étape="Fin de poste",
-                        Début=min_to_dt(t_fin_reel - t_fin),
-                        Fin=min_to_dt(t_fin_reel),
-                        Info="Nettoyage / Clôture"
-                    ))
 
                 if gantt_rows:
                     df_gantt = pd.DataFrame(gantt_rows)
