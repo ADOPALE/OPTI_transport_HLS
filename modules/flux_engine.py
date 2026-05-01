@@ -913,10 +913,12 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     # Pour les PDPTW larges, PARALLEL_CHEAPEST_INSERTION échoue souvent.
     # On essaie plusieurs stratégies dans l'ordre.
     strategies = [
-        ("AUTOMATIC",                   routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC),
-        ("PARALLEL_CHEAPEST_INSERTION", routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION),
-        ("LOCAL_CHEAPEST_INSERTION",    routing_enums_pb2.FirstSolutionStrategy.LOCAL_CHEAPEST_INSERTION),
-        ("SAVINGS",                     routing_enums_pb2.FirstSolutionStrategy.SAVINGS),
+        ("AUTOMATIC",                      routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC),
+        ("PARALLEL_CHEAPEST_INSERTION",    routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION),
+        ("LOCAL_CHEAPEST_INSERTION",       routing_enums_pb2.FirstSolutionStrategy.LOCAL_CHEAPEST_INSERTION),
+        ("SAVINGS",                        routing_enums_pb2.FirstSolutionStrategy.SAVINGS),
+        ("PATH_MOST_CONSTRAINED_ARC",      routing_enums_pb2.FirstSolutionStrategy.PATH_MOST_CONSTRAINED_ARC),
+        ("CHRISTOFIDES",                   routing_enums_pb2.FirstSolutionStrategy.CHRISTOFIDES),
     ]
     solution = None
     for strat_name, strat in strategies:
@@ -1587,7 +1589,7 @@ def verifier_faisabilite(
 # DIAGNOSTIC D'INFAISABILITÉ
 # ============================================================
 
-def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 20) -> None:
+def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 60) -> None:
     """
     Teste les contraintes une par une pour identifier celle qui rend
     le modèle infaisable. Affiche le résultat dans Streamlit.
@@ -1735,7 +1737,7 @@ def _solve_type_iteratif(
     # ── Diagnostic ───────────────────────────────────────────────────────────
     _log(f"  ❌ Aucune solution trouvée.", "error")
     _log("  🔬 Lancement du diagnostic d'infaisabilité...", "info")
-    diagnostiquer_infaisabilite({**data, 'n_vehicles': n_v}, time_limit_seconds=20)
+    diagnostiquer_infaisabilite({**data, 'n_vehicles': n_v}, time_limit_seconds=60)
     capa_max = data['vehicle_capacity']
     jobs_hors_capa = [j for j in data['jobs'] if j.nb_contenants > capa_max]
     if jobs_hors_capa:
