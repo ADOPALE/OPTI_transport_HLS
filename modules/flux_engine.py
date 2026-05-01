@@ -883,11 +883,33 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             'amplitude'     : amplitude,
         })
 
+    # Diagnostic : compter les nœuds planifiés vs total
+    n_nodes_planifies = sum(
+        sum(1 for n in r['nodes'] if n != depot) for r in routes
+    )
+    n_jobs_total   = len(data['jobs'])
+    n_noeuds_total = 2 * n_jobs_total  # pickup + delivery par job
+    n_jobs_dans_solution = n_nodes_planifies // 2
+
+    if n_jobs_dans_solution < n_jobs_total:
+        _log(
+            f"    ⚠️ Solution partielle : {n_jobs_dans_solution}/{n_jobs_total} jobs "
+            f"planifiés ({n_nodes_planifies}/{n_noeuds_total} nœuds dans les routes)",
+            "warning"
+        )
+    else:
+        _log(
+            f"    ✅ Solution complète : {n_jobs_dans_solution}/{n_jobs_total} jobs planifiés",
+            "success"
+        )
+
     return {
-        'routes'         : routes,
-        'n_vehicules'    : len(routes),
-        'n_postes'       : len(routes),   # 1 poste = 1 tournée dans ce modèle
-        'jobs_resolus'   : data['jobs'],
+        'routes'              : routes,
+        'n_vehicules'         : len(routes),
+        'n_postes'            : len(routes),
+        'n_jobs_planifies'    : n_jobs_dans_solution,
+        'n_jobs_total'        : n_jobs_total,
+        'jobs_resolus'        : data['jobs'],
     }
 
 
