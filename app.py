@@ -445,7 +445,171 @@ elif selected == "Synthèse transport":
                         hide_index=True
                     )
 
-                # Détail mission d'un poste sélectionné
+                # ── Timeline Gantt de tous les postes ──────────────────
+                st.divider()
+                st.subheader("⏱️ Timeline des postes")
+
+                import plotly.graph_objects as go
+                from datetime import date, datetime, timedelta
+
+                # Couleurs par type d'étape
+                COULEURS = {
+                    "Prise de poste" : "#4A90D9",
+                    "Trajet vide"    : "#B0BEC5",
+                    "Chargement"     : "#66BB6A",
+                    "Trajet plein"   : "#FFA726",
+                    "Livraison"      : "#EF5350",
+                    "Attente"        : "#CE93D8",
+                    "Pause"          : "#FF7043",
+                    "Fin de poste"   : "#78909C",
+                }
+
+                def min_to_dt(minutes):
+                    """Convertit minutes depuis minuit en datetime (date fictive)."""
+                    return datetime(2000, 1, 1) + timedelta(minutes=float(minutes))
+
+                rh_params   = st.session_state["params_logistique"].get("rh", {})
+                t_prise      = float(rh_params.get("temps_fixes_prise", 20))
+                t_fin        = float(rh_params.get("temps_fixes_fin",   15))
+                t_pause      = float(rh_params.get("pause", 30))
+                t_pause_seuil = 180.0  # pause obligatoire si amplitude > 3h
+
+                gantt_rows = []
+
+                for p in postes_affiches:
+                    label = f"{p.poste_id}"
+                    missions_sorted = sorted(p.missions, key=lambda m: m['heure'])
+
+                    # 1. Prise de poste
+                    t_debut_reel = p.h_debut
+                    gantt_rows.append(dict(
+                        Poste=label, Étape="Prise de poste",
+                        Début=min_to_dt(t_debut_reel),
+                        Fin=min_to_dt(t_debut_reel + t_prise),
+                        Info="Préparation / Check véhicule"
+                    ))
+
+                    curseur = t_debut_reel + t_prise
+                    charge_actuelle = 0  # 0 = vide, >0 = chargé
+
+                    for i, m in enumerate(missions_sorted):
+                        h_mission = m['heure']
+
+                        # Attente si le chauffeur arrive avant la mission
+                        if h_mission > curseur + 1:
+                            gantt_rows.append(dict(
+                                Poste=label, Étape="Attente",
+                                Début=min_to_dt(curseur),
+                                Fin=min_to_dt(h_mission),
+                                Info=f"Attente avant {m['site']}"
+                            ))
+
+                        # Trajet (vide ou plein selon contexte)
+                        # On considère que le trajet précède chaque mission
+                        # (la durée de trajet est incluse dans l'écart entre missions)
+                        if m['is_pickup']:
+                            # Chargement sur site
+                            duree_chargement = 10  # approximation
+                            gantt_rows.append(dict(
+                                Poste=label, Étape="Chargement",
+                                Début=min_to_dt(h_mission),
+                                Fin=min_to_dt(h_mission + duree_chargement),
+                                Info=f"{m['nb_contenants']} {m['type_contenant']} — {m['site']}"
+                            ))
+                            charge_actuelle += m['nb_contenants']
+                            curseur = h_mission + duree_chargement
+                        else:
+                            # Livraison
+                            duree_livraison = 10
+                            gantt_rows.append(dict(
+                                Poste=label, Étape="Livraison",
+                                Début=min_to_dt(h_mission),
+                                Fin=min_to_dt(h_mission + duree_livraison),
+                                Info=f"{m['nb_contenants']} {m['type_contenant']} → {m['site']}"
+                            ))
+                            charge_actuelle = max(0, charge_actuelle - m['nb_contenants'])
+                            curseur = h_mission + duree_livraison
+
+                        # Trajet vers prochaine mission
+                        if i < len(missions_sorted) - 1:
+                            h_next = missions_sorted[i + 1]['heure']
+                            if h_next > curseur + 1:
+                                type_trajet = "Trajet plein" if charge_actuelle > 0 else "Trajet vide"
+                                gantt_rows.append(dict(
+                                    Poste=label, Étape=type_trajet,
+                                    Début=min_to_dt(curseur),
+                                    Fin=min_to_dt(h_next),
+                                    Info=f"{'Chargé' if charge_actuelle > 0 else 'Vide'}"
+                                ))
+
+                    # Pause si amplitude > seuil
+                    amplitude = p.h_fin - t_debut_reel
+                    if amplitude > t_pause_seuil:
+                        milieu = t_debut_reel + amplitude / 2
+                        gantt_rows.append(dict(
+                            Poste=label, Étape="Pause",
+                            Début=min_to_dt(milieu),
+                            Fin=min_to_dt(milieu + t_pause),
+                            Info="Pause obligatoire"
+                        ))
+
+                    # Fin de poste
+                    gantt_rows.append(dict(
+                        Poste=label, Étape="Fin de poste",
+                        Début=min_to_dt(p.h_fin - t_fin),
+                        Fin=min_to_dt(p.h_fin),
+                        Info="Nettoyage / Clôture"
+                    ))
+
+                if gantt_rows:
+                    df_gantt = pd.DataFrame(gantt_rows)
+                    fig = go.Figure()
+
+                    for etape, couleur in COULEURS.items():
+                        df_e = df_gantt[df_gantt["Étape"] == etape]
+                        for _, row in df_e.iterrows():
+                            fig.add_trace(go.Bar(
+                                name=etape,
+                                y=[row["Poste"]],
+                                x=[(row["Fin"] - row["Début"]).total_seconds() / 60],
+                                base=[(row["Début"] - datetime(2000,1,1)).total_seconds() / 60],
+                                orientation='h',
+                                marker_color=couleur,
+                                text=row["Info"],
+                                textposition="inside",
+                                insidetextanchor="middle",
+                                hovertemplate=(
+                                    f"<b>{etape}</b><br>"
+                                    f"{row['Début'].strftime('%H:%M')} → {row['Fin'].strftime('%H:%M')}<br>"
+                                    f"{row['Info']}<extra></extra>"
+                                ),
+                                showlegend=(row["Poste"] == df_gantt[df_gantt["Étape"] == etape]["Poste"].iloc[0]),
+                                legendgroup=etape,
+                            ))
+
+                    # Axe X en heures
+                    h_min = int(min(p.h_debut for p in postes_affiches) // 60) * 60
+                    h_max = int(max(p.h_fin   for p in postes_affiches) // 60 + 1) * 60
+                    tickvals = list(range(h_min, h_max + 1, 60))
+                    ticktext = [f"{v//60:02d}h00" for v in tickvals]
+
+                    fig.update_layout(
+                        barmode='stack',
+                        height=max(300, len(postes_affiches) * 60 + 100),
+                        xaxis=dict(
+                            tickvals=tickvals, ticktext=ticktext,
+                            title="Heure", range=[h_min, h_max]
+                        ),
+                        yaxis=dict(title="Poste", autorange="reversed"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        margin=dict(l=10, r=10, t=40, b=40),
+                        plot_bgcolor="#1a1a2e",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font_color="white",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # ── Détail tabulaire d'un poste sélectionné ────────────────
                 st.divider()
                 st.subheader("🔍 Détail d'un poste")
                 poste_ids = [p.poste_id for p in postes_affiches]
@@ -458,12 +622,12 @@ elif selected == "Synthèse transport":
                             heure = f"{int(m['heure'] // 60):02d}h{int(m['heure'] % 60):02d}"
                             action = "📦 Chargement" if m['is_pickup'] else "🏁 Livraison"
                             rows_m.append({
-                                "Heure"         : heure,
-                                "Action"        : action,
-                                "Site"          : m['site'],
-                                "Contenant"     : m['type_contenant'],
-                                "Qté"           : m['nb_contenants'],
-                                "Propre/Sale"   : m['propre_sale'],
+                                "Heure"       : heure,
+                                "Action"      : action,
+                                "Site"        : m['site'],
+                                "Contenant"   : m['type_contenant'],
+                                "Qté"         : m['nb_contenants'],
+                                "Propre/Sale" : m['propre_sale'],
                             })
                         st.dataframe(
                             pd.DataFrame(rows_m),
