@@ -838,45 +838,28 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             <= data['max_poste_sc']
         )
 
-    # ── 5. Capacité par véhicule ────────────────────────────────────────────
+    # ── 5. Capacité par trajet individuel ───────────────────────────────────
+    # Dans un PDPTW, la dimension cumulative classique est problématique :
+    # si plusieurs pickups précèdent leurs deliveries, le cumul monte bien
+    # au-delà de la capacité physique du véhicule.
+    # Solution : contraindre UNIQUEMENT que pickup + delivery = 0 net,
+    # ce qui est déjà garanti par AddPickupAndDelivery.
+    # La vraie contrainte physique est : à tout instant, le chargement
+    # effectif ≤ vehicle_capacity. On l'approche en limitant les demandes
+    # à 0 (balance nulle) via la dimension avec max=vehicle_capacity
+    # et start_cumul_to_zero=True.
     def demand_callback(from_idx):
-        return data['demands'][manager.IndexToNode(from_idx)]
+        node = manager.IndexToNode(from_idx)
+        return data['demands'][node]
 
     cb_demand = routing.RegisterUnaryTransitCallback(demand_callback)
     routing.AddDimensionWithVehicleCapacity(
         cb_demand,
-        data['vehicle_capacity'],
-        [data['vehicle_capacity']] * n_vehicles,
-        True,
+        0,                                          # pas de slack
+        [data['vehicle_capacity']] * n_vehicles,    # capacité physique
+        True,                                       # start cumul = 0
         'Capacity'
     )
-
-    # ── 5b. Contrainte anti-mélange propre/sale ──────────────────────────
-    # Un véhicule ne peut pas transporter PROPRE et SALE simultanément.
-    # Implémentation : dimension de "charge sale" avec capacité 0 si le
-    # véhicule transporte du propre, et vice-versa.
-    # Approche simplifiée : interdire les arcs pickup_PROPRE → pickup_SALE
-    # et pickup_SALE → pickup_PROPRE via AllowedNexts
-    ps = data['propre_sale_par_noeud']
-    ni = data['node_is_pickup']
-
-    # Pour chaque paire de pickups de types différents, interdire l'enchaînement
-    pickup_nodes_propre = [n for n in range(1, data['n_nodes'])
-                           if ni[n] and ps[n] == 'PROPRE']
-    pickup_nodes_sale   = [n for n in range(1, data['n_nodes'])
-                           if ni[n] and ps[n] == 'SALE']
-
-    # Interdire d'aller d'un pickup PROPRE vers un pickup SALE
-    # (et inversement) si le véhicule a déjà du chargement de l'autre type
-    # Approche : pénalité très élevée dans le callback de transit (déjà fait)
-    # + pour les pickups simultanés sur le même site, on vérifie via les
-    # contraintes de précédence que PROPRE et SALE ne se chevauchent pas.
-    # La contrainte la plus robuste : interdire via AddDisjunction par groupe
-    # Un véhicule choisit soit les jobs PROPRE soit les jobs SALE (pas les deux).
-    # MAIS cette contrainte est trop forte — un même véhicule peut faire
-    # du propre le matin et du sale l'après-midi après nettoyage.
-    # On garde donc uniquement la pénalité dans le callback transit.
-    pass  # contrainte déjà dans transit_avec_nettoyage
 
     # ── 6. Contraintes Pickup & Delivery ───────────────────────────────────
     for pickup_node, delivery_node in data['pickups_deliveries']:
@@ -1471,7 +1454,7 @@ def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 20) -> Non
                 return data['demands'][mgr.IndexToNode(fi)]
             cbd = rte.RegisterUnaryTransitCallback(cb_d)
             rte.AddDimensionWithVehicleCapacity(
-                cbd, data['vehicle_capacity'],
+                cbd, 0,
                 [data['vehicle_capacity']] * n_vehicles, True, 'CapDiag'
             )
 
