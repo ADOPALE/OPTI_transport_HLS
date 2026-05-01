@@ -781,21 +781,11 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             time_dim.CumulVar(pickup_idx) <= time_dim.CumulVar(delivery_idx)
         )
 
-    # ── 7. Tous les nœuds sont OBLIGATOIRES ────────────────────────────────
-    # Pénalité par job ignoré >> n_jobs × coût_fixe_véhicule
-    # pour garantir qu'OR-Tools préfère ouvrir autant de véhicules que nécessaire
-    # plutôt que d'ignorer un seul job.
-    COUT_FIXE_VEH       = int(1e6)   # coût par véhicule ouvert (réduit)
-    PENALITE_JOB_IGNORE = int(1e9)   # >> n_jobs × COUT_FIXE_VEH
-
-    # Pénalité sur la PAIRE pickup+delivery (pas sur chaque nœud séparément)
-    # pour éviter qu'OR-Tools ignore pickup sans ignorer delivery
-    for pickup_node, delivery_node in data['pickups_deliveries']:
-        pickup_idx   = manager.NodeToIndex(pickup_node)
-        delivery_idx = manager.NodeToIndex(delivery_node)
-        routing.AddDisjunction([pickup_idx, delivery_idx], PENALITE_JOB_IGNORE)
-
-    # ── 8. Objectif : coût fixe par véhicule ───────────────────────────────
+    # ── 7. Objectif : coût fixe par véhicule ───────────────────────────────
+    # On ne met PAS de AddDisjunction — tous les nœuds sont obligatoires
+    # par défaut dans OR-Tools si on ne les déclare pas optionnels.
+    # Le coût fixe véhicule guide l'optimisation vers le minimum de véhicules.
+    COUT_FIXE_VEH = int(1e8)
     for v in range(n_vehicles):
         routing.SetFixedCostOfVehicle(COUT_FIXE_VEH, v)
 
