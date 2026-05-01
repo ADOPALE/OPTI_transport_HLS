@@ -537,6 +537,8 @@ def _build_model_data(
         node_sites.append(j.destination) # delivery
 
     # Matrice de durée entre nœuds
+    # L'offset inter-job est ajouté après le calcul de service_times
+    # (défini plus bas), donc on construit d'abord la matrice pure
     time_matrix = [[0] * n_nodes for _ in range(n_nodes)]
     for i in range(n_nodes):
         for k in range(n_nodes):
@@ -553,16 +555,19 @@ def _build_model_data(
         time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
 
 
-    # ── Durées de service par nœud (manutention réelle depuis param_vehicules) ──
-    # Règle métier :
-    #   - t_quai   = manœuvre + contact/admin (par visite sur site, pas par job)
-    #   - t_manu   = temps par contenant (avec quai si site a quai, sinon sans)
-    # Si un site accueille plusieurs jobs dans la même visite, t_quai n'est
-    # compté qu'une seule fois : on l'affecte au PREMIER job du site,
-    # les suivants n'ont que t_manu × nb_contenants.
+    # ── Offset inter-job calculé depuis les paramètres réels ────────────────
+    # Approche : au lieu d'ajouter les service_times sur chaque nœud
+    # (ce qui crée des ROUTING_FAIL sur les grandes instances), on calcule
+    # un offset moyen par job et on l'ajoute à tous les arcs entre sites.
+    #
+    # offset = t_quai + nb_contenants_moyen × t_manu_moyen
+    # où t_manu_moyen = moyenne pondérée avec/sans quai selon les sites des jobs
+    #
+    # Cet offset est ajouté à time_matrix[i][j] pour tous les arcs i≠j
+    # SAUF les arcs depuis/vers le dépôt (pas de manutention au dépôt).
+    # Le Gantt reconstruit ensuite la séquence détaillée avec les vraies durées.
 
     def _time_val_to_min(val, default=0.0):
-        """Convertit datetime.time ou float en minutes."""
         if val is None or (isinstance(val, float) and math.isnan(val)):
             return default
         if hasattr(val, 'hour'):
@@ -572,10 +577,10 @@ def _build_model_data(
         except Exception:
             return default
 
-    # Récupérer les paramètres du véhicule
-    t_quai_min  = 10.0   # défaut : 10 min
-    t_sans_quai = 0.25   # défaut : 15s/cont
-    t_avec_quai = 0.25   # défaut : 15s/cont
+    # Paramètres véhicule
+    t_quai_min  = 10.0
+    t_sans_quai = 25 / 60   # 25s en minutes
+    t_avec_quai = 15 / 60   # 15s en minutes
     if df_vehicules is not None:
         veh_row = df_vehicules[
             df_vehicules.iloc[:, 0].apply(_norm) == _norm(v_type)
@@ -589,7 +594,7 @@ def _build_model_data(
             t_avec_quai = _time_val_to_min(
                 r.get('Manutention avec quai (minutes / contenants)'), 15/60)
 
-    # Récupérer la présence de quai par site
+    # Présence de quai par site
     sites_avec_quai = set()
     if df_sites is not None:
         col_lib = next(
@@ -598,71 +603,41 @@ def _build_model_data(
         )
         for _, row in df_sites.iterrows():
             site = _norm(str(row[col_lib]))
-            quai = str(row.get('Présence de quai', 'NON')).upper() == 'OUI'
-            if quai:
+            if str(row.get('Présence de quai', 'NON')).upper() == 'OUI':
                 sites_avec_quai.add(site)
 
-    # Calculer t_manu par site pour chaque job
-    # t_quai compté une seule fois par site (premier job du site dans la séquence)
-    # On groupe les jobs par site (origine pour pickup, destination pour delivery)
-    sites_visites_pickup   = {}  # site → premier job_idx qui y passe en pickup
-    sites_visites_delivery = {}
-
-    for idx, j in enumerate(jobs_v):
-        site_p = _norm(j.origine)
-        site_d = _norm(j.destination)
-        if site_p not in sites_visites_pickup:
-            sites_visites_pickup[site_p] = idx
-        if site_d not in sites_visites_delivery:
-            sites_visites_delivery[site_d] = idx
-
-    # ── Durée totale par job (intégrée dans l'arc pickup→delivery) ──────────
-    # Un job est soit COMPLET (nb_contenants == capa_utile) soit INCOMPLET
-    # (dernier job d'un flux, ou flux dont qte < capa_utile).
-    #
-    # Job COMPLET :
-    #   durée = t_quai_origine + t_manu_chargement
-    #         + trajet(origine→destination)   ← dans time_matrix
-    #         + t_quai_destination + t_manu_déchargement
-    #   → service_time[pickup]   = t_quai_origine + t_manu_chargement
-    #   → service_time[delivery] = t_quai_destination + t_manu_déchargement
-    #
-    # Job INCOMPLET (taux = nb_contenants / capa_utile) :
-    #   durée = taux × t_quai_origine + t_manu_chargement
-    #         + trajet(origine→destination)
-    #         + taux × t_quai_destination + t_manu_déchargement
-    #   → service_time[pickup]   = taux × t_quai_origine + t_manu_chargement
-    #   → service_time[delivery] = taux × t_quai_destination + t_manu_déchargement
-    #
-    # Identification job incomplet : nb_contenants < capa_utile
-    # (inclut dernier job d'un flux ET flux dont qte < capa_utile dès le départ)
-
+    # Calcul de l'offset moyen par job pour ce type de véhicule
+    # = t_quai + nb_contenants_moyen × t_manu_moyen (chargement + déchargement)
     taux_rempl = params_logistique.get('securite_remplissage', 0.85)
+    nb_moy = sum(j.nb_contenants for j in jobs_v) / len(jobs_v) if jobs_v else 1
 
-    service_times = [0]  # dépôt : pas de service
-    for idx, j in enumerate(jobs_v):
-        site_p = _norm(j.origine)
-        site_d = _norm(j.destination)
-        quai_p = site_p in sites_avec_quai
-        quai_d = site_d in sites_avec_quai
+    # Proportion de sites avec quai parmi les origines et destinations
+    sites_jobs = [_norm(j.origine) for j in jobs_v] + [_norm(j.destination) for j in jobs_v]
+    prop_quai  = sum(1 for s in sites_jobs if s in sites_avec_quai) / max(1, len(sites_jobs))
+    t_manu_moy = nb_moy * (t_avec_quai * prop_quai + t_sans_quai * (1 - prop_quai))
 
-        # Taux de remplissage réel de ce job
-        # capa_utile = capacite brute × taux_rempl pour ce type de contenant
-        capa_brute_job = capacites.get(_norm(v_type), {}).get(j.type_contenant, 1)
-        capa_utile_job = max(1, math.floor(capa_brute_job * taux_rempl))
-        est_complet    = (j.nb_contenants >= capa_utile_job)
-        taux_job       = 1.0 if est_complet else (j.nb_contenants / capa_utile_job)
+    # Offset = chargement + déchargement par job (t_quai compté 2 fois car 2 opérations)
+    offset_min = t_quai_min * 2 + t_manu_moy * 2
+    offset_sc  = _sc(offset_min)
 
-        # Temps de manœuvre/quai (modulé par le taux si incomplet)
-        t_q_p = t_quai_min * (1.0 if est_complet else taux_job)
-        t_q_d = t_quai_min * (1.0 if est_complet else taux_job)
+    _log(
+        f"  ⏱️ Offset inter-job {v_type} : {offset_min:.1f} min "
+        f"(t_quai×2={t_quai_min*2:.0f}, t_manu×2={t_manu_moy*2:.1f}, "
+        f"nb_moy={nb_moy:.1f}, prop_quai={prop_quai:.0%})",
+        "info"
+    )
 
-        # Temps de manutention (proportionnel au nb de contenants, indépendant du taux)
-        t_m_p = j.nb_contenants * (t_avec_quai if quai_p else t_sans_quai)
-        t_m_d = j.nb_contenants * (t_avec_quai if quai_d else t_sans_quai)
+    # service_times = 0 pour tous les nœuds (on utilise l'offset dans time_matrix)
+    service_times = [0] * n_nodes
 
-        service_times.append(_sc(t_q_p + t_m_p))   # service pickup  (chargement)
-        service_times.append(_sc(t_q_d + t_m_d))   # service delivery (déchargement)
+    # ── Appliquer l'offset sur les arcs entre sites (pas dépôt) ─────────────
+    # On ajoute offset_sc à time_matrix[i][j] si i≠dépôt ET j≠dépôt
+    # Cela modélise le temps de manutention moyen par job sans impacter
+    # les arcs de retour au dépôt (pas de manutention au dépôt HLS).
+    for i in range(1, n_nodes):   # depuis un site (pas dépôt)
+        for k in range(1, n_nodes):  # vers un site (pas dépôt)
+            if i != k:
+                time_matrix[i][k] += offset_sc
 
     # Paires pickup → delivery
     pickups_deliveries = []
@@ -701,12 +676,13 @@ def _build_model_data(
         pickup_node   = 1 + 2 * j_idx
         delivery_node = 2 + 2 * j_idx
         # Durée totale du job : dépôt→pickup→delivery→dépôt
+        # Durée d'un job = trajet complet depuis dépôt
+        # time_matrix inclut déjà l'offset de manutention sur les arcs entre sites
+        # Arcs dépôt→pickup et delivery→dépôt n'ont PAS l'offset (pas de manutention)
         duree_min = (
-            time_matrix[DEPOT][pickup_node]          # trajet dépôt → chargement
-            + service_times[pickup_node]             # chargement sur site origine
-            + time_matrix[pickup_node][delivery_node] # trajet chargé
-            + service_times[delivery_node]           # déchargement sur site destination
-            + time_matrix[delivery_node][DEPOT]      # retour dépôt à vide
+            time_matrix[DEPOT][pickup_node]           # trajet dépôt → origine (sans offset)
+            + time_matrix[pickup_node][delivery_node] # trajet origine→destination (avec offset)
+            + time_matrix[delivery_node][DEPOT]       # retour dépôt (sans offset)
         ) / SCALE
 
         # Plage horaire du job
@@ -793,10 +769,9 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     def transit_avec_nettoyage(from_idx, to_idx):
         from_node = manager.IndexToNode(from_idx)
         to_node   = manager.IndexToNode(to_idx)
-        # Transit = trajet + temps de service sur le nœud d'origine
-        # (manœuvre + manutention des contenants)
-        transit = (data['time_matrix'][from_node][to_node]
-                   + data['service_times'][from_node])
+        # Transit = time_matrix[from][to]
+        # (inclut déjà l'offset de manutention sur les arcs entre sites)
+        transit = data['time_matrix'][from_node][to_node]
         # Nettoyage si delivery SALE → pickup PROPRE
         if (from_node > 0 and not node_is_pickup[from_node]
                 and ps[from_node] == 'SALE'
@@ -905,23 +880,33 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
     }
 
     # Stratégie unique adaptée au PDPTW + budget complet time_limit_seconds
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    params.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-    )
-    params.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    params.time_limit.seconds = time_limit_seconds
-    params.log_search = False
-    solution = routing.SolveWithParameters(params)
-    status = routing.status()
-    _log(
-        f"    PARALLEL_CHEAPEST_INSERTION → statut : "
-        f"{status_labels.get(status, str(status))} "
-        f"({'✓' if solution else '✗'})",
-        "info"
-    )
+    # Pour les PDPTW larges, PARALLEL_CHEAPEST_INSERTION échoue souvent.
+    # On essaie plusieurs stratégies dans l'ordre.
+    strategies = [
+        ("AUTOMATIC",                   routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC),
+        ("PARALLEL_CHEAPEST_INSERTION", routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION),
+        ("LOCAL_CHEAPEST_INSERTION",    routing_enums_pb2.FirstSolutionStrategy.LOCAL_CHEAPEST_INSERTION),
+        ("SAVINGS",                     routing_enums_pb2.FirstSolutionStrategy.SAVINGS),
+    ]
+    solution = None
+    for strat_name, strat in strategies:
+        params = pywrapcp.DefaultRoutingSearchParameters()
+        params.first_solution_strategy = strat
+        params.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        )
+        params.time_limit.seconds = time_limit_seconds
+        params.log_search = False
+        solution = routing.SolveWithParameters(params)
+        status = routing.status()
+        _log(
+            f"    {strat_name} → statut : "
+            f"{status_labels.get(status, str(status))} "
+            f"({'✓' if solution else '✗'})",
+            "info"
+        )
+        if solution:
+            break
 
     if solution is None:
         # Diagnostic supplémentaire
@@ -1023,6 +1008,17 @@ class PosteChauffeur:
     amplitude: float
     missions: list[dict] = field(default_factory=list)
     taux_occupation: float = 0.0
+    etapes: list[dict] = field(default_factory=list)
+    # etapes : séquence complète reconstruite après OR-Tools
+    # Chaque étape = {
+    #   'type'  : str   # 'prise_poste'|'trajet_vide'|'trajet_plein'|'approche'
+    #                   # |'mise_a_quai'|'chargement'|'dechargement'|'attente'
+    #                   # |'pause'|'fin_poste'
+    #   'h_debut': float  # minutes depuis minuit
+    #   'h_fin'  : float
+    #   'site'   : str   (si applicable)
+    #   'info'   : str   description
+    # }
 
 
 def _calculer_taux_occupation(route: dict, data: dict, params_logistique: dict) -> float:
@@ -1051,10 +1047,162 @@ def construire_postes(
     resultats_par_type: dict[str, dict],
     data_par_type: dict[str, dict],
     params_logistique: dict,
+    df_vehicules: 'pd.DataFrame | None' = None,
+    df_sites: 'pd.DataFrame | None' = None,
+    matrice_duree: 'pd.DataFrame | None' = None,
 ) -> list[PosteChauffeur]:
     """
     Construit la liste des postes chauffeurs à partir des résultats OR-Tools.
+    Reconstitue la séquence complète : approche, mise à quai, chargement/déchargement,
+    trajet plein/vide, attente, pause, fin de poste.
     """
+    # ── Helpers manutention ───────────────────────────────────────────────────
+    def _to_min(val, default=0.0):
+        if val is None or (isinstance(val, float) and math.isnan(val)):
+            return default
+        if hasattr(val, 'hour'):
+            return val.hour * 60 + val.minute + val.second / 60
+        try: return float(val) * 1440
+        except: return default
+
+    # Paramètres manutention par type de véhicule
+    params_veh_cache = {}
+    def get_params_veh(v_type):
+        if v_type in params_veh_cache:
+            return params_veh_cache[v_type]
+        t_quai, t_sans, t_avec = 10.0, 25/60, 15/60
+        if df_vehicules is not None:
+            row = df_vehicules[df_vehicules.iloc[:,0].apply(_norm) == _norm(v_type)]
+            if not row.empty:
+                r = row.iloc[0]
+                t_quai = _to_min(r.get('Temps de mise à quai - manœuvre, contact/admin (minutes)'), 10.0)
+                t_sans = _to_min(r.get('Manutention sans quai (minutes / contenants)'), 25/60)
+                t_avec = _to_min(r.get('Manutention avec quai (minutes / contenants)'), 15/60)
+        params_veh_cache[v_type] = (t_quai, t_sans, t_avec)
+        return t_quai, t_sans, t_avec
+
+    # Présence de quai par site
+    sites_avec_quai = set()
+    if df_sites is not None:
+        col_lib = next((c for c in df_sites.columns if 'libel' in c.lower()), df_sites.columns[0])
+        for _, row in df_sites.iterrows():
+            if str(row.get('Présence de quai', 'NON')).upper() == 'OUI':
+                sites_avec_quai.add(_norm(str(row[col_lib])))
+
+    # Matrice de durées pour les trajets réels
+    df_dur = None
+    if matrice_duree is not None:
+        df_dur = matrice_duree.copy()
+        c0 = df_dur.columns[0]
+        df_dur = df_dur.set_index(c0)
+        df_dur.index   = df_dur.index.astype(str).str.strip().str.upper()
+        df_dur.columns = df_dur.columns.astype(str).str.strip().str.upper()
+
+    def trajet_min(site_a, site_b):
+        if site_a == site_b: return 0.0
+        if df_dur is None: return 15.0
+        try: return float(df_dur.loc[_norm(site_a), _norm(site_b)])
+        except: return 15.0
+
+    def duree_operation(site, nb_cont, v_type, est_complet, capa_utile):
+        """Durée de chargement ou déchargement sur un site."""
+        t_quai, t_sans, t_avec = get_params_veh(v_type)
+        quai = _norm(site) in sites_avec_quai
+        t_manu = nb_cont * (t_avec if quai else t_sans)
+        taux = 1.0 if est_complet else nb_cont / max(1, capa_utile)
+        return t_quai * taux, t_manu  # (t_quai_effectif, t_manu)
+
+    def reconstruire_etapes(missions_sorted, v_type, h_debut_poste, duree_poste,
+                             t_prise, t_fin_poste, t_pause, t_pause_seuil):
+        """
+        Reconstruit la séquence complète d'étapes depuis la liste des missions OR-Tools.
+        Retourne list[dict] avec les étapes détaillées.
+        """
+        etapes = []
+        rh = params_logistique.get('rh', {})
+
+        # Prise de poste
+        curseur = h_debut_poste
+        etapes.append({'type':'prise_poste','h_debut':curseur,'h_fin':curseur+t_prise,
+                       'site':'HLS','info':'Préparation / Check véhicule'})
+        curseur += t_prise
+        site_courant = 'HLS'
+        charge = 0
+        pause_faite = False
+
+        for m in missions_sorted:
+            h_ortools = m['heure']  # heure OR-Tools = heure d'arrivée sur site
+            site_dest = m['site']
+            nb_cont   = m['nb_contenants']
+            is_pickup = m['is_pickup']
+            ps        = m.get('propre_sale','')
+
+            # Départ vers le site : h_depart = h_ortools - trajet
+            duree_traj = trajet_min(site_courant, site_dest)
+            h_depart   = max(curseur, h_ortools - duree_traj)
+
+            # Attente avant de partir (si arrivée tardive prévue par OR-Tools)
+            if h_depart > curseur + 0.5:
+                etapes.append({'type':'attente','h_debut':curseur,'h_fin':h_depart,
+                               'site':site_courant,'info':f'Attente sur {site_courant}'})
+
+            # Pause si seuil dépassé pendant le trajet
+            if not pause_faite and (h_depart - h_debut_poste) > t_pause_seuil:
+                etapes.append({'type':'pause','h_debut':h_depart,'h_fin':h_depart+t_pause,
+                               'site':site_courant,'info':'Pause obligatoire'})
+                h_depart   += t_pause
+                pause_faite = True
+
+            # Trajet (vide ou plein selon charge courante)
+            if duree_traj > 0.5:
+                type_traj = 'trajet_plein' if charge > 0 else 'trajet_vide'
+                etapes.append({'type':type_traj,'h_debut':h_depart,'h_fin':h_depart+duree_traj,
+                               'site':f'{site_courant}→{site_dest}',
+                               'info':f'{site_courant} → {site_dest} ({duree_traj:.0f} min)'})
+            curseur = h_depart + duree_traj
+
+            # Approche/mise à quai + opération
+            # On calcule les durées réelles depuis les paramètres
+            # est_complet approx : True si nb_cont >= capa_utile du type
+            capa_brute = 20  # approximation si pas d'info
+            est_complet = True  # simplifié ici
+            t_q, t_m = duree_operation(site_dest, nb_cont, v_type, est_complet, capa_brute)
+
+            if t_q > 0.1:
+                etapes.append({'type':'mise_a_quai','h_debut':curseur,'h_fin':curseur+t_q,
+                               'site':site_dest,'info':f'Mise à quai ({t_q:.1f} min)'})
+                curseur += t_q
+
+            op_type = 'chargement' if is_pickup else 'dechargement'
+            etapes.append({'type':op_type,'h_debut':curseur,'h_fin':curseur+t_m,
+                           'site':site_dest,
+                           'info':f'{nb_cont} {m["type_contenant"]} ({ps}) — {t_m:.1f} min'})
+            curseur += t_m
+
+            if is_pickup: charge += nb_cont
+            else:         charge  = max(0, charge - nb_cont)
+            site_courant = site_dest
+
+        # Retour HLS
+        if site_courant != 'HLS':
+            dur_ret = trajet_min(site_courant, 'HLS')
+            if dur_ret > 0.5:
+                type_traj = 'trajet_plein' if charge > 0 else 'trajet_vide'
+                etapes.append({'type':type_traj,'h_debut':curseur,'h_fin':curseur+dur_ret,
+                               'site':f'{site_courant}→HLS','info':f'Retour HLS ({dur_ret:.0f} min)'})
+                curseur += dur_ret
+
+        # Attente jusqu'à fin de poste
+        h_fin_poste_off = h_debut_poste + duree_poste - t_fin_poste
+        if curseur < h_fin_poste_off - 1:
+            etapes.append({'type':'attente','h_debut':curseur,'h_fin':h_fin_poste_off,
+                           'site':'HLS','info':'En attente de fin de poste'})
+
+        # Fin de poste
+        h_fin_poste = h_debut_poste + duree_poste
+        etapes.append({'type':'fin_poste','h_debut':h_fin_poste-t_fin_poste,'h_fin':h_fin_poste,
+                       'site':'HLS','info':'Nettoyage / Clôture'})
+        return etapes
     postes = []
     compteur = 1
 
@@ -1086,14 +1234,22 @@ def construire_postes(
                 })
             missions.sort(key=lambda x: x['heure'])
 
-            # Vérifier si la route dépasse l'amplitude max du poste
+            # Paramètres RH
             rh_cp         = params_logistique.get('rh', {})
             amplitude_max = float(rh_cp.get('amplitude_totale', 450))
+            t_prise       = float(rh_cp.get('temps_fixes_prise', 20))
+            t_fin_p       = float(rh_cp.get('temps_fixes_fin',   15))
+            t_pause       = float(rh_cp.get('pause', 30))
+            t_pause_seuil = 180.0
             h_debut_route = route['h_debut']
             h_fin_route   = route['h_fin']
 
             if h_fin_route - h_debut_route <= amplitude_max:
                 # Cas normal : un seul poste
+                etapes = reconstruire_etapes(
+                    missions, v_type, h_debut_route, amplitude_max,
+                    t_prise, t_fin_p, t_pause, t_pause_seuil
+                )
                 postes.append(PosteChauffeur(
                     poste_id        = f"{v_type}_{compteur:03d}",
                     v_type          = v_type,
@@ -1102,6 +1258,7 @@ def construire_postes(
                     amplitude       = h_fin_route - h_debut_route,
                     missions        = missions,
                     taux_occupation = taux,
+                    etapes          = etapes,
                 ))
                 compteur += 1
             else:
@@ -1736,7 +1893,12 @@ def run_flux_optimization(
                 )
 
     # ── 3. Post-traitement ───────────────────────────────────────────────────
-    postes = construire_postes(resultats_par_type, data_par_type, params_logistique)
+    postes = construire_postes(
+        resultats_par_type, data_par_type, params_logistique,
+        df_vehicules=df_vehicules,
+        df_sites=df_sites,
+        matrice_duree=matrice_duree,
+    )
     rapport = calculer_rapport(postes, jobs_par_type, resultats_par_type)
 
     # Stockage dans session_state si disponible
