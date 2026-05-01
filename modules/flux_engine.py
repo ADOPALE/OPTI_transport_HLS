@@ -754,13 +754,16 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         )
 
     # ── 5. Capacité par véhicule ────────────────────────────────────────────
+    # La dimension cumulative cause des infaisabilités quand plusieurs pickups
+    # se succèdent avant les deliveries (cumul > capacité).
+    # Solution : slack_max = vehicle_capacity pour absorber les variations
     def demand_callback(from_idx):
         return data['demands'][manager.IndexToNode(from_idx)]
 
     cb_demand = routing.RegisterUnaryTransitCallback(demand_callback)
     routing.AddDimensionWithVehicleCapacity(
         cb_demand,
-        0,
+        data['vehicle_capacity'],       # slack_max = capacité (absorbe les pics)
         [data['vehicle_capacity']] * n_vehicles,
         True,
         'Capacity'
@@ -779,21 +782,20 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         )
 
     # ── 7. Tous les nœuds sont OBLIGATOIRES ────────────────────────────────
-    # Par défaut OR-Tools peut ignorer des nœuds (optionnels).
-    # AddDisjunction avec pénalité très élevée force leur inclusion.
-    # La pénalité doit être > coût fixe véhicule pour que OR-Tools préfère
-    # ouvrir un véhicule supplémentaire plutôt que d'ignorer un job.
-    PENALITE_JOB_IGNORE = int(1e9)  # >> COUT_FIXE_VEH (1e8)
+    # Pénalité par job ignoré >> n_jobs × coût_fixe_véhicule
+    # pour garantir qu'OR-Tools préfère ouvrir autant de véhicules que nécessaire
+    # plutôt que d'ignorer un seul job.
+    COUT_FIXE_VEH       = int(1e6)   # coût par véhicule ouvert (réduit)
+    PENALITE_JOB_IGNORE = int(1e9)   # >> n_jobs × COUT_FIXE_VEH
+
+    # Pénalité sur la PAIRE pickup+delivery (pas sur chaque nœud séparément)
+    # pour éviter qu'OR-Tools ignore pickup sans ignorer delivery
     for pickup_node, delivery_node in data['pickups_deliveries']:
         pickup_idx   = manager.NodeToIndex(pickup_node)
         delivery_idx = manager.NodeToIndex(delivery_node)
-        # Pénalité appliquée sur chaque nœud de la paire
-        routing.AddDisjunction([pickup_idx],   PENALITE_JOB_IGNORE)
-        routing.AddDisjunction([delivery_idx], PENALITE_JOB_IGNORE)
+        routing.AddDisjunction([pickup_idx, delivery_idx], PENALITE_JOB_IGNORE)
 
-    # ── 8. Objectif : coût fixe fort par véhicule (< pénalité job) ─────────
-    # 1e8 << 1e9 : OR-Tools préfère ouvrir un véhicule plutôt qu'ignorer un job
-    COUT_FIXE_VEH = int(1e8)
+    # ── 8. Objectif : coût fixe par véhicule ───────────────────────────────
     for v in range(n_vehicles):
         routing.SetFixedCostOfVehicle(COUT_FIXE_VEH, v)
 
@@ -1295,7 +1297,8 @@ def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 20) -> Non
                 return data['demands'][mgr.IndexToNode(fi)]
             cbd = rte.RegisterUnaryTransitCallback(cb_d)
             rte.AddDimensionWithVehicleCapacity(
-                cbd, 0, [data['vehicle_capacity']] * n_vehicles, True, 'CapDiag'
+                cbd, data['vehicle_capacity'],
+                [data['vehicle_capacity']] * n_vehicles, True, 'CapDiag'
             )
 
         if avec_pd:
