@@ -721,20 +721,44 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
         )
 
     # ── 5. Capacité par véhicule ────────────────────────────────────────────
-    # La dimension cumulative cause des infaisabilités quand plusieurs pickups
-    # se succèdent avant les deliveries (cumul > capacité).
-    # Solution : slack_max = vehicle_capacity pour absorber les variations
     def demand_callback(from_idx):
         return data['demands'][manager.IndexToNode(from_idx)]
 
     cb_demand = routing.RegisterUnaryTransitCallback(demand_callback)
     routing.AddDimensionWithVehicleCapacity(
         cb_demand,
-        data['vehicle_capacity'],       # slack_max = capacité (absorbe les pics)
+        data['vehicle_capacity'],
         [data['vehicle_capacity']] * n_vehicles,
         True,
         'Capacity'
     )
+
+    # ── 5b. Contrainte anti-mélange propre/sale ──────────────────────────
+    # Un véhicule ne peut pas transporter PROPRE et SALE simultanément.
+    # Implémentation : dimension de "charge sale" avec capacité 0 si le
+    # véhicule transporte du propre, et vice-versa.
+    # Approche simplifiée : interdire les arcs pickup_PROPRE → pickup_SALE
+    # et pickup_SALE → pickup_PROPRE via AllowedNexts
+    ps = data['propre_sale_par_noeud']
+    ni = data['node_is_pickup']
+
+    # Pour chaque paire de pickups de types différents, interdire l'enchaînement
+    pickup_nodes_propre = [n for n in range(1, data['n_nodes'])
+                           if ni[n] and ps[n] == 'PROPRE']
+    pickup_nodes_sale   = [n for n in range(1, data['n_nodes'])
+                           if ni[n] and ps[n] == 'SALE']
+
+    # Interdire d'aller d'un pickup PROPRE vers un pickup SALE
+    # (et inversement) si le véhicule a déjà du chargement de l'autre type
+    # Approche : pénalité très élevée dans le callback de transit (déjà fait)
+    # + pour les pickups simultanés sur le même site, on vérifie via les
+    # contraintes de précédence que PROPRE et SALE ne se chevauchent pas.
+    # La contrainte la plus robuste : interdire via AddDisjunction par groupe
+    # Un véhicule choisit soit les jobs PROPRE soit les jobs SALE (pas les deux).
+    # MAIS cette contrainte est trop forte — un même véhicule peut faire
+    # du propre le matin et du sale l'après-midi après nettoyage.
+    # On garde donc uniquement la pénalité dans le callback transit.
+    pass  # contrainte déjà dans transit_avec_nettoyage
 
     # ── 6. Contraintes Pickup & Delivery ───────────────────────────────────
     for pickup_node, delivery_node in data['pickups_deliveries']:
