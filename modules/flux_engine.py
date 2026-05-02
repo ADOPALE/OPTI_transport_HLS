@@ -689,9 +689,7 @@ def _build_model_data(
         node_sites.append(sj.destinations[0])  # delivery
 
     # ── Offset inter-job ──────────────────────────────────────────────────
-    all_nb = ([j.nb_contenants for j in jobs_complets] +
-               [sj.nb_total for sj in super_jobs])
-    nb_moy = sum(all_nb) / max(1, len(all_nb)) if all_nb else 1.0
+    nb_moy = vehicle_capacity  # approximation : job complet = capa_utile
     sites_jobs_list = node_sites[1:]
     prop_quai = sum(1 for s in sites_jobs_list if _norm(s) in sites_avec_quai) / max(1, len(sites_jobs_list))
     t_manu_moy = nb_moy * (t_avec_quai * prop_quai + t_sans_quai * (1-prop_quai))
@@ -920,11 +918,14 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             data['h_debut_sc'], data['h_fin_sc']
         )
 
-    # ── 4. Amplitude : gérée en post-traitement uniquement ─────────────────
-    # OR-Tools peut planifier sur toute la journée (6h→21h).
-    # construire_postes découpe ensuite chaque route en postes de
-    # amplitude_max minutes avec relève entre chauffeurs.
+    # ── 4. Amplitude maximale par poste ────────────────────────────────────
     solver = routing.solver()
+    for v in range(n_vehicles):
+        solver.Add(
+            time_dim.CumulVar(routing.End(v)) -
+            time_dim.CumulVar(routing.Start(v))
+            <= data['max_poste_sc']
+        )
 
     # ── 5. Capacité par trajet individuel ───────────────────────────────────
     # Dans un PDPTW, la dimension cumulative classique est problématique :
@@ -961,11 +962,15 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             time_dim.CumulVar(pickup_idx) <= time_dim.CumulVar(delivery_idx)
         )
 
-    # ── 7. Objectif : coût fixe par véhicule ───────────────────────────────
-    # On ne met PAS de AddDisjunction — tous les nœuds sont obligatoires
-    # par défaut dans OR-Tools si on ne les déclare pas optionnels.
-    # Le coût fixe véhicule guide l'optimisation vers le minimum de véhicules.
-    COUT_FIXE_VEH = int(1e8)
+    # ── 7. Forcer tous les nœuds obligatoires ──────────────────────────────
+    # AddDisjunction avec pénalité 1e10 >> coût fixe véhicule (1e6)
+    # OR-Tools préfère ouvrir un camion supplémentaire plutôt qu'ignorer un job
+    PENALITE = int(1e10)
+    for node in range(1, n_nodes):
+        routing.AddDisjunction([manager.NodeToIndex(node)], PENALITE)
+
+    # ── 8. Objectif : coût fixe par véhicule ───────────────────────────────
+    COUT_FIXE_VEH = int(1e6)   # << PENALITE pour minimiser véhicules
     for v in range(n_vehicles):
         routing.SetFixedCostOfVehicle(COUT_FIXE_VEH, v)
 
@@ -1733,7 +1738,11 @@ def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 60) -> Non
 
         slv = rte.solver()
         if avec_amplitude:
-            pass  # amplitude gérée en post-traitement
+            for v in range(n_vehicles):
+                slv.Add(
+                    td.CumulVar(rte.End(v)) - td.CumulVar(rte.Start(v))
+                    <= data['max_poste_sc']
+                )
 
         if avec_capacite:
             def cb_d(fi):
