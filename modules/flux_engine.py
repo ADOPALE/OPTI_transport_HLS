@@ -666,15 +666,18 @@ def _build_model_data(
     vehicle_capacity = max(1, math.floor(capa_brute_v * taux_rempl))
 
     # ── Construction des nœuds ────────────────────────────────────────────
+    # Tous les items (jobs complets ET super-jobs) sont modélisés comme
+    # des paires PDPTW (pickup, delivery) pour garantir des tournées réalisables.
+    #
     # Dépôt = nœud 0
-    # Jobs complets = nœuds 1..N_c (un nœud = un trajet A→B)
-    # Super-jobs = paires (pickup, delivery) à partir de N_c+1
+    # Job complet i  → pickup = 1+2i,   delivery = 2+2i
+    # Super-job j    → pickup = 1+2(N_c+j), delivery = 2+2(N_c+j)
     depot      = 0
     depot_site = "HLS"
 
     N_c = len(jobs_complets)
     N_s = len(super_jobs)
-    n_nodes = 1 + 2 * (N_c + N_s)  # tous en paires PDPTW
+    n_nodes = 1 + 2 * (N_c + N_s)  # dépôt + 2 nœuds par item
 
     # Sites par nœud
     node_sites = [depot_site]
@@ -682,15 +685,12 @@ def _build_model_data(
         node_sites.append(j.origine)      # pickup
         node_sites.append(j.destination)  # delivery
     for sj in super_jobs:
-        node_sites.append(sj.origines[0])
-        node_sites.append(sj.destinations[0])
+        node_sites.append(sj.origines[0])      # pickup
+        node_sites.append(sj.destinations[0])  # delivery
 
     # ── Offset inter-job ──────────────────────────────────────────────────
-    # nb_moy = moyenne réelle des contenants par job
-    all_nb = (
-        [j.nb_contenants for j in jobs_complets] +
-        [sj.nb_total for sj in super_jobs]
-    )
+    all_nb = ([j.nb_contenants for j in jobs_complets] +
+               [sj.nb_total for sj in super_jobs])
     nb_moy = sum(all_nb) / max(1, len(all_nb)) if all_nb else 1.0
     sites_jobs_list = node_sites[1:]
     prop_quai = sum(1 for s in sites_jobs_list if _norm(s) in sites_avec_quai) / max(1, len(sites_jobs_list))
@@ -707,11 +707,11 @@ def _build_model_data(
     )
 
     # ── Matrice de durées avec offset ────────────────────────────────────
-    node_is_pickup_loc = [False]
+    node_is_pickup_loc = [False]                    # dépôt
     for _ in jobs_complets:
-        node_is_pickup_loc += [True, False]
+        node_is_pickup_loc += [True, False]         # pickup, delivery
     for _ in super_jobs:
-        node_is_pickup_loc += [True, False]
+        node_is_pickup_loc += [True, False]         # pickup, delivery
 
     time_matrix = [[0]*n_nodes for _ in range(n_nodes)]
     for i in range(n_nodes):
@@ -732,28 +732,37 @@ def _build_model_data(
 
     # ── Fenêtres temporelles ─────────────────────────────────────────────
     time_windows = [(_sc(h_debut), _sc(h_fin))]
+    # Tous les items : pickup et delivery ont la fenêtre [h_dispo, h_deadline]
     for j in jobs_complets:
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
+        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))  # pickup
+        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))  # delivery
     for sj in super_jobs:
-        time_windows.append((_sc(sj.h_dispo), _sc(sj.h_deadline)))
-        time_windows.append((_sc(sj.h_dispo), _sc(sj.h_deadline)))
+        time_windows.append((_sc(sj.h_dispo), _sc(sj.h_deadline)))  # pickup
+        time_windows.append((_sc(sj.h_dispo), _sc(sj.h_deadline)))  # delivery
 
     # ── Demandes de capacité ──────────────────────────────────────────────
     demands = [0]
+    # Jobs complets : demands = +nb_contenants au pickup, -nb_contenants à la delivery
+    # Cela bloque tout autre chargement pendant le trajet (camion plein)
     for j in jobs_complets:
-        demands.append(j.nb_contenants)
-        demands.append(-j.nb_contenants)
+        demands.append(j.nb_contenants)   # pickup
+        demands.append(-j.nb_contenants)  # delivery
     for sj in super_jobs:
-        demands.append(sj.nb_total)
-        demands.append(-sj.nb_total)
+        demands.append(sj.nb_total)    # pickup
+        demands.append(-sj.nb_total)   # delivery
 
     # ── Paires pickup/delivery (super-jobs uniquement) ───────────────────
     pickups_deliveries = []
+    # Jobs complets
     for idx in range(N_c):
-        pickups_deliveries.append((1 + 2*idx, 2 + 2*idx))
+        pickup_node   = 1 + 2*idx
+        delivery_node = 2 + 2*idx
+        pickups_deliveries.append((pickup_node, delivery_node))
+    # Super-jobs
     for idx in range(N_s):
-        pickups_deliveries.append((1 + 2*N_c + 2*idx, 2 + 2*N_c + 2*idx))
+        pickup_node   = 1 + 2*N_c + 2*idx
+        delivery_node = 2 + 2*N_c + 2*idx
+        pickups_deliveries.append((pickup_node, delivery_node))
 
     # ── propre_sale par nœud ──────────────────────────────────────────────
     propre_sale_par_noeud = ['']
@@ -794,8 +803,8 @@ def _build_model_data(
     nmax           = min(1 + N_c + N_s, nmax_theorique * 2)
 
     # ── Mapping nœud → job ───────────────────────────────────────────────
-    node_to_item   = [None]
-    node_is_simple = [False]
+    node_to_item   = [None]   # dépôt
+    node_is_simple = [False]  # dépôt
     jobs_list      = []
 
     for i, j in enumerate(jobs_complets):
@@ -829,7 +838,7 @@ def _build_model_data(
         'super_jobs'         : super_jobs,
         'node_sites'         : node_sites,
         'node_to_item'       : node_to_item,
-        'n_complets'         : N_c,
+        'n_complets'         : N_c,  # nb de jobs complets (paires PDPTW)
         'node_is_pickup'     : node_is_pickup_loc,
         'node_is_simple'     : node_is_simple,
         'propre_sale_par_noeud': propre_sale_par_noeud,
@@ -911,14 +920,11 @@ def _solve_type(data: dict, time_limit_seconds: int = 60) -> dict | None:
             data['h_debut_sc'], data['h_fin_sc']
         )
 
-    # ── 4. Amplitude maximale par poste ────────────────────────────────────
+    # ── 4. Amplitude : gérée en post-traitement uniquement ─────────────────
+    # OR-Tools peut planifier sur toute la journée (6h→21h).
+    # construire_postes découpe ensuite chaque route en postes de
+    # amplitude_max minutes avec relève entre chauffeurs.
     solver = routing.solver()
-    for v in range(n_vehicles):
-        solver.Add(
-            time_dim.CumulVar(routing.End(v)) -
-            time_dim.CumulVar(routing.Start(v))
-            <= data['max_poste_sc']
-        )
 
     # ── 5. Capacité par trajet individuel ───────────────────────────────────
     # Dans un PDPTW, la dimension cumulative classique est problématique :
@@ -1727,11 +1733,7 @@ def diagnostiquer_infaisabilite(data: dict, time_limit_seconds: int = 60) -> Non
 
         slv = rte.solver()
         if avec_amplitude:
-            for v in range(n_vehicles):
-                slv.Add(
-                    td.CumulVar(rte.End(v)) - td.CumulVar(rte.Start(v))
-                    <= data['max_poste_sc']
-                )
+            pass  # amplitude gérée en post-traitement
 
         if avec_capacite:
             def cb_d(fi):
