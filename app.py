@@ -268,7 +268,7 @@ elif selected == "Synthèse transport":
         # Budget temps solveur
         time_limit = st.slider(
             "Budget temps OR-Tools par type de véhicule (secondes)",
-            min_value=15, max_value=180, value=60, step=15,
+            min_value=1, max_value=20, value=5, step=1,
             help="Plus la valeur est élevée, plus la solution sera proche de l'optimal."
         )
 
