@@ -424,6 +424,152 @@ def decomposer_flux_en_jobs(
 
 
 # ============================================================
+# PHASE 1b — REGROUPEMENT DES JOBS INCOMPLETS EN SUPER-JOBS
+# ============================================================
+
+@dataclass
+class SuperJob:
+    """
+    Groupe de jobs incomplets compatibles.
+    Trois formes possibles :
+      - SIMPLE    : job complet, un seul nœud VRP (pas de PDPTW)
+      - COLLECTE  : plusieurs pickups → un seul delivery
+      - DISTRIB   : un seul pickup → plusieurs deliveries
+      - GROUPAGE  : même origine+destination, on charge plus
+    """
+    super_id    : int
+    forme       : str           # 'SIMPLE'|'COLLECTE'|'DISTRIB'|'GROUPAGE'
+    jobs        : list          # list[JobElementaire]
+    origines    : list[str]     # sites de chargement
+    destinations: list[str]     # sites de livraison
+    nb_total    : int           # contenants totaux
+    h_dispo     : float         # max des h_dispo des jobs (fenêtre commune)
+    h_deadline  : float         # min des h_deadline des jobs
+    propre_sale : str
+    v_type      : str
+
+
+def _fenetres_compatibles(j1: 'JobElementaire', j2: 'JobElementaire') -> bool:
+    """Vérifie que les fenêtres de deux jobs se chevauchent (Option A)."""
+    return max(j1.h_dispo, j2.h_dispo) < min(j1.h_deadline, j2.h_deadline)
+
+
+def _compatible(j1: 'JobElementaire', j2: 'JobElementaire') -> bool:
+    """Vérifie les 3 règles de compatibilité pour le regroupement."""
+    return (
+        j1.propre_sale  == j2.propre_sale   # règle 1 : propre/sale
+        and j1.v_type_requis == j2.v_type_requis  # règle 2 : véhicule
+        and _fenetres_compatibles(j1, j2)         # règle 3 : fenêtres
+    )
+
+
+def regrouper_jobs_incomplets(
+    jobs_incomplets: list,
+    capa_utile: int,
+) -> list:
+    """
+    Regroupe les jobs incomplets en super-jobs selon les 3 règles métier.
+
+    Stratégie de regroupement :
+    1. GROUPAGE PUR  : même origine ET même destination → on fusionne
+    2. COLLECTE      : même destination, origines différentes → on collecte
+    3. DISTRIBUTION  : même origine, destinations différentes → on distribue
+    4. SIMPLE        : job seul (pas de regroupement possible)
+
+    La contrainte de capacité est respectée : nb_total ≤ capa_utile.
+
+    Retourne list[SuperJob].
+    """
+    non_traites = list(jobs_incomplets)
+    super_jobs  = []
+    sid         = 0
+
+    def _make_super(jobs, forme):
+        nonlocal sid
+        h_d = max(j.h_dispo    for j in jobs)
+        h_l = min(j.h_deadline for j in jobs)
+        sj = SuperJob(
+            super_id    = sid,
+            forme       = forme,
+            jobs        = jobs,
+            origines    = list({j.origine     for j in jobs}),
+            destinations= list({j.destination for j in jobs}),
+            nb_total    = sum(j.nb_contenants for j in jobs),
+            h_dispo     = h_d,
+            h_deadline  = h_l,
+            propre_sale = jobs[0].propre_sale,
+            v_type      = jobs[0].v_type_requis,
+        )
+        sid += 1
+        return sj
+
+    while non_traites:
+        j0 = non_traites.pop(0)
+        groupe = [j0]
+        cap_restante = capa_utile - j0.nb_contenants
+
+        # Chercher des jobs compatibles à regrouper
+        i = 0
+        while i < len(non_traites) and cap_restante > 0:
+            j = non_traites[i]
+            if (not _compatible(j0, j)):
+                i += 1
+                continue
+            if j.nb_contenants > cap_restante:
+                i += 1
+                continue
+
+            # Vérifier compatibilité avec tout le groupe courant
+            if all(_compatible(jg, j) for jg in groupe):
+                groupe.append(j)
+                cap_restante -= j.nb_contenants
+                non_traites.pop(i)
+            else:
+                i += 1
+
+        # Déterminer la forme du super-job
+        origines    = {j.origine     for j in groupe}
+        destinations= {j.destination for j in groupe}
+
+        if len(origines) == 1 and len(destinations) == 1:
+            forme = 'GROUPAGE'
+        elif len(origines) > 1 and len(destinations) == 1:
+            forme = 'COLLECTE'
+        elif len(origines) == 1 and len(destinations) > 1:
+            forme = 'DISTRIB'
+        else:
+            forme = 'SIMPLE'  # mixte non optimisable, on garde séparé
+
+        if forme == 'SIMPLE' and len(groupe) > 1:
+            # Pas de forme claire : créer des super-jobs individuels
+            for j in groupe:
+                super_jobs.append(_make_super([j], 'SIMPLE'))
+        else:
+            super_jobs.append(_make_super(groupe, forme))
+
+    return super_jobs
+
+
+def preparer_liste_unifiee(
+    jobs_v      : list,
+    capa_utile  : int,
+) -> tuple[list, list]:
+    """
+    Sépare les jobs complets et incomplets, regroupe les incomplets,
+    retourne (jobs_complets, super_jobs_incomplets).
+
+    Les jobs complets sont renvoyés tels quels.
+    Les super-jobs incomplets sont regroupés selon les règles métier.
+    """
+    jobs_complets   = [j for j in jobs_v if j.nb_contenants >= capa_utile]
+    jobs_incomplets = [j for j in jobs_v if j.nb_contenants <  capa_utile]
+
+    super_jobs = regrouper_jobs_incomplets(jobs_incomplets, capa_utile)
+
+    return jobs_complets, super_jobs
+
+
+# ============================================================
 # PHASE 2 — MODÈLE OR-TOOLS
 # ============================================================
 
@@ -436,311 +582,229 @@ def _sc(minutes: float) -> int:
 
 
 def _build_model_data(
-    jobs: list[JobElementaire],
-    matrice_duree: pd.DataFrame,
-    capacites: dict,
+    jobs_complets : list,
+    super_jobs    : list,
+    matrice_duree : pd.DataFrame,
+    capacites     : dict,
     params_logistique: dict,
-    v_type: str,
-    alea: float = 0.0,
-    df_vehicules: pd.DataFrame | None = None,
-    df_sites: pd.DataFrame | None = None,
+    v_type        : str,
+    alea          : float = 0.0,
+    df_vehicules  : "pd.DataFrame | None" = None,
+    df_sites      : "pd.DataFrame | None" = None,
 ) -> dict:
     """
-    Construit les structures de données pour OR-Tools à partir des jobs
-    d'un seul type de véhicule.
+    Construit le modèle OR-Tools mixte VRP + PDPTW.
 
-    Le modèle est un Pickup & Delivery Problem with Time Windows (PDPTW) :
-    - Pour chaque job : nœud de pickup (chargement en origine) + nœud de delivery (livraison)
-    - Contrainte : pickup doit précéder delivery sur le même véhicule
-    - Contrainte : capacité cumulée ≤ capacité du véhicule
-    - Contrainte : exclusion propre/sale (pas de mélange sur le même véhicule)
-
-    Structure retournée
-    -------------------
-    dict avec :
-        n_nodes         : nombre total de nœuds (dépôt + 2 × n_jobs)
-        n_vehicles      : borne haute du nombre de véhicules
-        depot           : index du dépôt (0)
-        time_matrix     : list[list[int]]  durées scalées entre nœuds
-        time_windows    : list[(int,int)]  fenêtres par nœud
-        pickups_deliveries : list[(int,int)]  paires pickup→delivery
-        demands         : list[int]  +n_cont au pickup, -n_cont à la delivery
-        vehicle_capacity: int  capacité max par véhicule (en nombre de contenants)
-        max_poste_sc    : int  amplitude max d'un poste (scalée)
-        pause_seuil_sc  : int  seuil déclenchement pause (scalé)
-        pause_duree_sc  : int  durée pause (scalée)
-        jobs            : list[JobElementaire]  les jobs dans l'ordre des nœuds
-        node_to_job     : list[int|None]  mapping nœud → index job
-        node_is_pickup  : list[bool]
-        propre_sale_par_job : list[str]
-        SCALE           : int
+    Nœuds :
+      0                              = dépôt (HLS)
+      1 .. N_c                       = jobs complets (nœuds simples VRP)
+      N_c+1, N_c+2                   = pickup_sj0, delivery_sj0
+      N_c+3, N_c+4                   = pickup_sj1, delivery_sj1
+      ...
     """
-    rh = params_logistique.get('rh', {})
-    h_debut = _excel_time_to_minutes(rh.get('h_prise_min'), 360.0)
-    h_fin   = _excel_time_to_minutes(rh.get('h_fin_max'),   1260.0)
-    # Amplitude effective = durée poste - pause - temps fixes
-    # On utilise temps_productif_max si calculé par param_flux, sinon amplitude_totale
-    amplitude_max = float(
-        rh.get('temps_productif_max') or
-        rh.get('amplitude_totale', 450)
-    )
-    # Temps de nettoyage (sale → propre) = temps de fin de poste
-    temps_nettoyage = float(rh.get('temps_fixes_fin', 15))
-    pause_seuil   = 180.0
-    pause_duree   = float(rh.get('pause', 30))
+    if not jobs_complets and not super_jobs:
+        return {}
 
-    # Nettoyage de la matrice de durée
+    rh           = params_logistique.get('rh', {})
+    amplitude_max= float(rh.get('temps_productif_max') or rh.get('amplitude_totale', 450))
+    temps_nettoyage = float(rh.get('temps_fixes_fin', 15))
+    h_debut      = _excel_time_to_minutes(rh.get('h_prise_min'), 360.0)
+    h_fin        = _excel_time_to_minutes(rh.get('h_fin_max'),   1260.0)
+    facteur      = 1 + alea
+
+    # ── Matrice de durées ─────────────────────────────────────────────────
     df = matrice_duree.copy()
     col0 = df.columns[0]
     df = df.set_index(col0)
     df.index   = df.index.astype(str).str.strip().str.upper()
     df.columns = df.columns.astype(str).str.strip().str.upper()
 
-    facteur = 1 + alea
-
-    def duree(a: str, b: str) -> int:
-        if a == b:
-            return 0
+    def duree(a, b):
+        if _norm(a) == _norm(b): return 0
         try:
-            return _sc(float(df.loc[a, b]) * facteur)
+            return _sc(float(df.loc[_norm(a), _norm(b)]) * facteur)
         except Exception:
-            return _sc(30 * facteur)  # fallback 30 min
+            return _sc(30 * facteur)
 
-    # Filtrer les jobs pour ce type de véhicule
-    jobs_v = [j for j in jobs if j.v_type_requis == v_type]
-    if not jobs_v:
-        return {}
-
-    # Capacité du véhicule pour OR-Tools
-    # = charge max d'un seul job (nb_contenants max)
-    # Dans un PDPTW, la dimension capacité représente la charge COURANTE
-    # du véhicule : +nb au pickup, -nb à la delivery.
-    # Le cumul ne dépasse jamais le max des nb_contenants d'un job individuel
-    # car chaque pickup est livré avant que le véhicule soit plein à nouveau.
-    capa_v = max((j.nb_contenants for j in jobs_v), default=1)
-
-    # Construction des nœuds
-    # Index 0 = dépôt
-    # Index 2k+1 = pickup du job k
-    # Index 2k+2 = delivery du job k
-    depot = 0
-    n_jobs = len(jobs_v)
-    n_nodes = 1 + 2 * n_jobs  # dépôt + paires
-
-    # Récupération du site dépôt (stationnement initial du véhicule)
-    depot_site = "HLS"  # valeur par défaut
-
-    # Noms de sites par nœud
-    node_sites = [depot_site]
-    for j in jobs_v:
-        node_sites.append(j.origine)     # pickup
-        node_sites.append(j.destination) # delivery
-
-    # Matrice de durée entre nœuds
-    # L'offset inter-job est ajouté après le calcul de service_times
-    # (défini plus bas), donc on construit d'abord la matrice pure
-    time_matrix = [[0] * n_nodes for _ in range(n_nodes)]
-    for i in range(n_nodes):
-        for k in range(n_nodes):
-            if i != k:
-                time_matrix[i][k] = duree(node_sites[i], node_sites[k])
-
-    # Fenêtres temporelles
-    # Dépôt : disponible toute la journée
-    time_windows = [(_sc(h_debut), _sc(h_fin))]
-    for j in jobs_v:
-        # Pickup : entre h_dispo du flux et deadline
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
-        # Delivery : entre h_dispo et deadline (le pickup doit précéder)
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
-
-
-    # ── Offset inter-job calculé depuis les paramètres réels ────────────────
-    # Approche : au lieu d'ajouter les service_times sur chaque nœud
-    # (ce qui crée des ROUTING_FAIL sur les grandes instances), on calcule
-    # un offset moyen par job et on l'ajoute à tous les arcs entre sites.
-    #
-    # offset = t_quai + nb_contenants_moyen × t_manu_moyen
-    # où t_manu_moyen = moyenne pondérée avec/sans quai selon les sites des jobs
-    #
-    # Cet offset est ajouté à time_matrix[i][j] pour tous les arcs i≠j
-    # SAUF les arcs depuis/vers le dépôt (pas de manutention au dépôt).
-    # Le Gantt reconstruit ensuite la séquence détaillée avec les vraies durées.
-
+    # ── Paramètres manutention ────────────────────────────────────────────
     def _time_val_to_min(val, default=0.0):
-        if val is None or (isinstance(val, float) and math.isnan(val)):
-            return default
-        if hasattr(val, 'hour'):
-            return val.hour * 60 + val.minute + val.second / 60
-        try:
-            return float(val) * 1440
-        except Exception:
-            return default
+        if val is None or (isinstance(val, float) and math.isnan(val)): return default
+        if hasattr(val, 'hour'): return val.hour*60 + val.minute + val.second/60
+        try: return float(val)*1440
+        except: return default
 
-    # Paramètres véhicule
     t_quai_min  = 10.0
-    t_sans_quai = 25 / 60   # 25s en minutes
-    t_avec_quai = 15 / 60   # 15s en minutes
+    t_sans_quai = 25/60
+    t_avec_quai = 15/60
     if df_vehicules is not None:
-        veh_row = df_vehicules[
-            df_vehicules.iloc[:, 0].apply(_norm) == _norm(v_type)
-        ]
+        veh_row = df_vehicules[df_vehicules.iloc[:,0].apply(_norm) == _norm(v_type)]
         if not veh_row.empty:
             r = veh_row.iloc[0]
-            t_quai_min  = _time_val_to_min(
-                r.get('Temps de mise à quai - manœuvre, contact/admin (minutes)'), 10.0)
-            t_sans_quai = _time_val_to_min(
-                r.get('Manutention sans quai (minutes / contenants)'), 25/60)
-            t_avec_quai = _time_val_to_min(
-                r.get('Manutention avec quai (minutes / contenants)'), 15/60)
+            t_quai_min  = _time_val_to_min(r.get('Temps de mise à quai - manœuvre, contact/admin (minutes)'), 10.0)
+            t_sans_quai = _time_val_to_min(r.get('Manutention sans quai (minutes / contenants)'), 25/60)
+            t_avec_quai = _time_val_to_min(r.get('Manutention avec quai (minutes / contenants)'), 15/60)
 
-    # Présence de quai par site
     sites_avec_quai = set()
     if df_sites is not None:
-        col_lib = next(
-            (c for c in df_sites.columns if 'libel' in c.lower()),
-            df_sites.columns[0]
-        )
+        col_lib = next((c for c in df_sites.columns if 'libel' in c.lower()), df_sites.columns[0])
         for _, row in df_sites.iterrows():
-            site = _norm(str(row[col_lib]))
-            if str(row.get('Présence de quai', 'NON')).upper() == 'OUI':
-                sites_avec_quai.add(site)
+            if str(row.get('Présence de quai','NON')).upper() == 'OUI':
+                sites_avec_quai.add(_norm(str(row[col_lib])))
 
-    # Calcul de l'offset moyen par job pour ce type de véhicule
-    # = t_quai + nb_contenants_moyen × t_manu_moyen (chargement + déchargement)
-    taux_rempl = params_logistique.get('securite_remplissage', 0.85)
-    nb_moy = sum(j.nb_contenants for j in jobs_v) / len(jobs_v) if jobs_v else 1
+    taux_rempl   = params_logistique.get('securite_remplissage', 0.85)
+    capa_brute_v = max(
+        (capacites.get(_norm(v_type), {}).get(j.type_contenant, 1) for j in jobs_complets)
+        if jobs_complets else [1],
+        default=1
+    )
+    if super_jobs:
+        capa_brute_v = max(capa_brute_v, max(
+            (capacites.get(_norm(v_type), {}).get(j.type_contenant, 1)
+             for sj in super_jobs for j in sj.jobs),
+            default=1
+        ))
+    vehicle_capacity = max(1, math.floor(capa_brute_v * taux_rempl))
 
-    # Proportion de sites avec quai parmi les origines et destinations
-    sites_jobs = [_norm(j.origine) for j in jobs_v] + [_norm(j.destination) for j in jobs_v]
-    prop_quai  = sum(1 for s in sites_jobs if s in sites_avec_quai) / max(1, len(sites_jobs))
-    t_manu_moy = nb_moy * (t_avec_quai * prop_quai + t_sans_quai * (1 - prop_quai))
+    # ── Construction des nœuds ────────────────────────────────────────────
+    # Dépôt = nœud 0
+    # Jobs complets = nœuds 1..N_c (un nœud = un trajet A→B)
+    # Super-jobs = paires (pickup, delivery) à partir de N_c+1
+    depot      = 0
+    depot_site = "HLS"
 
-    # Offset = chargement + déchargement par job (t_quai compté 2 fois car 2 opérations)
+    N_c = len(jobs_complets)
+    N_s = len(super_jobs)
+    n_nodes = 1 + N_c + 2 * N_s
+
+    # Sites par nœud
+    node_sites = [depot_site]
+    # Jobs complets : on place le nœud à l'ORIGINE (le pickup et delivery sont fusionnés)
+    for j in jobs_complets:
+        node_sites.append(j.origine)
+    # Super-jobs : pickup = premier site d'origine, delivery = premier site de destination
+    for sj in super_jobs:
+        node_sites.append(sj.origines[0])     # pickup
+        node_sites.append(sj.destinations[0]) # delivery
+
+    # ── Offset inter-job ──────────────────────────────────────────────────
+    nb_moy = vehicle_capacity  # approximation : job complet = capa_utile
+    sites_jobs_list = node_sites[1:]
+    prop_quai = sum(1 for s in sites_jobs_list if _norm(s) in sites_avec_quai) / max(1, len(sites_jobs_list))
+    t_manu_moy = nb_moy * (t_avec_quai * prop_quai + t_sans_quai * (1-prop_quai))
     offset_min = t_quai_min * 2 + t_manu_moy * 2
     offset_sc  = _sc(offset_min)
+    demi_offset_sc = offset_sc // 2
 
     _log(
         f"  ⏱️ Offset inter-job {v_type} : {offset_min:.1f} min "
         f"(t_quai×2={t_quai_min*2:.0f}, t_manu×2={t_manu_moy*2:.1f}, "
-        f"nb_moy={nb_moy:.1f}, prop_quai={prop_quai:.0%})",
+        f"nb_moy={nb_moy:.0f}, prop_quai={prop_quai:.0%})",
         "info"
     )
 
-    # service_times = 0 pour tous les nœuds (on utilise l'offset dans time_matrix)
-    service_times = [0] * n_nodes
+    # ── Matrice de durées avec offset ────────────────────────────────────
+    node_is_pickup_loc = [False]                          # dépôt
+    node_is_pickup_loc += [True] * N_c                   # complets : pickup simple
+    for _ in super_jobs:
+        node_is_pickup_loc += [True, False]              # pickup, delivery
 
-    # ── Appliquer l'offset UNIQUEMENT sur les arcs inter-jobs ───────────────
-    # L'offset représente le temps de manutention (chargement + déchargement).
-    # Il ne doit PAS s'appliquer sur l'arc pickup→delivery du même job
-    # (sinon il s'ajoute au trajet et fait dépasser la fenêtre horaire).
-    # Il s'applique sur :
-    #   - delivery_i → pickup_j  (transition entre deux jobs différents)
-    #   - dépôt → pickup_i       (premier job : inclut la mise à quai initiale)
-    #   - delivery_i → dépôt     (retour dépôt : inclut le déchargement final)
-    # 
-    # En pratique : arc depuis une delivery (nœud pair) vers tout autre nœud,
-    # OU depuis le dépôt vers un pickup.
-    node_is_pickup_local = [False] + [
-        True if (idx % 2 == 1) else False
-        for idx in range(1, n_nodes)
-    ]  # True pour les pickups (index impairs), False pour deliveries
-
-    # offset_sc = t_quai×2 + t_manu×2 (chargement + déchargement)
-    # On divise en deux demi-offsets selon le rôle de l'arc :
-    #   demi_offset_sc = t_quai + t_manu (une seule opération)
-    demi_offset_sc = offset_sc // 2
-
+    time_matrix = [[0]*n_nodes for _ in range(n_nodes)]
     for i in range(n_nodes):
         for k in range(n_nodes):
-            if i == k:
-                continue
-            is_from_delivery = (i > 0 and not node_is_pickup_local[i])
+            if i == k: continue
+            base = duree(node_sites[i], node_sites[k])
+            is_from_delivery = (i > 0 and not node_is_pickup_loc[i])
             is_from_depot    = (i == 0)
             is_to_depot      = (k == 0)
-
             if is_from_delivery and not is_to_depot:
-                # delivery_i → pickup_j : déchargement en i + chargement en j
-                time_matrix[i][k] += offset_sc
+                time_matrix[i][k] = base + offset_sc
             elif is_from_delivery and is_to_depot:
-                # delivery_i → dépôt : déchargement en i seulement
-                time_matrix[i][k] += demi_offset_sc
+                time_matrix[i][k] = base + demi_offset_sc
             elif is_from_depot:
-                # dépôt → pickup_i : chargement en i seulement
-                time_matrix[i][k] += demi_offset_sc
+                time_matrix[i][k] = base + demi_offset_sc
+            else:
+                time_matrix[i][k] = base
 
-    # Paires pickup → delivery
+    # ── Fenêtres temporelles ─────────────────────────────────────────────
+    time_windows = [(_sc(h_debut), _sc(h_fin))]
+    # Jobs complets : fenêtre = [h_dispo, h_deadline]
+    for j in jobs_complets:
+        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
+    # Super-jobs : pickup et delivery ont la fenêtre commune
+    for sj in super_jobs:
+        time_windows.append((_sc(sj.h_dispo), _sc(sj.h_deadline)))  # pickup
+        time_windows.append((_sc(sj.h_dispo), _sc(sj.h_deadline)))  # delivery
+
+    # ── Demandes de capacité ──────────────────────────────────────────────
+    demands = [0]
+    for j in jobs_complets:
+        demands.append(0)  # nœud simple VRP : pas de cumul capacité
+    for sj in super_jobs:
+        demands.append(sj.nb_total)    # pickup  : +nb_total
+        demands.append(-sj.nb_total)   # delivery: -nb_total
+
+    # ── Paires pickup/delivery (super-jobs uniquement) ───────────────────
     pickups_deliveries = []
-    for idx in range(n_jobs):
-        pickup_node   = 1 + 2 * idx
-        delivery_node = 2 + 2 * idx
+    for idx in range(N_s):
+        pickup_node   = 1 + N_c + 2*idx
+        delivery_node = 2 + N_c + 2*idx
         pickups_deliveries.append((pickup_node, delivery_node))
 
-    # Demandes de capacité (+n au pickup, -n à la delivery)
-    demands = [0]  # dépôt
-    for j in jobs_v:
-        demands.append(j.nb_contenants)   # pickup : charge
-        demands.append(-j.nb_contenants)  # delivery : décharge
-
-    # Mapping nœud → job
-    node_to_job = [None]
-    node_is_pickup = [False]
+    # ── propre_sale par nœud ──────────────────────────────────────────────
     propre_sale_par_noeud = ['']
-    for idx, j in enumerate(jobs_v):
-        node_to_job.extend([idx, idx])
-        node_is_pickup.extend([True, False])
-        propre_sale_par_noeud.extend([j.propre_sale, j.propre_sale])
+    for j in jobs_complets:
+        propre_sale_par_noeud.append(j.propre_sale)
+    for sj in super_jobs:
+        propre_sale_par_noeud.extend([sj.propre_sale, sj.propre_sale])
 
-    # ── Calcul de Nmax par pic de charge lissée ────────────────────────────
-    # 1. Pour chaque job, lisser sa durée sur sa plage horaire [h_dispo, h_deadline]
-    #    → contribution uniforme par créneau de RESOLUTION minutes
-    # 2. Pic de charge = max de la somme cumulée sur tous les créneaux
-    # 3. Nmax = 2 × ceil(pic / amplitude_productive)
-    DEPOT      = 0
-    RESOLUTION = 15  # granularité en minutes
-
+    # ── Nmax par pic de charge ────────────────────────────────────────────
+    RESOLUTION = 15
     slots      = max(1, int((h_fin - h_debut) / RESOLUTION) + 1)
     charge_par_slot = [0.0] * slots
 
-    for j_idx, j in enumerate(jobs_v):
-        pickup_node   = 1 + 2 * j_idx
-        delivery_node = 2 + 2 * j_idx
-        # Durée totale du job : dépôt→pickup→delivery→dépôt
-        # Durée d'un job = trajet complet depuis dépôt
-        # time_matrix inclut déjà l'offset de manutention sur les arcs entre sites
-        # Arcs dépôt→pickup et delivery→dépôt n'ont PAS l'offset (pas de manutention)
-        duree_min = (
-            time_matrix[DEPOT][pickup_node]           # trajet dépôt → origine (sans offset)
-            + time_matrix[pickup_node][delivery_node] # trajet origine→destination (avec offset)
-            + time_matrix[delivery_node][DEPOT]       # retour dépôt (sans offset)
-        ) / SCALE
+    all_items = (
+        [(j.h_dispo, j.h_deadline,
+          (time_matrix[0][1+i] + time_matrix[1+i][0]) / SCALE)
+         for i, j in enumerate(jobs_complets)]
+        +
+        [(sj.h_dispo, sj.h_deadline,
+          (time_matrix[0][1+N_c+2*si]
+           + time_matrix[1+N_c+2*si][2+N_c+2*si]
+           + time_matrix[2+N_c+2*si][0]) / SCALE)
+         for si, sj in enumerate(super_jobs)]
+    )
 
-        # Plage horaire du job
-        tw_open  = time_windows[pickup_node][0] / SCALE   # minutes
-        tw_close = time_windows[pickup_node][1] / SCALE
-        plage    = max(tw_close - tw_open, RESOLUTION)
-
-        # Contribution lissée : duree_min répartie uniformément sur la plage
-        contrib_par_slot = (duree_min / plage) * RESOLUTION
-
-        slot_start = max(0, int((tw_open  - h_debut) / RESOLUTION))
-        slot_end   = min(slots - 1, int((tw_close - h_debut) / RESOLUTION))
-        for s in range(slot_start, slot_end + 1):
-            charge_par_slot[s] += contrib_par_slot
+    for tw_open, tw_close, duree_min in all_items:
+        plage  = max(tw_close - tw_open, RESOLUTION)
+        contrib = (duree_min / plage) * RESOLUTION
+        slot_s  = max(0, int((tw_open  - h_debut) / RESOLUTION))
+        slot_e  = min(slots-1, int((tw_close - h_debut) / RESOLUTION))
+        for s in range(slot_s, slot_e+1):
+            charge_par_slot[s] += contrib
 
     pic_charge     = max(charge_par_slot) if charge_par_slot else 1.0
-    # pic_charge = charge cumulée sur un créneau de RESOLUTION minutes
-    # Nmax = combien de véhicules simultanés pour absorber ce pic
     nmax_theorique = max(1, math.ceil(pic_charge / RESOLUTION))
-    nmax           = min(n_jobs, nmax_theorique * 2)
+    nmax           = min(1 + N_c + N_s, nmax_theorique * 2)
 
-    # n_vehicles = nmax est la borne haute pour l'itération de _solve_type_iteratif
-    # L'itération teste 1, 2, ..., nmax véhicules et s'arrête dès qu'une solution existe
-    n_vehicles = nmax
+    # ── Mapping nœud → job ───────────────────────────────────────────────
+    node_to_item   = [None]  # dépôt
+    node_is_simple = [False]
+    jobs_list      = []      # liste plate des jobs (pour construire_postes)
+
+    for i, j in enumerate(jobs_complets):
+        node_to_item.append(('complet', i))
+        node_is_simple.append(True)
+        jobs_list.append(j)
+
+    for si, sj in enumerate(super_jobs):
+        node_to_item.extend([('super_pickup', si), ('super_delivery', si)])
+        node_is_simple.extend([False, False])
+        for j in sj.jobs:
+            jobs_list.append(j)
 
     return {
         'n_nodes'            : n_nodes,
-        'n_vehicles'         : n_vehicles,
+        'n_vehicles'         : nmax,
         'nmax'               : nmax,
         'nmax_theorique'     : nmax_theorique,
         'pic_charge_min'     : round(pic_charge, 1),
@@ -749,19 +813,20 @@ def _build_model_data(
         'time_windows'       : time_windows,
         'pickups_deliveries' : pickups_deliveries,
         'demands'            : demands,
-        'vehicle_capacity'   : capa_v,
+        'vehicle_capacity'   : vehicle_capacity,
         'max_poste_sc'       : _sc(amplitude_max),
-        'pause_seuil_sc'     : _sc(pause_seuil),
-        'pause_duree_sc'     : _sc(pause_duree),
         'h_debut_sc'         : _sc(h_debut),
         'h_fin_sc'           : _sc(h_fin),
-        'jobs'               : jobs_v,
+        'jobs'               : jobs_list,
+        'jobs_complets'      : jobs_complets,
+        'super_jobs'         : super_jobs,
         'node_sites'         : node_sites,
-        'node_to_job'        : node_to_job,
-        'node_is_pickup'     : node_is_pickup,
+        'node_to_item'       : node_to_item,
+        'node_is_pickup'     : node_is_pickup_loc,
+        'node_is_simple'     : node_is_simple,
         'propre_sale_par_noeud': propre_sale_par_noeud,
         'temps_nettoyage_sc' : _sc(temps_nettoyage),
-        'service_times'      : service_times,
+        'service_times'      : [0] * n_nodes,
         'SCALE'              : SCALE,
     }
 
@@ -1888,8 +1953,31 @@ def run_flux_optimization(
             continue
 
         _log(f"🚛 Optimisation {v_type} ({len(jobs_v)} jobs)...", "info")
+
+        # ── Séparation complets / incomplets + regroupement ──────────────
+        # Capacité utile = floor(capa_brute × taux)
+        taux_r     = params_logistique.get('securite_remplissage', 0.85)
+        capa_brute = max(
+            (capacites.get(_norm(v_type), {}).get(j.type_contenant, 1) for j in jobs_v),
+            default=1
+        )
+        capa_utile_v = max(1, math.floor(capa_brute * taux_r))
+
+        jobs_complets, super_jobs = preparer_liste_unifiee(jobs_v, capa_utile_v)
+
+        nb_complets   = len(jobs_complets)
+        nb_superjobs  = len(super_jobs)
+        nb_groupes    = sum(1 for sj in super_jobs if len(sj.jobs) > 1)
+        _log(
+            f"  📦 {nb_complets} job(s) complet(s) + "
+            f"{nb_superjobs} super-job(s) incomplet(s) "
+            f"({nb_groupes} regroupement(s))",
+            "info"
+        )
+
+        # ── Construire le modèle unifié ──────────────────────────────────
         data = _build_model_data(
-            jobs_v, matrice_duree, capacites,
+            jobs_complets, super_jobs, matrice_duree, capacites,
             params_logistique, v_type, alea,
             df_vehicules=df_vehicules,
             df_sites=df_sites,
@@ -1899,7 +1987,6 @@ def run_flux_optimization(
             continue
 
         data_par_type[v_type] = data
-        # Recherche itérative : 1 → nmax véhicules
         res = _solve_type_iteratif(data, time_limit_seconds=time_limit_seconds)
 
         if res is not None:
