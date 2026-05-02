@@ -1315,20 +1315,38 @@ def construire_postes(
             ):
                 if node == data['depot']:
                     continue
-                job_idx = data['node_to_job'][node]
-                if job_idx is None:
+                item = data['node_to_item'][node]
+                if item is None:
                     continue
-                job = data['jobs'][job_idx]
-                missions.append({
-                    'heure'         : t,
-                    'site'          : site,
-                    'job_id'        : job.job_id,
-                    'flux_id'       : job.flux_id,
-                    'type_contenant': job.type_contenant,
-                    'nb_contenants' : job.nb_contenants,
-                    'is_pickup'     : data['node_is_pickup'][node],
-                    'propre_sale'   : job.propre_sale,
-                })
+                kind, idx = item
+                is_pickup = data['node_is_pickup'][node]
+
+                if kind == 'complet':
+                    job = data['jobs_complets'][idx]
+                    missions.append({
+                        'heure'         : t,
+                        'site'          : site,
+                        'job_id'        : job.job_id,
+                        'flux_id'       : job.flux_id,
+                        'type_contenant': job.type_contenant,
+                        'nb_contenants' : job.nb_contenants,
+                        'is_pickup'     : True,
+                        'propre_sale'   : job.propre_sale,
+                    })
+                elif kind in ('super_pickup', 'super_delivery'):
+                    sj = data['super_jobs'][idx]
+                    # Pour un super-job : on liste tous les jobs qui le composent
+                    for job in sj.jobs:
+                        missions.append({
+                            'heure'         : t,
+                            'site'          : site,
+                            'job_id'        : job.job_id,
+                            'flux_id'       : job.flux_id,
+                            'type_contenant': job.type_contenant,
+                            'nb_contenants' : job.nb_contenants,
+                            'is_pickup'     : is_pickup,
+                            'propre_sale'   : job.propre_sale,
+                        })
             missions.sort(key=lambda x: x['heure'])
 
             # Paramètres RH
