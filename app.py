@@ -352,14 +352,6 @@ elif selected == "Synthèse transport":
                     type_choisi, 
                     liste_sj_jour  # <--- Ajout du 3ème argument indispensable
                 )
-                # DEBUG TEMPORAIRE - à supprimer après diagnostic
-                with st.expander("🔍 Debug historique PL 19T_3"):
-                    for p in postes_jour:
-                        if p.id_poste == "PL 19T_3":
-                            st.write(f"h_debut_service_actuel : {p.h_debut_service_actuel}")
-                            st.write(f"amplitude_max : {p.amplitude_max}")
-                            st.write(f"temps_passation : {p.temps_passation}")
-                            st.dataframe(pd.DataFrame(p.historique))
 
                 
                 
