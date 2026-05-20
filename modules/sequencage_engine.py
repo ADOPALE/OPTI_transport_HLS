@@ -169,7 +169,14 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                         # Pas encore l'heure : retour en DISPONIBLE pour capter un job
                         p.etat = 'DISPONIBLE'
             elif p.etat == 'EN_MISSION':
-                p.position_actuelle, p.couloir_actuel, p.etat, p.job_en_cours = p.job_en_cours.points_arrivee[-1], get_couloir_id(p.job_en_cours), 'DISPONIBLE', None
+                p.position_actuelle = p.job_en_cours.points_arrivee[-1]
+                p.couloir_actuel = get_couloir_id(p.job_en_cours)
+                p.job_en_cours = None
+                if p.marge_inter_job > 0:
+                    p.etat, p.temps_restant_etat = 'INTER_JOB', p.marge_inter_job
+                    p.enregistrer(minute, "INTER_JOB", details=f"Marge inter-job: {p.marge_inter_job}min")
+                else:
+                    p.etat = 'DISPONIBLE' 
             elif p.etat == 'EN_PAUSE': p.etat = 'DISPONIBLE'
             elif p.etat == 'INTER_JOB': p.etat = 'DISPONIBLE'
             elif p.etat == 'FIN_DE_SERVICE' and p.temps_restant_etat == 0 :
