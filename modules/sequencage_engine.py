@@ -188,26 +188,50 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
             if p.etat == 'DISPONIBLE':
                 temps_trav = minute - p.h_debut_service_actuel
                 dist_ret = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
-                besoin_p, besoin_f = (temps_trav >= p.amplitude_max // 2 and not p.pause_faite), (temps_trav >= p.amplitude_max - dist_ret - p.temps_passation)
-                
-                if besoin_f or besoin_p:
+                h_fin_poste = p.h_debut_service_actuel + p.amplitude_max
+                # Heure limite pour démarrer un nouveau job :
+                # minute + durée_job + retour_dépôt <= h_fin_poste - temps_passation
+                h_limite_job = h_fin_poste - p.temps_passation
+
+                # ── Pause obligatoire ─────────────────────────────────────────
+                besoin_p = (temps_trav >= p.amplitude_max // 2 and not p.pause_faite)
+                if besoin_p:
                     nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
                     best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants, est_premier_job=(p.couloir_actuel is None))
-                    if best_sj and (minute + best_sj.poids_total + dist_ret) <= (p.h_debut_service_actuel + p.amplitude_max - p.temps_passation):
+                    if best_sj and (minute + best_sj.poids_total + dist_ret) <= h_limite_job:
                         affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                         continue
+                    # Pas de job qui rentre : rentrer au dépôt puis pause
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', dist_ret
-                        p.enregistrer(minute, "RETOUR_DEPOT", details="Force Impératif")
+                        p.enregistrer(minute, "RETOUR_DEPOT", details="Retour Pause")
                     else:
-                        p.etat, p.temps_restant_etat = ('FIN_DE_SERVICE' if besoin_f else 'EN_PAUSE'), (p.temps_passation if besoin_f else p.duree_pause)
-                        if not besoin_f: p.pause_faite = True
+                        p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
+                        p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
                     continue
-                elif dispos:
+
+                # ── Chercher un job disponible qui rentre dans le poste ───────
+                if dispos:
                     nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
                     best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants)
-                    if best_sj and (minute + best_sj.poids_total + dist_ret) <= (p.h_debut_service_actuel + p.amplitude_max):
+                    if best_sj and (minute + best_sj.poids_total + dist_ret) <= h_limite_job:
                         affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                        continue
+
+                # ── Aucun job ne rentre : rentrer au dépôt et attendre la fin ─
+                # Le poste durera exactement amplitude_max (FIN_DE_SERVICE en fin)
+                if p.position_actuelle != p.stationnement_initial:
+                    p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', dist_ret
+                    p.enregistrer(minute, "RETOUR_DEPOT", details="Retour fin de poste")
+                else:
+                    # Au dépôt, attendre : FIN_DE_SERVICE uniquement à h_fin_poste
+                    temps_attente = max(1, int(h_fin_poste - p.temps_passation - minute))
+                    if minute + temps_attente + p.temps_passation >= h_fin_poste:
+                        p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
+                        p.enregistrer(minute, "PASSATION_FIN")
+                    else:
+                        # Attente active : rester DISPONIBLE jusqu'à h_limite_job
+                        pass  # on reste DISPONIBLE, la boucle repassera
 
         if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM'] for p in postes): return postes
         minute += 1
