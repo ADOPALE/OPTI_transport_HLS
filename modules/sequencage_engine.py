@@ -171,6 +171,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
             elif p.etat == 'EN_MISSION':
                 p.position_actuelle, p.couloir_actuel, p.etat, p.job_en_cours = p.job_en_cours.points_arrivee[-1], get_couloir_id(p.job_en_cours), 'DISPONIBLE', None
             elif p.etat == 'EN_PAUSE': p.etat = 'DISPONIBLE'
+            elif p.etat == 'INTER_JOB': p.etat = 'DISPONIBLE'
             elif p.etat == 'FIN_DE_SERVICE' and p.temps_restant_etat == 0 :
                 p.etat, p.h_debut_service_actuel, p.pause_faite, p.couloir_actuel = 'INACTIF', None, False, None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
@@ -239,7 +240,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     p.enregistrer(minute, "PASSATION_FIN")
                 # Sinon : on reste DISPONIBLE, la boucle repassera au prochain job éventuel
 
-        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM'] for p in postes): return postes
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB'] for p in postes): return postes
         minute += 1
     return None
 
