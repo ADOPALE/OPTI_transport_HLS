@@ -150,14 +150,20 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                         p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
                         p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
                         continue
-                    temps_trav = minute - p.h_debut_service_actuel
-                    if temps_trav >= p.amplitude_max - p.temps_passation:
-                        p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
-                        p.enregistrer(minute, "PASSATION_FIN")
-                    elif not p.pause_faite:
+                    # h_fin_poste exacte = début service + amplitude max
+                    h_fin_poste = p.h_debut_service_actuel + p.amplitude_max
+                    h_passation = h_fin_poste - p.temps_passation
+                    if not p.pause_faite:
+                        # Pause obligatoire avant de reprendre
                         p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
                         p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
-                    else: p.etat = 'DISPONIBLE'
+                    elif minute >= h_passation:
+                        # Heure de passation/nettoyage atteinte → fin de poste
+                        p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
+                        p.enregistrer(minute, "PASSATION_FIN")
+                    else:
+                        # Pas encore l'heure : retour en DISPONIBLE pour capter un job
+                        p.etat = 'DISPONIBLE'
             elif p.etat == 'EN_MISSION':
                 p.position_actuelle, p.couloir_actuel, p.etat, p.job_en_cours = p.job_en_cours.points_arrivee[-1], get_couloir_id(p.job_en_cours), 'DISPONIBLE', None
             elif p.etat == 'EN_PAUSE': p.etat = 'DISPONIBLE'
