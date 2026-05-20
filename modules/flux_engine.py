@@ -512,12 +512,26 @@ def _build_model_data(
         return {}
 
     # Capacité du véhicule pour OR-Tools
-    # = charge max d'un seul job (nb_contenants max)
-    # Dans un PDPTW, la dimension capacité représente la charge COURANTE
-    # du véhicule : +nb au pickup, -nb à la delivery.
-    # Le cumul ne dépasse jamais le max des nb_contenants d'un job individuel
-    # car chaque pickup est livré avant que le véhicule soit plein à nouveau.
-    capa_v = max((j.nb_contenants for j in jobs_v), default=1)
+    # CORRECTION : on utilise la vraie capacité physique du véhicule (issue de
+    # precalculer_capacites) et non le max des quantités d'un job.
+    # L'ancienne logique limitait OR-Tools à porter autant de contenants que
+    # le plus grand job, ce qui rendait infaisables les jobs plus lourds ET
+    # empêchait de grouper plusieurs jobs sur le même trajet.
+    taux_rempl_capa = params_logistique.get('securite_remplissage', 0.85)
+    capa_physique = capacites.get(v_type, {})
+    # On cherche la capacité pour le type de contenant le plus fréquent
+    # parmi les jobs de ce type de véhicule (sécurité si mix de contenants)
+    from collections import Counter as _Counter
+    type_cont_dominant = (_Counter(j.type_contenant for j in jobs_v).most_common(1) or [('', 0)])[0][0]
+    capa_v_physique = capa_physique.get(type_cont_dominant, 0)
+    if capa_v_physique <= 0:
+        # Fallback : max des capacités disponibles pour ce véhicule
+        capa_v_physique = max(capa_physique.values(), default=1)
+    # Capacité utile = capacité physique × taux de remplissage, au minimum le max des jobs
+    capa_v = max(
+        max((j.nb_contenants for j in jobs_v), default=1),
+        math.floor(capa_v_physique * taux_rempl_capa)
+    )
 
     # Construction des nœuds
     # Index 0 = dépôt
@@ -551,8 +565,19 @@ def _build_model_data(
     for j in jobs_v:
         # Pickup : entre h_dispo du flux et deadline
         time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
-        # Delivery : entre h_dispo et deadline (le pickup doit précéder)
-        time_windows.append((_sc(j.h_dispo), _sc(j.h_deadline)))
+        # CORRECTION : la fenêtre de delivery ne peut pas commencer à h_dispo,
+        # car le pickup n'est pas encore effectué à cet instant.
+        # On estime la durée minimale pickup→delivery (trajet + offset manutention)
+        # pour décaler l'ouverture de la fenêtre delivery en conséquence.
+        # Sans ça, OR-Tools déclare le modèle INFEASIBLE car le cumul de temps
+        # dépasse la fenêtre [h_dispo, h_deadline] dès la première contrainte PD.
+        # On utilise un délai minimal conservateur = 5 min (trajet très court)
+        # pour ne pas sur-contraindre les livraisons locales.
+        delai_min_delivery = _sc(5.0)  # 5 minutes minimum entre pickup et delivery
+        time_windows.append((
+            min(_sc(j.h_dispo) + delai_min_delivery, _sc(j.h_deadline)),
+            _sc(j.h_deadline)
+        ))
 
 
     # ── Offset inter-job calculé depuis les paramètres réels ────────────────
@@ -1722,15 +1747,27 @@ def _solve_type_iteratif(
         _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
         return sol
 
-    # ── Filet de sécurité : ceil(Nmax × 1.5) ───────────────────────────────
+    # ── Filet de sécurité 1 : ceil(Nmax × 1.5) ─────────────────────────────
     n_v2 = min(n_jobs, max(1, math.ceil(nmax_theorique * 1.5)))
     if n_v2 > n_v:
-        _log(f"  ↳ Échec avec {n_v}, filet : {n_v2} véhicule(s)...", "warning")
+        _log(f"  ↳ Échec avec {n_v}, filet 1 : {n_v2} véhicule(s)...", "warning")
         sol = _solve_type({**data, 'n_vehicles': n_v2}, time_limit_seconds=time_limit_seconds)
         if sol is not None:
             _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
             return sol
         n_v = n_v2
+
+    # ── Filet de sécurité 2 : n_jobs véhicules (1 par job) ─────────────────
+    # CORRECTION : quand nmax_theorique est faible (peu de jobs concentrés sur
+    # un créneau), × 1.5 reste insuffisant. OR-Tools a besoin d'explorer
+    # l'espace avec suffisamment de véhicules même si la solution finale
+    # n'en utilisera que quelques-uns. On monte jusqu'à n_jobs comme dernier recours.
+    if n_jobs > n_v:
+        _log(f"  ↳ Échec avec {n_v}, filet 2 (max) : {n_jobs} véhicule(s)...", "warning")
+        sol = _solve_type({**data, 'n_vehicles': n_jobs}, time_limit_seconds=time_limit_seconds)
+        if sol is not None:
+            _log(f"  ✅ Solution trouvée avec {sol['n_vehicules']} véhicule(s) utilisé(s)", "success")
+            return sol
 
     # ── Diagnostic ───────────────────────────────────────────────────────────
     _log(f"  ❌ Aucune solution trouvée.", "error")
