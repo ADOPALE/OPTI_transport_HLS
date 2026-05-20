@@ -188,7 +188,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
             if p.etat == 'DISPONIBLE':
                 temps_trav = minute - p.h_debut_service_actuel
                 dist_ret = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
-                besoin_p, besoin_f = (temps_trav >= 70 and not p.pause_faite), (temps_trav >= p.amplitude_max - params_logistique.get('duree_max_superjob', 60))
+                besoin_p, besoin_f = (temps_trav >= p.amplitude_max // 2 and not p.pause_faite), (temps_trav >= p.amplitude_max - dist_ret - p.temps_passation)
                 
                 if besoin_f or besoin_p:
                     nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
