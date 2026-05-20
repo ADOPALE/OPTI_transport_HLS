@@ -151,6 +151,10 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                         p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
                         continue
                     # h_fin_poste exacte = début service + amplitude max
+                    # Garde : si h_debut_service_actuel est None (cas anormal), on reste disponible
+                    if p.h_debut_service_actuel is None:
+                        p.etat = 'DISPONIBLE'
+                        continue
                     h_fin_poste = p.h_debut_service_actuel + p.amplitude_max
                     h_passation = h_fin_poste - p.temps_passation
                     if not p.pause_faite:
@@ -225,19 +229,15 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                         continue
 
                 # ── Aucun job ne rentre : rentrer au dépôt et attendre la fin ─
-                # Le poste durera exactement amplitude_max (FIN_DE_SERVICE en fin)
+                # FIN_DE_SERVICE déclenché uniquement quand minute >= h_limite_job
                 if p.position_actuelle != p.stationnement_initial:
                     p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', dist_ret
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour fin de poste")
-                else:
-                    # Au dépôt, attendre : FIN_DE_SERVICE uniquement à h_fin_poste
-                    temps_attente = max(1, int(h_fin_poste - p.temps_passation - minute))
-                    if minute + temps_attente + p.temps_passation >= h_fin_poste:
-                        p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
-                        p.enregistrer(minute, "PASSATION_FIN")
-                    else:
-                        # Attente active : rester DISPONIBLE jusqu'à h_limite_job
-                        pass  # on reste DISPONIBLE, la boucle repassera
+                elif minute >= h_limite_job:
+                    # C'est l'heure : passation/nettoyage, fin exacte à h_fin_poste
+                    p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
+                    p.enregistrer(minute, "PASSATION_FIN")
+                # Sinon : on reste DISPONIBLE, la boucle repassera au prochain job éventuel
 
         if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM'] for p in postes): return postes
         minute += 1
