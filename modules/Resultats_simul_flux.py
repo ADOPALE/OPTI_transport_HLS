@@ -1,7 +1,3 @@
-
-
-
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -97,13 +93,16 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
         },
         title=f"📅 Planning Opérationnel : {v_type_selectionne}",
         color_discrete_map={
-            "EN_MISSION": "#1f77b4",
-            "EN_TRAJET_VIDE": "#ff7f0e",
-            "DISPONIBLE": "#2ca02c",
-            "INTERMISSION": "#7f7f7f", # Ajout pour tes nouveaux états
-            "PRISE_POSTE": "#9467bd",
-            "PASSATION_FIN": "#8c564b",
-            "RETOUR_DEPOT": "#e377c2"
+            "EN_MISSION"    : "#1f77b4",   # Bleu — travail productif
+            "EN_TRAJET_VIDE": "#ff7f0e",   # Orange — approche
+            "INTER_JOB"     : "#aec7e8",   # Bleu clair — marge inter-job
+            "DISPONIBLE"    : "#2ca02c",   # Vert — attente active
+            "INTERMISSION"  : "#7f7f7f",   # Gris
+            "PRISE_POSTE"   : "#9467bd",   # Violet — admin/prépa
+            "PASSATION_FIN" : "#8c564b",   # Marron — fin de poste
+            "RETOUR_DEPOT"  : "#e377c2",   # Rose — retour dépôt
+            "EN_PAUSE"      : "#d62728",   # Rouge — pause
+            "VEHICULE_LIBERE": "#bcbd22",  # Jaune-vert — libéré
         }
     )
 
