@@ -70,6 +70,7 @@ class PosteChauffeur:
         self.temps_passation = params_rh.get('temps_fixes_fin', 15)
         self.temps_prise = params_rh.get('temps_fixes_prise', 15)
         self.vehicule_deja_affecte = False
+        self.marge_inter_job = 0  # initialisée depuis params_logistique
         
     def enregistrer(self, minute, activite, sj=None, details=""):
         sj_id = sj.super_job_id if sj else "N/A"
@@ -125,7 +126,10 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
     filtre = df_vehicules[df_vehicules['Types'] == v_type]
     depot_initial = filtre['Stationnement initial'].iloc[0] if not filtre.empty else "HSJ"
 
+    marge_inter_job = params_logistique.get('marge_inter_job', 0)
     postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I_matin)]
+    for p in postes:
+        p.marge_inter_job = marge_inter_job
     jobs_restants = list(liste_sj_type)
     minute = h_start
 
