@@ -304,9 +304,8 @@ def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, nb_Jobs, 
 # =================================================================
 
 def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
-    postes_complets       = []
-    sj_non_traites_global = []
-    tensions_test         = [0.2, 0.4, 0.6, 0.8, 1.0]
+    postes_complets = []
+    tensions_test = [0.2, 0.4, 0.6, 0.8, 1.0]
     
     for v_type, val_max in n_max_dict.items():
         pic_charge = max(val_max) if isinstance(val_max, list) else val_max
@@ -330,10 +329,8 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
                     # Si on est sur le même im, on ne teste pas les iam supérieurs au min déjà trouvé
                     if im == min_im and iam > min_iam: break
                     
-                    res, sj_non_traites = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
-                    if sj_non_traites:
-                        sj_non_traites_global = sj_non_traites
-
+                    res = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+                    
                     if res:
                         # Calcul de la performance de cette solution
                         trav_utile, ampl_conso = 0, 0
@@ -374,7 +371,7 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         else:
             st.error(f"❌ **{v_type}** : Échec de planification.")
 
-    return {"succes": len(postes_complets) > 0, "postes": postes_complets, "sj_non_traites": sj_non_traites_global}
+    return {"succes": len(postes_complets) > 0, "postes": postes_complets}
 
 
 
