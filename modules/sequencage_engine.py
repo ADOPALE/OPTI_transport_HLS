@@ -251,9 +251,9 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     p.enregistrer(minute, "PASSATION_FIN")
                 # Sinon : on reste DISPONIBLE, la boucle repassera au prochain job éventuel
 
-        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB'] for p in postes): return postes
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB'] for p in postes): return postes, []
         minute += 1
-    return None
+    return None, jobs_restants
 
 def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_travail):
     p.job_en_cours = sj
@@ -288,18 +288,21 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         max_occ = -1
 
         for tension in tensions_test:
-            for im in range(n_depart, n_limite + 1):
-                # Si on a déjà trouvé une solution avec un im plus petit, 
-                # on ne teste pas les im supérieurs (Optimisation)
+            for im in range(n_depart, min(n_limite, len(jobs_v)) + 1):
+                # Si on a déjà trouvé une solution complète avec un im plus petit,
+                # inutile de tester les im supérieurs
                 if im > min_im: break 
                 
                 for iam in range(1, im + 1):
                     # Si on est sur le même im, on ne teste pas les iam supérieurs au min déjà trouvé
                     if im == min_im and iam > min_iam: break
                     
-                    res = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
-                    
-                    if res:
+                    res, jobs_nt = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+
+                    if res is not None and len(jobs_nt) > 0:
+                        pass  # solution partielle rejetée silencieusement
+
+                    if res is not None and len(jobs_nt) == 0:
                         # Calcul de la performance de cette solution
                         trav_utile, ampl_conso = 0, 0
                         for p in res:
