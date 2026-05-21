@@ -253,38 +253,6 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
 
         if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB'] for p in postes): return postes
         minute += 1
-    # ── Diagnostic des jobs non traités ─────────────────────────────────────
-    if jobs_restants:
-        import streamlit as st
-        with st.expander(f"🔍 {len(jobs_restants)} SuperJob(s) non traités — détail", expanded=True):
-            for sj in jobs_restants:
-                h_dispo    = sj.h_dispo_min
-                h_deadline = min(to_min(j.h_deadline) for j in sj.liste_jobs)
-                st.markdown(
-                    f"**SJ {sj.liste_jobs[0].flux_id}** | "
-                    f"🚛 {sj.v_type} | "
-                    f"⏰ {int(h_dispo//60):02d}h{int(h_dispo%60):02d} → "
-                    f"{int(h_deadline//60):02d}h{int(h_deadline%60):02d} | "
-                    f"⏱️ {sj.poids_total:.0f} min"
-                )
-                rows = []
-                for j in sj.liste_jobs:
-                    orig  = getattr(j, 'origin',      getattr(j, 'origine',      '?'))
-                    dest  = getattr(j, 'destination',  '?')
-                    qte   = getattr(j, 'quantite',     getattr(j, 'nb_contenants', '?'))
-                    cont  = getattr(j, 'type_contenant', '')
-                    h_d   = to_min(j.h_dispo)
-                    h_dl  = to_min(j.h_deadline)
-                    rows.append({
-                        'Origine'    : orig,
-                        'Destination': dest,
-                        'Contenant'  : cont,
-                        'Qté'        : qte,
-                        'H dispo'    : f"{int(h_d//60):02d}h{int(h_d%60):02d}",
-                        'H deadline' : f"{int(h_dl//60):02d}h{int(h_dl%60):02d}",
-                    })
-                import pandas as pd
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     return None
 
 def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_travail):
