@@ -254,16 +254,26 @@ elif selected == "Synthèse transport":
             except: return "Err"
 
         # --- BOUTON DE LANCEMENT GLOBAL ---
-        if st.button("🚀 Lancer la simulation hebdomadaire (Pipe Complet)", type="primary", use_container_width=True):
+        jours_disponibles = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
+        jours_selectionnes = st.multiselect(
+            "📅 Jours à simuler",
+            options=jours_disponibles,
+            default=["Lundi"],
+            help="Sélectionnez un ou plusieurs jours à simuler."
+        )
+
+        if st.button("🚀 Lancer la simulation (Pipe Complet)", type="primary", use_container_width=True):
+            if not jours_selectionnes:
+                st.warning("⚠️ Sélectionnez au moins un jour.")
+                st.stop()
             if matrice_duree is None:
                 st.error("⚠️ Matrice de temps introuvable.")
             else:
                 try:
-                    jours_semaine = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"]
                     resultats_hebdo = []
                     dict_detail_sj = {}
-                    dict_postes_par_jour = {} # Pour stocker les plannings
-                    
+                    dict_postes_par_jour = {}
+
                     from modules.sim_engine import (
                         preparer_flux_complets_du_jour, 
                         tunnel_consolidation_flux, 
@@ -271,8 +281,8 @@ elif selected == "Synthèse transport":
                     )
                     from modules.sequencage_engine import trouver_meilleure_configuration_journee
 
-                    with st.status("Exécution du Pipe Logistique...", expanded=True) as status:
-                        for jour in jours_semaine[:1]:
+                    with st.status(f"Exécution du Pipe Logistique ({len(jours_selectionnes)} jour(s))...", expanded=True) as status:
+                        for jour in jours_selectionnes:
                             st.write(f"🔄 Traitement du **{jour}**...")
                             
                             # A. Préparation & Consolidation
@@ -359,5 +369,3 @@ elif selected == "Synthèse transport":
 
     else:
         st.warning("⚠️ Veuillez générer la 'Séquence Type' avant de lancer cette synthèse.")
-
-
