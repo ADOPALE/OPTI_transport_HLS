@@ -299,6 +299,10 @@ elif selected == "Synthèse transport":
                     if res:
                         postes = res["postes"]
                         dict_postes_par_jour[jour] = postes
+                        # Stocker les SJ non traités pour affichage persistant
+                        sj_nt = res.get("sj_non_traites", [])
+                        if sj_nt:
+                            st.session_state.setdefault("sj_non_traites_par_jour", {})[jour] = sj_nt
 
                         # Compter par type de véhicule
                         types_v = {}
@@ -349,6 +353,41 @@ elif selected == "Synthèse transport":
     st.dataframe(st.session_state['recap_hebdo'], use_container_width=True, hide_index=True)
 
     # ── Détail par jour ───────────────────────────────────────────────────
+    # ── Affichage persistant des SJ non traités ─────────────────────────────
+    sj_nt_global = st.session_state.get("sj_non_traites_par_jour", {})
+    if sj_nt_global:
+        st.divider()
+        st.subheader("⚠️ SuperJobs non traités")
+        for jour_nt, sj_liste in sj_nt_global.items():
+            with st.expander(f"🔍 {jour_nt} — {len(sj_liste)} SuperJob(s) non traité(s)", expanded=True):
+                for sj in sj_liste:
+                    h_dispo    = sj.h_dispo_min
+                    h_deadline = min(to_min(j.h_deadline) for j in sj.liste_jobs)
+                    st.markdown(
+                        f"**SJ flux {sj.liste_jobs[0].flux_id}** | "
+                        f"🚛 {sj.v_type} | "
+                        f"⏰ {int(h_dispo//60):02d}h{int(h_dispo%60):02d}"
+                        f" → {int(h_deadline//60):02d}h{int(h_deadline%60):02d} | "
+                        f"⏱️ {sj.poids_total:.0f} min"
+                    )
+                    rows_nt = []
+                    for j in sj.liste_jobs:
+                        orig = getattr(j, 'origin', getattr(j, 'origine', '?'))
+                        dest = getattr(j, 'destination', '?')
+                        qte  = getattr(j, 'quantite', getattr(j, 'nb_contenants', '?'))
+                        cont = getattr(j, 'type_contenant', '')
+                        h_d  = to_min(j.h_dispo)
+                        h_dl = to_min(j.h_deadline)
+                        rows_nt.append({
+                            'Origine'    : orig,
+                            'Destination': dest,
+                            'Contenant'  : cont,
+                            'Qté'        : qte,
+                            'H dispo'    : f"{int(h_d//60):02d}h{int(h_d%60):02d}",
+                            'H deadline' : f"{int(h_dl//60):02d}h{int(h_dl%60):02d}",
+                        })
+                    st.dataframe(pd.DataFrame(rows_nt), use_container_width=True, hide_index=True)
+
     st.divider()
     st.subheader("3️⃣ Détail opérationnel par jour")
 
