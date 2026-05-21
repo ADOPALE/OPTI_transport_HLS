@@ -313,14 +313,16 @@ elif selected == "Synthèse transport":
                             km_par_type[vt] = km_par_type.get(vt, 0)  # km calculés si dispo
 
                         # Vérifier flux traités
-                        sj_traites = set()
+                        # SJ_ID dans l'historique = super_job_id (pas flux_id)
+                        sj_ids_traites = set()
                         for p in postes:
                             for ev in p.historique:
                                 if ev["Activite"] == "EN_MISSION" and ev["SJ_ID"] != "N/A":
-                                    sj_traites.add(ev["SJ_ID"])
-                        flux_ids_total  = {sj.liste_jobs[0].flux_id for sj in liste_sj_jour}
-                        flux_non_traites = flux_ids_total - sj_traites
-                        couverture = f"✅ 100%" if not flux_non_traites else f"⚠️ {len(flux_non_traites)} flux non traités"
+                                    sj_ids_traites.add(ev["SJ_ID"])
+                        # Comparer avec les super_job_id de la liste
+                        sj_ids_total     = {sj.super_job_id for sj in liste_sj_jour}
+                        sj_non_traites_ids = sj_ids_total - sj_ids_traites
+                        couverture = f"✅ 100%" if not sj_non_traites_ids else f"⚠️ {len(sj_non_traites_ids)} SJ non traités"
 
                         row = {"Jour": jour,
                                "Flux couverts": couverture,
