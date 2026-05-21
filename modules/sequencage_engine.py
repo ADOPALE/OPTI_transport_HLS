@@ -282,10 +282,17 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         if not jobs_v: continue
             
         meilleure_sol = None
-        # Initialisation des compteurs de référence
         min_im = float('inf')
         min_iam = float('inf')
         max_occ = -1
+
+        # ── Diagnostic Nmax ───────────────────────────────────────────────
+        print(
+            f"[NMAX] {v_type} | {len(jobs_v)} SuperJobs | "
+            f"pic_charge={pic_charge:.1f} | "
+            f"n_depart={n_depart} | n_limite={n_limite} | "
+            f"borne_max_effective={min(n_limite, len(jobs_v))}"
+        )
 
         for tension in tensions_test:
             for im in range(n_depart, min(n_limite, len(jobs_v)) + 1):
@@ -300,9 +307,16 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
                     res, jobs_nt = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
 
                     if res is not None and len(jobs_nt) > 0:
-                        pass  # solution partielle rejetée silencieusement
+                        print(
+                            f"  [REJET] im={im} iam={iam} t={tension:.1f} → "
+                            f"partielle : {len(jobs_v)-len(jobs_nt)}/{len(jobs_v)} traités, "
+                            f"{len(jobs_nt)} non traités"
+                        )
+                    elif res is None:
+                        print(f"  [NONE]  im={im} iam={iam} t={tension:.1f} → aucune solution")
 
                     if res is not None and len(jobs_nt) == 0:
+                        print(f"  [OK]    im={im} iam={iam} t={tension:.1f} → complète !")
                         # Calcul de la performance de cette solution
                         trav_utile, ampl_conso = 0, 0
                         for p in res:
