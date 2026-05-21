@@ -333,15 +333,17 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
                         # Ici on break iam car on cherche le iam MIN pour ce im.
                         break 
 
+        # Si solution incomplète, incrémenter im_courant et réessayer
+        if not solution_complete:
+            im_courant += 1
+            st.info(f"  ↳ {v_type} : solution incomplète, on essaie avec {im_courant} véhicule(s)...")
+        
         if meilleure_sol:
             st.success(f"✅ **{v_type}** : Optimisé (Im:{min_im}, Iam:{min_iam}, Occ:{max_occ:.1%})")
             postes_complets.extend(meilleure_sol)
-        else:
-            st.error(f"❌ **{v_type}** : Échec de planification.")
-
-    return {"succes": len(postes_complets) > 0, "postes": postes_complets}
-
-
+        elif not solution_complete:
+            st.error(f"❌ **{v_type}** : Impossible de traiter 100% des flux.")
+        
 
 
 def afficher_controle_coherence(liste_globale_sj, postes_complets):
