@@ -273,77 +273,84 @@ def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, nb_Jobs, 
 
 def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
     postes_complets = []
-    tensions_test = [0.2, 0.4, 0.6, 0.8, 1.0]
-    
+    tensions_test   = [0.2, 0.4, 0.6, 0.8, 1.0]
+
     for v_type, val_max in n_max_dict.items():
         pic_charge = max(val_max) if isinstance(val_max, list) else val_max
-        n_depart, n_limite = max(1, math.floor(pic_charge * 0.5)), math.ceil(pic_charge * 2.5)
-        jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
+        jobs_v     = [sj for sj in liste_sj if sj.v_type == v_type]
         if not jobs_v: continue
-            
-        meilleure_sol = None
-        # Initialisation des compteurs de référence
-        min_im = float('inf')
-        min_iam = float('inf')
-        max_occ = -1
 
-        for tension in tensions_test:
-            for im in range(n_depart, n_limite + 1):
-                # Si on a déjà trouvé une solution avec un im plus petit, 
-                # on ne teste pas les im supérieurs (Optimisation)
-                if im > min_im: break 
-                
-                for iam in range(1, im + 1):
-                    # Si on est sur le même im, on ne teste pas les iam supérieurs au min déjà trouvé
-                    if im == min_im and iam > min_iam: break
-                    
-                    res = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
-                    
+        nb_jobs_v = len(jobs_v)
+        n_depart  = max(1, math.floor(pic_charge * 0.5))
+
+        meilleure_sol     = None
+        min_im            = float('inf')
+        min_iam           = float('inf')
+        max_occ           = -1
+        solution_complete = False
+        im_courant        = n_depart
+
+        st.info(f"Analyse **{v_type}** : {nb_jobs_v} blocs à planifier (départ: {im_courant} véh.)")
+
+        while not solution_complete and im_courant <= nb_jobs_v:
+            for tension in tensions_test:
+                for iam in range(1, im_courant + 1):
+                    res = simuler_faisabilite(
+                        im_courant, iam, tension, jobs_v,
+                        v_type, matrice_duree, params_logistique, df_vehicules
+                    )
+
                     if res:
-                        # Calcul de la performance de cette solution
+                        # Vérifier que la solution est COMPLÈTE (0 flux non traités)
+                        sj_traites = {
+                            ev["SJ_ID"]
+                            for p in res
+                            for ev in p.historique
+                            if ev["Activite"] == "EN_MISSION" and ev["SJ_ID"] != "N/A"
+                        }
+                        flux_couverts = sum(
+                            1 for sj in jobs_v
+                            if sj.liste_jobs and sj.liste_jobs[0].flux_id in sj_traites
+                        )
+                        if flux_couverts < nb_jobs_v:
+                            res = None  # Rejeter les solutions partielles
+
+                    if res:
+                        solution_complete = True
                         trav_utile, ampl_conso = 0, 0
                         for p in res:
                             if p.historique:
                                 ampl_conso += (p.historique[-1]['Minute_Debut'] - p.historique[0]['Minute_Debut'])
                                 for h in p.historique:
-                                    if h['Activite'] == 'EN_MISSION': 
+                                    if h['Activite'] == 'EN_MISSION':
                                         trav_utile += h.get('sj_poids', 0)
-                                    elif any(x in h['Activite'] for x in ['TRAJET_VIDE', 'RETOUR', 'INTERMISSION']): 
-                                        trav_utile += 15 # Valorisation du temps de trajet/attente
-                        
+                                    elif any(x in h['Activite'] for x in ['TRAJET_VIDE', 'RETOUR', 'INTERMISSION']):
+                                        trav_utile += 15
                         taux_occ = trav_utile / max(ampl_conso, 1)
 
-                        # LOGIQUE DE DÉCISION HIÉRARCHIQUE :
-                        # 1. Est-ce que le nombre de véhicules (im) est meilleur ?
-                        if im < min_im:
-                            min_im, min_iam, max_occ, meilleure_sol = im, iam, taux_occ, res
-                        
-                        # 2. Si im identique, est-ce que le nombre de postes (iam) est meilleur ?
-                        elif im == min_im:
-                            if iam < min_iam:
+                        if im_courant < min_im:
+                            min_im, min_iam, max_occ, meilleure_sol = im_courant, iam, taux_occ, res
+                        elif im_courant == min_im:
+                            if iam < min_iam or (iam == min_iam and taux_occ > max_occ):
                                 min_iam, max_occ, meilleure_sol = iam, taux_occ, res
-                            
-                            # 3. Si im et iam identiques, est-ce que le taux d'occupation est meilleur ?
-                            elif iam == min_iam:
-                                if taux_occ > max_occ:
-                                    max_occ, meilleure_sol = taux_occ, res
-                        
-                        # On a trouvé une solution pour ce couple (im, iam), 
-                        # on passe à la tension suivante ou on break selon besoin.
-                        # Ici on break iam car on cherche le iam MIN pour ce im.
-                        break 
+                        break
+                if solution_complete:
+                    break
 
-        # Si solution incomplète, incrémenter im_courant et réessayer
-        if not solution_complete:
-            im_courant += 1
-            st.info(f"  ↳ {v_type} : solution incomplète, on essaie avec {im_courant} véhicule(s)...")
-        
+            if not solution_complete:
+                im_courant += 1
+                st.info(f"  ↳ {v_type} : incomplet, on essaie {im_courant} véhicule(s)...")
+
+        if im_courant > nb_jobs_v and not solution_complete:
+            st.warning(f"⚠️ {v_type} : impossible de traiter 100% des flux avec {nb_jobs_v} véhicules max.")
+
         if meilleure_sol:
-            st.success(f"✅ **{v_type}** : Optimisé (Im:{min_im}, Iam:{min_iam}, Occ:{max_occ:.1%})")
+            st.success(f"✅ **{v_type}** : {min_im} véhicule(s), occ. {max_occ:.1%}")
             postes_complets.extend(meilleure_sol)
-        elif not solution_complete:
-            st.error(f"❌ **{v_type}** : Impossible de traiter 100% des flux.")
-        
+        else:
+            st.error(f"❌ **{v_type}** : Aucune solution trouvée.")
+
+    return {"succes": len(postes_complets) > 0, "postes": postes_complets}
 
 
 def afficher_controle_coherence(liste_globale_sj, postes_complets):
