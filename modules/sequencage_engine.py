@@ -1,6 +1,5 @@
 import pandas as pd
 import math
-import sys
 import streamlit as st
 from datetime import time, datetime, timedelta
 
@@ -287,35 +286,26 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
         min_iam = float('inf')
         max_occ = -1
 
-        # ── Diagnostic Nmax ───────────────────────────────────────────────
-        sys.stderr.write(f"[NMAX] {v_type} | {len(jobs_v)} SuperJobs | "
-            f"pic_charge={pic_charge:.1f} | "
-            f"n_depart={n_depart} | n_limite={n_limite} | "
-            f"borne_max_effective={min(n_limite, len(jobs_v))}"
-        )
+        st.write(f"🔍 **{v_type}** | {len(jobs_v)} SJ | pic={pic_charge:.1f} | n=[{n_depart}..{min(n_limite,len(jobs_v))}]")
 
         for tension in tensions_test:
             for im in range(n_depart, min(n_limite, len(jobs_v)) + 1):
-                # Si on a déjà trouvé une solution complète avec un im plus petit,
-                # inutile de tester les im supérieurs
-                if im > min_im: break 
-                
+                if im > min_im: break
+
                 for iam in range(1, im + 1):
-                    # Si on est sur le même im, on ne teste pas les iam supérieurs au min déjà trouvé
                     if im == min_im and iam > min_iam: break
-                    
+
                     res, jobs_nt = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
 
                     if res is not None and len(jobs_nt) > 0:
-                        sys.stderr.write(f"  [REJET] im={im} iam={iam} t={tension:.1f} → "
-                            f"partielle : {len(jobs_v)-len(jobs_nt)}/{len(jobs_v)} traités, "
-                            f"{len(jobs_nt)} non traités"
-                        )
+                        st.write(f"  ⚠️ im={im} iam={iam} t={tension:.1f} → {len(jobs_v)-len(jobs_nt)}/{len(jobs_v)} traités — rejetée")
+                        res = None
                     elif res is None:
-                        print(f"  [NONE]  im={im} iam={iam} t={tension:.1f} → aucune solution")
+                        st.write(f"  ❌ im={im} iam={iam} t={tension:.1f} → aucune solution")
+                    else:
+                        st.write(f"  ✅ im={im} iam={iam} t={tension:.1f} → complète !")
 
-                    if res is not None and len(jobs_nt) == 0:
-                        print(f"  [OK]    im={im} iam={iam} t={tension:.1f} → complète !")
+                    if res:
                         # Calcul de la performance de cette solution
                         trav_utile, ampl_conso = 0, 0
                         for p in res:
