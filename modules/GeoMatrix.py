@@ -69,7 +69,7 @@ def calculate_osrm_matrices(df_sites, progress_bar, status_text):
                         dur_matrix[i][j] = 0.0
                     else:
                         dist_matrix[i][j] = round(raw_dist[i][j] / 1000, 2)
-                        dur_matrix[i][j] = round(raw_dur[i][j] / 60 * 1.5, 1)
+                        dur_matrix[i][j] = round(raw_dur[i][j] / 60 * 15, 1)
             return dist_matrix, dur_matrix
     except Exception as e:
         st.error(f"Erreur OSRM : {e}")
