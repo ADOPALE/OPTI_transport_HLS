@@ -133,28 +133,27 @@ class SuperJob:
     def _determiner_type_logistique(self):
         origins = self.points_depart
         destinations = self.points_arrivee
-        
+
         # Test 1 : Groupage Pur (Même A -> Même B)
         if len(set(origins)) == 1 and len(set(destinations)) == 1:
             self.est_imbrique = True
             return "GROUPAGE_PUR"
-        
-        # Test 2 : Détection d'imbrication physique
-        # On regarde si on rencontre un point de départ alors qu'on n'est pas encore "vide"
-        # Pour simplifier ici : si on a plusieurs origines AVANT de finir toutes les destinations
-        # ou si le volume max transporté à un instant T dépasse la capacité d'un seul job.
-        
-        # Logique simplifiée : Est-ce une tournée de type Ramassage ou Distribution ?
+
+        # Test 2 : Distribution (une seule origine, plusieurs destinations)
         if len(set(origins)) == 1 and len(set(destinations)) > 1:
             self.est_imbrique = True
             return "DISTRIBUTION"
+
+        # Test 3 : Ramassage (plusieurs origines, une seule destination)
         if len(set(origins)) > 1 and len(set(destinations)) == 1:
             self.est_imbrique = True
             return "RAMASSAGE"
-            
-        # Si c'est un enchaînement A->B, B->C ou A->B, C->D
-        self.est_imbrique = False
-        return "CHAINAGE_SUCCESSION"
+
+        # Test 4 : Plusieurs origines ET plusieurs destinations
+        # → CHAINAGE_MIXTE : on traitera par groupes d'origines dans calculer_duree_operationnelle
+        # La matrice n'est pas encore disponible ici, la fusion des groupes se fait à la construction.
+        self.est_imbrique = True
+        return "CHAINAGE_MIXTE"
 
     def _get_params_manutention(self, site, df_vehicules, df_sites):
         """Récupère les temps T_QUAI et T_CONT spécifiques au couple Véhicule/Site."""
@@ -300,7 +299,7 @@ class SuperJob:
                 _etape(j.job_id, dest, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
                        label=f"Déchargement {j.quantite} {j.contenant} (collecté en {j.origin})")
 
-        else:  # CHAINAGE_SUCCESSION
+        elif self.type_logistique == "CHAINAGE_SUCCESSION":
             # Camion : missions indépendantes A→B | B→C | C→D …
             for i, j in enumerate(self.liste_jobs):
                 t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
@@ -325,6 +324,101 @@ class SuperJob:
                     if inter > 0:
                         _etape(j.job_id, j.destination, "TRAJET_INTER_JOBS", inter,
                                label=f"Repositionnement {j.destination} → {self.liste_jobs[i+1].origin}")
+
+        else:  # CHAINAGE_MIXTE
+            # Plusieurs origines et destinations.
+            # 1. Trier les jobs par h_dispo_min
+            # 2. Regrouper par origine commune (groupes consécutifs de même origine)
+            # 3. Fusionner deux groupes consécutifs si trajet entre leurs origines <= seuil (0 min)
+            # 4. Pour chaque groupe fusionné : chargement multi-origines puis livraisons séquentielles
+            SEUIL_FUSION = 0  # minutes — modifiable si besoin
+
+            jobs_tries = sorted(self.liste_jobs, key=lambda j: j.h_dispo_min)
+
+            # Construire les groupes par origine consécutive
+            groupes = []  # chaque groupe = {"jobs": [...], "origine": str}
+            for j in jobs_tries:
+                if groupes and groupes[-1]["origine"] == j.origin:
+                    groupes[-1]["jobs"].append(j)
+                else:
+                    groupes.append({"origine": j.origin, "jobs": [j]})
+
+            # Fusionner les groupes consécutifs si repositionnement <= SEUIL_FUSION
+            groupes_fusionnes = [groupes[0]]
+            for g in groupes[1:]:
+                derniere_orig = groupes_fusionnes[-1]["origines"][-1] if "origines" in groupes_fusionnes[-1] else groupes_fusionnes[-1]["origine"]
+                reposistionnement = matrice_duree.get(derniere_orig, {}).get(g["origine"], 999)
+                if reposistionnement <= SEUIL_FUSION:
+                    # Fusion : on étend le groupe précédent
+                    if "origines" not in groupes_fusionnes[-1]:
+                        groupes_fusionnes[-1]["origines"] = [groupes_fusionnes[-1]["origine"]]
+                    groupes_fusionnes[-1]["origines"].append(g["origine"])
+                    groupes_fusionnes[-1]["jobs"].extend(g["jobs"])
+                else:
+                    g["origines"] = [g["origine"]]
+                    groupes_fusionnes.append(g)
+
+            # Normaliser : s'assurer que chaque groupe a bien "origines"
+            for g in groupes_fusionnes:
+                if "origines" not in g:
+                    g["origines"] = [g["origine"]]
+
+            # Construire la chronologie groupe par groupe
+            pos_actuelle = groupes_fusionnes[0]["origines"][0]
+
+            for idx_g, groupe in enumerate(groupes_fusionnes):
+                origines_groupe = groupe["origines"]
+                jobs_groupe = groupe["jobs"]
+
+                # ── Repositionnement vers la première origine du groupe ────────
+                if idx_g > 0:
+                    reposistionnement = matrice_duree.get(pos_actuelle, {}).get(origines_groupe[0], 0)
+                    total_min += reposistionnement
+                    if reposistionnement > 0:
+                        job_ids_g = [j.job_id for j in jobs_groupe]
+                        _etape(job_ids_g, origines_groupe[0], "TRAJET_INTER_JOBS", reposistionnement,
+                               label=f"Repositionnement {pos_actuelle} → {origines_groupe[0]}")
+
+                # ── Chargements : visite de chaque origine du groupe ──────────
+                pos_charg = origines_groupe[0]
+                for orig in origines_groupe:
+                    # Trajet inter-origines si fusion de plusieurs origines
+                    if orig != pos_charg:
+                        inter_orig = matrice_duree.get(pos_charg, {}).get(orig, 0)
+                        total_min += inter_orig
+                        job_ids_g = [j.job_id for j in jobs_groupe]
+                        _etape(job_ids_g, orig, "TRAJET_INTER_JOBS", inter_orig,
+                               label=f"Repositionnement chargement {pos_charg} → {orig}")
+                    # Jobs dont l'origine est ce site
+                    jobs_de_cette_orig = [j for j in jobs_groupe if j.origin == orig]
+                    if jobs_de_cette_orig:
+                        t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
+                        total_min += t_q_o
+                        job_ids_o = [j.job_id for j in jobs_de_cette_orig]
+                        _etape(job_ids_o, orig, "MISE_A_QUAI_CHARGEMENT", t_q_o,
+                               label=f"Mise à quai @ {orig}")
+                        for j in jobs_de_cette_orig:
+                            total_min += j.quantite * t_c_o
+                            _etape(j.job_id, orig, "CHARGEMENT", j.quantite * t_c_o, quantite=j.quantite,
+                                   label=f"Chargement {j.quantite} {j.contenant} ({orig} → {j.destination})")
+                    pos_charg = orig
+
+                # ── Livraisons séquentielles depuis la dernière origine chargée ─
+                pos_livr = pos_charg
+                for j in jobs_groupe:
+                    troncon = matrice_duree.get(pos_livr, {}).get(j.destination, 20)
+                    t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
+                    total_min += troncon + t_q_d + (j.quantite * t_c_d)
+
+                    _etape(j.job_id, j.destination, "TRAJET", troncon,
+                           label=f"Trajet {pos_livr} → {j.destination}")
+                    _etape(j.job_id, j.destination, "MISE_A_QUAI_DECHARGEMENT", t_q_d,
+                           label=f"Mise à quai @ {j.destination}")
+                    _etape(j.job_id, j.destination, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
+                           label=f"Déchargement {j.quantite} {j.contenant} pour {j.destination}")
+                    pos_livr = j.destination
+
+                pos_actuelle = pos_livr
 
         self.chronologie = chrono
         return total_min
