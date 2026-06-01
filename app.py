@@ -527,13 +527,12 @@ elif selected == "Synthèse transport":
                                         f"  {etape['etape']}. {etape.get('label', etape['action'])}"
                                         f"  {h_deb_e}→{h_fin_e}"
                                     )
-                                detail = " | ".join(lignes)
+                                detail = "\n".join(lignes)  # stocké pour le bloc texte
                             elif sj:
-                                lignes_job = [
+                                detail = "\n".join(
                                     f"{getattr(j,'origin','?')} → {getattr(j,'destination','?')} ({getattr(j,'quantite','?')} cont.)"
                                     for j in sj.liste_jobs
-                                ]
-                                detail = " / ".join(lignes_job)
+                                )
 
                         elif acti == "INTER_JOB":
                             pos = ev.get("position_depart", "?")
@@ -562,7 +561,31 @@ elif selected == "Synthèse transport":
                         })
 
                     if rows:
-                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        # Séparer les lignes mission (détail multiligne) des autres
+                        rows_tableau = []
+                        for r in rows:
+                            if r["Activité"] == "EN_MISSION":
+                                # Ligne résumé dans le tableau
+                                rows_tableau.append({
+                                    "Heure début": r["Heure début"],
+                                    "Heure fin":   r["Heure fin"],
+                                    "Activité":    r["Activité"],
+                                    "Détail":      r["Détail"].split("\n")[0],  # première ligne = titre
+                                })
+                                # Détail complet en bloc texte sous la ligne
+                                st.dataframe(
+                                    pd.DataFrame(rows_tableau),
+                                    use_container_width=True, hide_index=True
+                                )
+                                rows_tableau = []
+                                st.code(r["Détail"], language=None)
+                            else:
+                                rows_tableau.append(r)
+                        if rows_tableau:
+                            st.dataframe(
+                                pd.DataFrame(rows_tableau),
+                                use_container_width=True, hide_index=True
+                            )
 
     # ════════════════════════════════════════════════════════════════════
     # TAB 2 — DÉTAIL TOURNÉES PAR SITE
