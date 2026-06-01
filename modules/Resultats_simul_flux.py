@@ -125,13 +125,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
         y="Poste",
         color="Activité",
         orientation='h',
-        hover_data={
-            "Début": False, 
-            "Durée": True, 
-            "Heure": True, 
-            "SJ_ID": True, 
-            "Détails_Jobs": True # On affiche notre nouveau champ formaté
-        },
+        hover_data={"Début": False, "Durée": False},  # on gère le hover manuellement
         title=f"📅 Planning Opérationnel : {v_type_selectionne}",
         color_discrete_map={
             "EN_MISSION"    : "#1f77b4",   # Bleu — travail productif
@@ -163,8 +157,14 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
         hoverlabel=dict(bgcolor="black", font_size=12, font_family="Arial")
     )
 
-    # Forcer l'affichage multi-ligne dans le hover
-    fig.update_traces(hovertemplate="<b>%{y}</b><br>%{customdata[4]}<extra></extra>")
+    # Hover : on injecte Détails_Jobs directement comme customdata[0]
+    # pour éviter tout problème d'indexation avec hover_data de px.bar
+    import numpy as np
+    details_array = df["Détails_Jobs"].values
+    fig.update_traces(
+        customdata=np.column_stack([details_array]),
+        hovertemplate="<b>%{y}</b><br>%{customdata[0]}<extra></extra>"
+    )
 
     st.plotly_chart(fig, use_container_width=True)
 
