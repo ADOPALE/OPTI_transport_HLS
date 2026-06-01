@@ -473,9 +473,8 @@ elif selected == "Synthèse transport":
                         for etape in sj.chronologie:
                             h_deb_e = min_to_h(debut + etape["t_debut"])
                             h_fin_e = min_to_h(debut + etape["t_fin"])
-                            qte_str = f" ({etape['quantite']} cont.)" if etape.get("quantite") else ""
                             lignes.append(
-                                f"  {etape['etape']}. {etape['action']} @ {etape['site']}{qte_str}"
+                                f"  {etape['etape']}. {etape.get('label', etape['action'])}"
                                 f"  {h_deb_e}→{h_fin_e}"
                             )
                         detail = " | ".join(lignes)
