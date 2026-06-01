@@ -136,42 +136,37 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
     while minute <= h_end:
         for p in postes:
             if p.etat == 'OPTIMISATION_AM': continue
-            if p.temps_restant_etat > 0:
+            # EN_RETOUR_DEPOT est interruptible : on décrémente mais on ne skip pas
+            # la suite de la boucle, pour réévaluer les jobs à chaque minute.
+            if p.etat == 'EN_RETOUR_DEPOT':
+                if p.temps_restant_etat > 0:
+                    p.temps_restant_etat -= 1
+                # Si le compteur atteint 0, le bloc EN_RETOUR_DEPOT ci-dessous
+                # mettra le poste en DISPONIBLE pour évaluation immédiate.
+                if p.temps_restant_etat > 0:
+                    # Encore en route : réévaluer si un job urgent est apparu
+                    pass  # continue vers les blocs d'état ci-dessous
+            elif p.temps_restant_etat > 0:
                 p.temps_restant_etat -= 1
                 continue
             
             if p.etat == 'PRISE_POSTE':
                 p.etat, p.vehicule_deja_affecte = 'DISPONIBLE', True
             elif p.etat == 'EN_TRAJET_VIDE':
-                if p.job_en_cours:
-                    p.position_actuelle = p.job_en_cours.points_depart[0]
-                    p.etat, p.temps_restant_etat = 'EN_MISSION', p.job_en_cours.poids_total
-                    p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
-                else:
-                    p.position_actuelle = p.stationnement_initial
-                    idx_p = int(p.id_poste.split('_')[-1])
-                    if minute >= h_bascule and idx_p > I_am:
-                        p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
-                        p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
-                        continue
-                    # h_fin_poste exacte = début service + amplitude max
-                    # Garde : si h_debut_service_actuel est None (cas anormal), on reste disponible
-                    if p.h_debut_service_actuel is None:
-                        p.etat = 'DISPONIBLE'
-                        continue
-                    h_fin_poste = p.h_debut_service_actuel + p.amplitude_max
-                    h_passation = h_fin_poste - p.temps_passation
-                    if not p.pause_faite:
-                        # Pause obligatoire avant de reprendre
-                        p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
-                        p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
-                    elif minute >= h_passation:
-                        # Heure de passation/nettoyage atteinte → fin de poste
-                        p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
-                        p.enregistrer(minute, "PASSATION_FIN")
-                    else:
-                        # Pas encore l'heure : retour en DISPONIBLE pour capter un job
-                        p.etat = 'DISPONIBLE'
+                # EN_TRAJET_VIDE = trajet vers un job. À l'arrivée on démarre la mission.
+                p.position_actuelle = p.job_en_cours.points_depart[0]
+                p.etat, p.temps_restant_etat = 'EN_MISSION', p.job_en_cours.poids_total
+                p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
+            elif p.etat == 'EN_RETOUR_DEPOT':
+                # EN_RETOUR_DEPOT = retour sans mission. À l'arrivée le poste
+                # repasse en DISPONIBLE pour que la boucle évalue la fin de poste.
+                p.position_actuelle = p.stationnement_initial
+                idx_p = int(p.id_poste.split('_')[-1])
+                if minute >= h_bascule and idx_p > I_am:
+                    p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
+                    p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
+                    continue
+                p.etat = 'DISPONIBLE'  # la boucle DISPONIBLE gère la suite
             elif p.etat == 'EN_MISSION':
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
                 p.couloir_actuel = get_couloir_id(p.job_en_cours)
@@ -220,7 +215,8 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
                     p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
                 else:
-                    p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                    p.etat = 'EN_RETOUR_DEPOT'
+                    p.temps_restant_etat = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour pour libération AM")
                 continue
 
@@ -230,53 +226,61 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 p.enregistrer(minute, "PRISE_POSTE")
                 continue
 
-            if p.etat == 'DISPONIBLE':
+            if p.etat in ('DISPONIBLE', 'EN_RETOUR_DEPOT'):
                 temps_trav = minute - p.h_debut_service_actuel
                 dist_ret = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
                 h_fin_poste = p.h_debut_service_actuel + p.amplitude_max
-                # Heure limite pour démarrer un nouveau job :
-                # minute + durée_job + retour_dépôt <= h_fin_poste - temps_passation
-                h_limite_job = h_fin_poste - p.temps_passation
+                h_limite_job = h_fin_poste - p.temps_passation  # dernière minute pour démarrer un job
 
                 # ── Pause obligatoire ─────────────────────────────────────────
                 besoin_p = (temps_trav >= p.amplitude_max // 2 and not p.pause_faite)
                 if besoin_p:
                     nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
                     best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants, est_premier_job=(p.couloir_actuel is None))
-                    if best_sj and (minute + best_sj.poids_total + dist_ret) <= h_limite_job:
+                    # Compatibilité stricte : approche + job + retour dépôt <= h_limite_job
+                    approche = matrice_travail.get(p.position_actuelle, {}).get(best_sj.points_depart[0], 0) if best_sj else 0
+                    if best_sj and (minute + approche + best_sj.poids_total + dist_ret) <= h_limite_job:
                         affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                         continue
-                    # Pas de job qui rentre : rentrer au dépôt puis pause
+                    # Aucun job compatible : retour dépôt pour pause
                     if p.position_actuelle != p.stationnement_initial:
-                        p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', dist_ret
+                        p.etat = 'EN_RETOUR_DEPOT'
+                        p.temps_restant_etat = dist_ret
                         p.enregistrer(minute, "RETOUR_DEPOT", details="Retour Pause")
                     else:
                         p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
                         p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
                     continue
 
-                # ── Chercher un job disponible qui rentre dans le poste ───────
-                # Filtre propre au poste : jobs visibles depuis sa position actuelle
+                # ── Chercher un job compatible ────────────────────────────────
+                # Condition stricte : minute + approche + durée_job + retour_dépôt <= h_limite_job
                 dispos_poste = [j for j in dispos if job_visible(j, p)]
+                best_sj = None
                 if dispos_poste:
                     nb_Jobs = max(math.ceil(prio_tension * len(dispos_poste)), 1)
-                    best_sj = selectionner_meilleur_job(p, dispos_poste, minute, matrice_travail, nb_Jobs, jobs_restants)
-                    if best_sj and (minute + best_sj.poids_total + dist_ret) <= h_limite_job:
-                        affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
-                        continue
+                    candidat = selectionner_meilleur_job(p, dispos_poste, minute, matrice_travail, nb_Jobs, jobs_restants)
+                    if candidat:
+                        approche = matrice_travail.get(p.position_actuelle, {}).get(candidat.points_depart[0], 0)
+                        if (minute + approche + candidat.poids_total + dist_ret) <= h_limite_job:
+                            best_sj = candidat
 
-                # ── Aucun job ne rentre : rentrer au dépôt et attendre la fin ─
-                # FIN_DE_SERVICE déclenché uniquement quand minute >= h_limite_job
+                if best_sj:
+                    affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                    continue
+
+                # ── Aucun job compatible ──────────────────────────────────────
+                # Si pas au dépôt : lancer EN_RETOUR_DEPOT (interruptible à chaque minute)
+                # Si au dépôt    : attendre jusqu'à h_limite_job puis déclencher fin de poste
                 if p.position_actuelle != p.stationnement_initial:
-                    p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', dist_ret
+                    p.etat = 'EN_RETOUR_DEPOT'
+                    p.temps_restant_etat = dist_ret
                     p.enregistrer(minute, "RETOUR_DEPOT", details="Retour fin de poste")
                 elif minute >= h_limite_job:
-                    # C'est l'heure : passation/nettoyage, fin exacte à h_fin_poste
                     p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
                     p.enregistrer(minute, "PASSATION_FIN")
-                # Sinon : on reste DISPONIBLE, la boucle repassera au prochain job éventuel
+                # Sinon : on reste DISPONIBLE, réévaluation à la prochaine minute
 
-        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB'] for p in postes): return postes, []
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB', 'EN_RETOUR_DEPOT'] for p in postes): return postes, []
         minute += 1
     return None, jobs_restants
 
