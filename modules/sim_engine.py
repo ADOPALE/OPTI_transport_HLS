@@ -704,6 +704,15 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     if len(types_flux_presents) > 1:
         return False
 
+    # --- 2ter_a. COHÉRENCE TEMPORELLE ---
+    # Si la dispo la plus tardive dépasse la deadline la plus stricte,
+    # le SuperJob ne sera jamais exécutable : le camion arrivera trop tard
+    # pour les jobs contraints. Refus immédiat.
+    h_dispo_max_groupe    = max(to_min(j.h_dispo) for j in temp_list)
+    h_deadline_min_groupe = min(to_min(j.h_deadline) for j in temp_list)
+    if h_dispo_max_groupe >= h_deadline_min_groupe:
+        return False
+
     # --- 2ter. COMPATIBILITÉ CONTENANT / VÉHICULE DU PIVOT ---
     # On vérifie sur v_type_pivot (le véhicule qui exécutera le SuperJob),
     # pas sur le véhicule du candidat qui peut être différent.
