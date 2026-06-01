@@ -447,33 +447,72 @@ elif selected == "Synthèse transport":
             expanded=False
         ):
             rows = []
-            for ev in sorted(p.historique, key=lambda x: x["Minute_Debut"]):
+            hist_tri = sorted(p.historique, key=lambda x: x["Minute_Debut"])
+
+            def min_to_h(m):
+                return f"{int(m // 60):02d}h{int(m % 60):02d}"
+
+            for i, ev in enumerate(hist_tri):
                 acti = ev["Activite"]
                 if acti not in ("EN_MISSION", "EN_TRAJET_VIDE", "INTER_JOB",
                                 "PRISE_POSTE", "PASSATION_FIN", "EN_PAUSE",
-                                "RETOUR_DEPOT"):
+                                "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
                     continue
 
-                # Détail du job si EN_MISSION
-                detail = ev.get("Details", "")
+                debut = ev["Minute_Debut"]
+                fin   = hist_tri[i + 1]["Minute_Debut"] if i < len(hist_tri) - 1 else debut + 15
+                h_fin = min_to_h(fin)
+                detail = ""
+
                 if acti == "EN_MISSION":
+                    # Chronologie complète du SJ en heures absolues
                     sj_id = ev.get("SJ_ID", "N/A")
-                    sj = next((s for s in liste_sj_sel
-                               if s.liste_jobs and s.liste_jobs[0].flux_id == sj_id), None)
-                    if sj:
+                    sj = next((s for s in liste_sj_sel if s.super_job_id == sj_id), None)
+                    if sj and hasattr(sj, "chronologie") and sj.chronologie:
+                        lignes = [f"{sj.type_logistique} — {sj_id}"]
+                        for etape in sj.chronologie:
+                            h_deb_e = min_to_h(debut + etape["t_debut"])
+                            h_fin_e = min_to_h(debut + etape["t_fin"])
+                            qte_str = f" ({etape['quantite']} cont.)" if etape.get("quantite") else ""
+                            lignes.append(
+                                f"  {etape['etape']}. {etape['action']} @ {etape['site']}{qte_str}"
+                                f"  {h_deb_e}→{h_fin_e}"
+                            )
+                        detail = " | ".join(lignes)
+                    elif sj:
+                        # Fallback sans chronologie
                         lignes_job = []
                         for j in sj.liste_jobs:
-                            orig = getattr(j, 'origin', getattr(j, 'origine', '?'))
+                            orig = getattr(j, 'origin', '?')
                             dest = getattr(j, 'destination', '?')
-                            qte  = getattr(j, 'quantite', getattr(j, 'nb_contenants', '?'))
-                            cont = getattr(j, 'type_contenant', '')
-                            lignes_job.append(f"{orig} → {dest} | {qte} {cont}")
+                            qte  = getattr(j, 'quantite', '?')
+                            lignes_job.append(f"{orig} → {dest} ({qte} cont.)")
                         detail = " / ".join(lignes_job)
 
+                elif acti == "INTER_JOB":
+                    pos = ev.get("position_depart", "?")
+                    detail = f"Position : {pos} | Fin : {h_fin}"
+
+                elif acti in ("EN_TRAJET_VIDE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
+                    pt_dep = ev.get("position_depart", "?")
+                    if acti == "EN_TRAJET_VIDE" and ev.get("SJ_ID") != "N/A":
+                        sj = next((s for s in liste_sj_sel if s.super_job_id == ev.get("SJ_ID")), None)
+                        pt_arr = sj.points_depart[0] if sj else p.stationnement_initial
+                    else:
+                        pt_arr = p.stationnement_initial
+                    detail = f"{pt_dep} → {pt_arr} | Arrivée : {h_fin}"
+
+                elif acti == "EN_PAUSE":
+                    detail = f"Fin : {h_fin}"
+
+                elif acti in ("PRISE_POSTE", "PASSATION_FIN"):
+                    detail = ev.get("Details", "")
+
                 rows.append({
-                    "Heure"   : ev["Heure_Debut"],
-                    "Activité": acti,
-                    "Détail"  : detail,
+                    "Heure début" : ev["Heure_Debut"],
+                    "Heure fin"   : h_fin,
+                    "Activité"    : acti,
+                    "Détail"      : detail,
                 })
 
             if rows:
