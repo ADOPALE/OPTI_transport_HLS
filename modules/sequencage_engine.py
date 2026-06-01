@@ -94,9 +94,26 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, nb_Jobs, jobs_re
     if not dispos: return None
     liste_candidats = []
     for sj in dispos:
+        approche = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+        heure_debut_mission = minute + approche
+
+        # ── Filtre dispo strict ───────────────────────────────────────────
+        # Le camion ne peut pas démarrer la mission avant que tous les jobs
+        # soient disponibles (h_dispo_min = max des h_dispo des jobs internes)
+        if heure_debut_mission < to_min(sj.h_dispo_min):
+            continue  # trop tôt — le contenu n'est pas encore prêt
+
+        # ── Filtre deadline strict ────────────────────────────────────────
+        # La livraison doit se terminer avant la deadline la plus stricte
+        heure_fin_livraison = heure_debut_mission + sj.poids_total
+        if heure_fin_livraison > to_min(sj.h_deadline_min):
+            continue  # deadline dépassée → on ne propose jamais ce job
+
         stress = calculer_stress_maillon_critique(sj, minute, matrice_duree, p.position_actuelle)
         liste_candidats.append({'sj': sj, 'stress': stress})
     
+    if not liste_candidats:
+        return None
     liste_candidats.sort(key=lambda x: x['stress'], reverse=True)
     top_n_jobs = [item['sj'] for item in liste_candidats[:nb_Jobs]]
     
