@@ -287,8 +287,6 @@ elif selected == "Synthèse transport":
                     df_jour       = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
                     liste_sj_jour = tunnel_consolidation_flux(
                         df_jour, df_vehicules, df_contenants, df_sites, matrice_duree)
-                    dict_detail_sj[jour] = liste_sj_jour
-
                     nb_sj_total = len(liste_sj_jour)
                     intensite   = calculer_nmax_par_type(liste_sj_jour)
 
@@ -299,8 +297,17 @@ elif selected == "Synthèse transport":
                     if res:
                         postes = res["postes"]
                         dict_postes_par_jour[jour] = postes
-                        # Stocker les SJ non traités pour affichage persistant
+
+                        # ── Stocker UNIQUEMENT les SJ réellement exécutés ──
+                        # Les SJ non traités sont exclus de dict_detail_sj pour
+                        # garantir la cohérence avec les tableaux par poste/site.
                         sj_nt = res.get("sj_non_traites", [])
+                        sj_nt_ids = {sj.super_job_id for sj in sj_nt}
+                        dict_detail_sj[jour] = [
+                            sj for sj in liste_sj_jour
+                            if sj.super_job_id not in sj_nt_ids
+                        ]
+
                         if sj_nt:
                             st.session_state.setdefault("sj_non_traites_par_jour", {})[jour] = sj_nt
 
@@ -639,8 +646,20 @@ elif selected == "Synthèse transport":
     # TAB 2 — DÉTAIL TOURNÉES PAR SITE
     # ════════════════════════════════════════════════════════════════════
     with tab_sites:
-        # Index SJ par ID pour éviter les next() silencieux
-        sj_index = {sj.super_job_id: sj for sj in liste_sj_sel}
+        # ── Index SJ uniquement sur ceux RÉELLEMENT EXÉCUTÉS ─────────────
+        # On ne garde que les SJ_ID qui apparaissent dans un EN_MISSION
+        # d'un poste — les SJ créés mais non planifiés sont exclus.
+        sj_ids_executes = {
+            ev["SJ_ID"]
+            for p_e in postes_jour
+            for ev in p_e.historique
+            if ev["Activite"] == "EN_MISSION" and ev.get("SJ_ID", "N/A") != "N/A"
+        }
+        sj_index = {
+            sj.super_job_id: sj
+            for sj in liste_sj_sel
+            if sj.super_job_id in sj_ids_executes
+        }
 
         # ── Collecter tous les sites depuis L'HISTORIQUE DES POSTES ──────
         # Source unique = ce qui a réellement été exécuté, pas liste_sj_sel
