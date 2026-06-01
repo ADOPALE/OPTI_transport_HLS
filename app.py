@@ -467,14 +467,41 @@ elif selected == "Synthèse transport":
 
             for idx_s, service in enumerate(services):
                 evs = service["events"]
-                h_deb_s = service["debut"]["Heure_Debut"]
-                h_fin_s = service["fin"]["Heure_Debut"] if service["fin"] else evs[-1]["Heure_Debut"]
+                h_deb_s  = service["debut"]["Heure_Debut"]
+                m_deb_s  = service["debut"]["Minute_Debut"]
+                h_fin_s  = service["fin"]["Heure_Debut"] if service["fin"] else evs[-1]["Heure_Debut"]
+                m_fin_s  = service["fin"]["Minute_Debut"] if service["fin"] else evs[-1]["Minute_Debut"]
+                duree_service = max(m_fin_s - m_deb_s, 1)
                 nb_missions = sum(1 for e in evs if e["Activite"] == "EN_MISSION")
 
+                # ── Calcul des temps par catégorie ──────────────────────────
+                ACTI_MISSION  = {"EN_MISSION"}
+                ACTI_TRAJET   = {"EN_TRAJET_VIDE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"}
+                ACTI_DISPO    = {"DISPONIBLE", "INTER_JOB"}
+
+                def duree_ev(i_ev):
+                    debut_ev = evs[i_ev]["Minute_Debut"]
+                    fin_ev   = evs[i_ev + 1]["Minute_Debut"] if i_ev < len(evs) - 1 else debut_ev + 15
+                    return max(0, fin_ev - debut_ev)
+
+                t_mission = sum(duree_ev(i) for i, e in enumerate(evs) if e["Activite"] in ACTI_MISSION)
+                t_trajet  = sum(duree_ev(i) for i, e in enumerate(evs) if e["Activite"] in ACTI_TRAJET)
+                t_dispo   = sum(duree_ev(i) for i, e in enumerate(evs) if e["Activite"] in ACTI_DISPO)
+                taux_occ  = round((1 - t_dispo / duree_service) * 100, 1)
+
                 with st.expander(
-                    f"🚛 {p.id_poste}  —  Service {idx_s + 1}  |  {h_deb_s} → {h_fin_s}  |  {nb_missions} mission(s)",
+                    f"🚛 {p.id_poste}  —  Service {idx_s + 1}  |  {h_deb_s} → {h_fin_s}  "
+                    f"|  {nb_missions} mission(s)  |  Taux occup. {taux_occ}%",
                     expanded=False
                 ):
+                    # ── Métriques synthétiques ──────────────────────────────
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("⏱ En mission",        f"{t_mission} min")
+                    c2.metric("🚗 Trajet à vide",     f"{t_trajet} min")
+                    c3.metric("⏳ Dispo sans tâche",  f"{t_dispo} min")
+                    c4.metric("📊 Taux d'occupation", f"{taux_occ} %")
+                    st.divider()
+
                     rows = []
                     for i, ev in enumerate(evs):
                         acti = ev["Activite"]
