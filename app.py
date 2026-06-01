@@ -295,10 +295,23 @@ elif selected == "Synthèse transport":
                     sj_bio = [sj for sj in liste_sj_jour
                               if any('BIOLOGIE' in str(j.contenant).upper()
                                      for j in sj.liste_jobs)]
+                    st.write(f"🧪 Total SJ biologie : {len(sj_bio)}")
+                    # Compter les jobs biologie total (doublons éventuels)
+                    jobs_bio_ids = [j.job_id for sj in sj_bio for j in sj.liste_jobs]
+                    st.write(f"🧪 Total jobs biologie : {len(jobs_bio_ids)} | IDs uniques : {len(set(jobs_bio_ids))}")
+                    # Afficher les doublons
+                    from collections import Counter
+                    doublons = {k: v for k, v in Counter(jobs_bio_ids).items() if v > 1}
+                    if doublons:
+                        st.write(f"🚨 Jobs en doublon : {doublons}")
                     for sj in sj_bio:
                         h_d = round(sj.h_dispo_min / 60, 2)
                         h_dl = round(sj.h_deadline_min / 60, 2)
-                        st.write(f"🧪 BIO {sj.super_job_id} | dispo={sj.h_dispo_min:.0f}min ({h_d}h) | deadline={sj.h_deadline_min:.0f}min ({h_dl}h) | v_type={sj.v_type}")
+                        jobs_detail = [
+                            f"{j.job_id}({j.contenant}|{j.origin}→{j.destination}|{round(j.h_dispo/60,1) if hasattr(j.h_dispo,'__float__') else j.h_dispo}h→{round(j.h_deadline/60,1) if hasattr(j.h_deadline,'__float__') else j.h_deadline}h)"
+                            for j in sj.liste_jobs
+                        ]
+                        st.write(f"🧪 {sj.super_job_id} | dispo={h_d}h | deadline={h_dl}h | {jobs_detail}")
                     # ── FIN DEBUG ───────────────────────────────────────
 
                     st.write(f"  ↳ 🧠 Séquençage ({nb_sj_total} blocs)...")
