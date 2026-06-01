@@ -208,6 +208,12 @@ elif selected == "Simul tournées":
 
         # 3. Calcul de la Séquence Type (Etape 2.a.ii)
         st.subheader("📌 Génération de la Séquence Type (Jmax)")
+
+        # Debug temporaire à ajouter avant le séquençage
+        sj_bio = [sj for sj in liste_sj_jour 
+                  if any('BIOLOGIE' in str(j.contenant).upper() for j in sj.liste_jobs)]
+        for sj in sj_bio:
+            print(f"{sj.super_job_id} | h_dispo_min={sj.h_dispo_min} | h_deadline_min={sj.h_deadline_min} | v_type={sj.v_type}")
         
         if st.button("Lancer le calcul du Jmax", type="primary", use_container_width=True):
             with st.spinner("🧠 Analyse des poids fictifs..."):
