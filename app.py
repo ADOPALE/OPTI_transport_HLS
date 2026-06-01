@@ -430,90 +430,199 @@ elif selected == "Synthèse transport":
         type_filtre if type_filtre != "Tous" else postes_affiches[0].vehicule_type,
         liste_sj_sel)
 
-    # ── Détail par poste ──────────────────────────────────────────────────
+    # ── Onglets Détail par poste / Détail tournées ───────────────────────
     st.divider()
-    st.markdown(f"#### 🔍 Détail des postes — {jour_sel}")
+    tab_postes, tab_sites = st.tabs(["🔍 Détail par poste", "🏥 Détail tournées par site"])
 
-    for p in postes_affiches:
-        missions = [ev for ev in p.historique if ev["Activite"] == "EN_MISSION"]
-        if not missions:
-            continue
+    def min_to_h(m):
+        return f"{int(m // 60):02d}h{int(m % 60):02d}"
 
-        h_debut = p.historique[0]["Heure_Debut"] if p.historique else "--"
-        h_fin   = p.historique[-1]["Heure_Debut"] if p.historique else "--"
-
-        with st.expander(
-            f"🚛 {p.id_poste}  |  {h_debut} → {h_fin}  |  {len(missions)} mission(s)",
-            expanded=False
-        ):
-            rows = []
+    # ════════════════════════════════════════════════════════════════════
+    # TAB 1 — DÉTAIL PAR POSTE
+    # ════════════════════════════════════════════════════════════════════
+    with tab_postes:
+        for p in postes_affiches:
             hist_tri = sorted(p.historique, key=lambda x: x["Minute_Debut"])
 
-            def min_to_h(m):
-                return f"{int(m // 60):02d}h{int(m % 60):02d}"
+            # Découper l'historique en intervalles PRISE_POSTE → PASSATION_FIN
+            # Un poste peut avoir plusieurs services dans la journée (AM/PM)
+            services = []
+            service_en_cours = None
+            for ev in hist_tri:
+                if ev["Activite"] == "PRISE_POSTE":
+                    service_en_cours = {"debut": ev, "events": [ev], "fin": None}
+                elif ev["Activite"] in ("PASSATION_FIN", "FIN_DE_SERVICE") and service_en_cours:
+                    service_en_cours["events"].append(ev)
+                    service_en_cours["fin"] = ev
+                    services.append(service_en_cours)
+                    service_en_cours = None
+                elif service_en_cours:
+                    service_en_cours["events"].append(ev)
+            # Service sans fin explicite (poste encore actif)
+            if service_en_cours:
+                services.append(service_en_cours)
 
-            for i, ev in enumerate(hist_tri):
-                acti = ev["Activite"]
-                if acti not in ("EN_MISSION", "EN_TRAJET_VIDE", "INTER_JOB",
-                                "PRISE_POSTE", "PASSATION_FIN", "EN_PAUSE",
-                                "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
-                    continue
+            if not services:
+                continue
 
-                debut = ev["Minute_Debut"]
-                fin   = hist_tri[i + 1]["Minute_Debut"] if i < len(hist_tri) - 1 else debut + 15
-                h_fin = min_to_h(fin)
-                detail = ""
+            for idx_s, service in enumerate(services):
+                evs = service["events"]
+                h_deb_s = service["debut"]["Heure_Debut"]
+                h_fin_s = service["fin"]["Heure_Debut"] if service["fin"] else evs[-1]["Heure_Debut"]
+                nb_missions = sum(1 for e in evs if e["Activite"] == "EN_MISSION")
 
-                if acti == "EN_MISSION":
-                    # Chronologie complète du SJ en heures absolues
-                    sj_id = ev.get("SJ_ID", "N/A")
-                    sj = next((s for s in liste_sj_sel if s.super_job_id == sj_id), None)
-                    if sj and hasattr(sj, "chronologie") and sj.chronologie:
-                        lignes = [f"{sj.type_logistique} — {sj_id}"]
-                        for etape in sj.chronologie:
-                            h_deb_e = min_to_h(debut + etape["t_debut"])
-                            h_fin_e = min_to_h(debut + etape["t_fin"])
-                            lignes.append(
-                                f"  {etape['etape']}. {etape.get('label', etape['action'])}"
-                                f"  {h_deb_e}→{h_fin_e}"
-                            )
-                        detail = " | ".join(lignes)
-                    elif sj:
-                        # Fallback sans chronologie
-                        lignes_job = []
-                        for j in sj.liste_jobs:
-                            orig = getattr(j, 'origin', '?')
-                            dest = getattr(j, 'destination', '?')
-                            qte  = getattr(j, 'quantite', '?')
-                            lignes_job.append(f"{orig} → {dest} ({qte} cont.)")
-                        detail = " / ".join(lignes_job)
+                with st.expander(
+                    f"🚛 {p.id_poste}  —  Service {idx_s + 1}  |  {h_deb_s} → {h_fin_s}  |  {nb_missions} mission(s)",
+                    expanded=False
+                ):
+                    rows = []
+                    for i, ev in enumerate(evs):
+                        acti = ev["Activite"]
+                        if acti not in ("EN_MISSION", "EN_TRAJET_VIDE", "INTER_JOB",
+                                        "PRISE_POSTE", "PASSATION_FIN", "FIN_DE_SERVICE",
+                                        "EN_PAUSE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
+                            continue
 
-                elif acti == "INTER_JOB":
-                    pos = ev.get("position_depart", "?")
-                    detail = f"Position : {pos} | Fin : {h_fin}"
+                        debut  = ev["Minute_Debut"]
+                        fin_m  = evs[i + 1]["Minute_Debut"] if i < len(evs) - 1 else debut + 15
+                        h_fin_ev = min_to_h(fin_m)
+                        detail = ""
 
-                elif acti in ("EN_TRAJET_VIDE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
-                    pt_dep = ev.get("position_depart", "?")
-                    if acti == "EN_TRAJET_VIDE" and ev.get("SJ_ID") != "N/A":
-                        sj = next((s for s in liste_sj_sel if s.super_job_id == ev.get("SJ_ID")), None)
-                        pt_arr = sj.points_depart[0] if sj else p.stationnement_initial
-                    else:
-                        pt_arr = p.stationnement_initial
-                    detail = f"{pt_dep} → {pt_arr} | Arrivée : {h_fin}"
+                        if acti == "EN_MISSION":
+                            sj_id = ev.get("SJ_ID", "N/A")
+                            sj = next((s for s in liste_sj_sel if s.super_job_id == sj_id), None)
+                            if sj and hasattr(sj, "chronologie") and sj.chronologie:
+                                lignes = [f"{sj.type_logistique} — {sj_id}"]
+                                for etape in sj.chronologie:
+                                    h_deb_e = min_to_h(debut + etape["t_debut"])
+                                    h_fin_e = min_to_h(debut + etape["t_fin"])
+                                    lignes.append(
+                                        f"  {etape['etape']}. {etape.get('label', etape['action'])}"
+                                        f"  {h_deb_e}→{h_fin_e}"
+                                    )
+                                detail = " | ".join(lignes)
+                            elif sj:
+                                lignes_job = [
+                                    f"{getattr(j,'origin','?')} → {getattr(j,'destination','?')} ({getattr(j,'quantite','?')} cont.)"
+                                    for j in sj.liste_jobs
+                                ]
+                                detail = " / ".join(lignes_job)
 
-                elif acti == "EN_PAUSE":
-                    detail = f"Fin : {h_fin}"
+                        elif acti == "INTER_JOB":
+                            pos = ev.get("position_depart", "?")
+                            detail = f"Position : {pos} | Fin : {h_fin_ev}"
 
-                elif acti in ("PRISE_POSTE", "PASSATION_FIN"):
-                    detail = ev.get("Details", "")
+                        elif acti in ("EN_TRAJET_VIDE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
+                            pt_dep = ev.get("position_depart", "?")
+                            if acti == "EN_TRAJET_VIDE" and ev.get("SJ_ID") != "N/A":
+                                sj = next((s for s in liste_sj_sel if s.super_job_id == ev.get("SJ_ID")), None)
+                                pt_arr = sj.points_depart[0] if sj else p.stationnement_initial
+                            else:
+                                pt_arr = p.stationnement_initial
+                            detail = f"{pt_dep} → {pt_arr} | Arrivée : {h_fin_ev}"
 
-                rows.append({
-                    "Heure début" : ev["Heure_Debut"],
-                    "Heure fin"   : h_fin,
-                    "Activité"    : acti,
-                    "Détail"      : detail,
-                })
+                        elif acti == "EN_PAUSE":
+                            detail = f"Fin : {h_fin_ev}"
 
-            if rows:
-                df_detail = pd.DataFrame(rows)
-                st.dataframe(df_detail, use_container_width=True, hide_index=True)
+                        elif acti in ("PRISE_POSTE", "PASSATION_FIN", "FIN_DE_SERVICE"):
+                            detail = ev.get("Details", "")
+
+                        rows.append({
+                            "Heure début" : ev["Heure_Debut"],
+                            "Heure fin"   : h_fin_ev,
+                            "Activité"    : acti,
+                            "Détail"      : detail,
+                        })
+
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════
+    # TAB 2 — DÉTAIL TOURNÉES PAR SITE
+    # ════════════════════════════════════════════════════════════════════
+    with tab_sites:
+        # Collecter tous les sites présents dans les chronologies
+        tous_sites = set()
+        for sj in liste_sj_sel:
+            if hasattr(sj, "chronologie"):
+                for etape in sj.chronologie:
+                    tous_sites.add(etape["site"])
+        tous_sites = sorted(tous_sites)
+
+        if not tous_sites:
+            st.info("Aucune donnée de chronologie disponible.")
+        else:
+            site_sel = st.selectbox("Sélectionner un site", tous_sites, key="sel_site")
+
+            # Parcourir tous les postes et toutes les missions pour trouver les passages sur ce site
+            passages = []
+            for p in postes_jour:
+                hist_tri_p = sorted(p.historique, key=lambda x: x["Minute_Debut"])
+                for ev in hist_tri_p:
+                    if ev["Activite"] != "EN_MISSION" or ev.get("SJ_ID") == "N/A":
+                        continue
+                    sj = next((s for s in liste_sj_sel if s.super_job_id == ev["SJ_ID"]), None)
+                    if not sj or not hasattr(sj, "chronologie"):
+                        continue
+                    t_ancre = ev["Minute_Debut"]
+                    for etape in sj.chronologie:
+                        if etape["site"] != site_sel:
+                            continue
+                        action = etape["action"]
+                        # Distinguer PRISE (chargement) et DEPOSE (déchargement)
+                        if action in ("CHARGEMENT",):
+                            sens = "PRISE"
+                        elif action in ("DECHARGEMENT",):
+                            sens = "DEPOSE"
+                        else:
+                            continue  # MISE_A_QUAI et TRAJET ignorés ici
+
+                        h_arrivee_quai = None
+                        # Chercher l'étape MISE_A_QUAI précédant immédiatement cette étape
+                        idx_e = etape["etape"] - 1  # index 0-based dans chronologie
+                        if idx_e > 0:
+                            etape_prec = sj.chronologie[idx_e - 1]
+                            if "MISE_A_QUAI" in etape_prec["action"]:
+                                h_arrivee_quai = min_to_h(t_ancre + etape_prec["t_debut"])
+
+                        h_debut_op = min_to_h(t_ancre + etape["t_debut"])
+                        h_fin_op   = min_to_h(t_ancre + etape["t_fin"])
+
+                        # Contenu + origine/destination selon le sens
+                        job_ids = etape.get("job_id", [])
+                        if isinstance(job_ids, str):
+                            job_ids = [job_ids]
+                        jobs_concernes = [j for j in sj.liste_jobs if j.job_id in job_ids]
+
+                        if jobs_concernes:
+                            if sens == "PRISE":
+                                # PRISE = chargement ici → on indique la destination
+                                contenu = " + ".join(
+                                    f"{j.quantite} {j.contenant} → {j.destination}"
+                                    for j in jobs_concernes
+                                )
+                            else:
+                                # DEPOSE = déchargement ici → on indique l'origine
+                                contenu = " + ".join(
+                                    f"{j.quantite} {j.contenant} (depuis {j.origin})"
+                                    for j in jobs_concernes
+                                )
+                        else:
+                            contenu = etape.get("label", "")
+
+                        passages.append({
+                            "Poste"          : p.id_poste,
+                            "Arrivée quai"   : h_arrivee_quai or "—",
+                            "Début opération": h_debut_op,
+                            "Fin opération"  : h_fin_op,
+                            "PRISE"          : contenu if sens == "PRISE" else "",
+                            "DEPOSE"         : contenu if sens == "DEPOSE" else "",
+                            "_sort"          : t_ancre + etape["t_debut"],
+                        })
+
+            if passages:
+                passages.sort(key=lambda x: x["_sort"])
+                df_site = pd.DataFrame(passages).drop(columns=["_sort"])
+                st.dataframe(df_site, use_container_width=True, hide_index=True)
+            else:
+                st.info(f"Aucun passage trouvé pour {site_sel}.")
