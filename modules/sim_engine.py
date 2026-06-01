@@ -810,7 +810,7 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     return True
 
 
-def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df_sites, df_contenants=None):
+def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df_sites, df_contenants=None, nom_jour='J'):
     """
     Regroupe les jobs par tournée imposée en utilisant une stratégie de 'Pivot' (le plus lourd d'abord)
     et vérifie la compatibilité dynamique (temps, espace, hygiène).
@@ -870,7 +870,7 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
             liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
 
             new_sj = SuperJob(
-                super_job_id=f"TOURNEE_{nom_t}_{len(super_jobs_tournees) + 1}",
+                super_job_id=f"TOURNEE_{nom_t}_{len(super_jobs_tournees) + 1}_{current_sj_jobs[0].vehicule_type}_{nom_jour}",
                 v_type=current_sj_jobs[0].vehicule_type,
                 liste_jobs=current_sj_jobs,
                 matrice_duree=matrice_duree,
@@ -919,7 +919,7 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
 
 
 
-def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites, df_contenants=None):
+def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites, df_contenants=None, nom_jour='J'):
     """
     Regroupe les jobs solitaires en limitant la durée totale du SJ 
     à 50% de l'amplitude maximale d'un poste.
@@ -992,7 +992,7 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicule
         
         # FINALISATION
         new_sj = SuperJob(
-            super_job_id=f"OPT_SOL_{len(super_jobs_optimises)+1}",
+            super_job_id=f"OPT_SOL_{len(super_jobs_optimises)+1}_{current_jobs[0].vehicule_type}_{nom_jour}",
             v_type=current_jobs[0].vehicule_type,
             liste_jobs=current_jobs,
             matrice_duree=matrice_duree,
@@ -1014,7 +1014,7 @@ def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules,
     for i, j in enumerate(jobs_complets):
         # On crée un SuperJob avec les paramètres requis par le __init__
         sj = SuperJob(
-            super_job_id=f"DIRECT_COMPLET_{i+1}",
+            super_job_id=f"DIRECT_COMPLET_{i+1}_{job.vehicule_type}_{job.job_id}_{nom_jour}",
             v_type=j.vehicule_type,
             liste_jobs=[j],
             matrice_duree=matrice_duree,
@@ -1034,7 +1034,7 @@ def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules,
 
 
 
-def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree):
+def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree, nom_jour='J'):
     """
     Transforme les flux bruts du jour en une liste de SuperJobs optimisés.
     Architecture mise à jour avec les nouveaux paramètres d'instanciation.
@@ -1062,7 +1062,7 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
         # ETAPE 4 : Gestion des tournées imposées
         # AJOUT : df_vehicules et df_sites
-        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree, df_vehicules, df_sites, df_contenants)
+        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree, df_vehicules, df_sites, df_contenants, nom_jour=nom_jour)
         
         # ETAPE 5 : Préparation de la pile (Reliquats + Solitaires)
         # Cette fonction utilise sj.type_logistique pour l'arbitrage
@@ -1070,7 +1070,7 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
         # ETAPE 6 : Arbitrage et optimisation des solitaires
         # AJOUT : df_vehicules et df_sites
-        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree, df_vehicules, df_sites, df_contenants)
+        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree, df_vehicules, df_sites, df_contenants, nom_jour=nom_jour)
         
         # Fusion pour ce type de véhicule
         tous_les_super_jobs_du_jour.extend(sj_complets)
