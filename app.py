@@ -286,7 +286,8 @@ elif selected == "Synthèse transport":
                     st.write(f"🔄 **{jour}** — préparation des flux...")
                     df_jour       = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
                     liste_sj_jour = tunnel_consolidation_flux(
-                        df_jour, df_vehicules, df_contenants, df_sites, matrice_duree)
+                        df_jour, df_vehicules, df_contenants, df_sites, matrice_duree,
+                        nom_jour=str(jour))
                     nb_sj_total = len(liste_sj_jour)
                     intensite   = calculer_nmax_par_type(liste_sj_jour)
 
