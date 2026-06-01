@@ -410,7 +410,28 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     p.enregistrer(minute, "PASSATION_FIN")
                 # Sinon : on reste DISPONIBLE, réévaluation à la prochaine minute
 
-        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB', 'EN_RETOUR_DEPOT'] for p in postes): return postes, []
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB', 'EN_RETOUR_DEPOT'] for p in postes):
+            # ── Vérification des deadlines avant de valider la solution ──────────
+            # Un job "affecté" mais livré après sa deadline = solution invalide.
+            # On reconstruit les heures réelles de livraison depuis l'historique.
+            violations = []
+            sj_index = {sj.super_job_id: sj for sj in liste_sj_type}
+            for p in postes:
+                for i, ev in enumerate(p.historique):
+                    if ev['Activite'] != 'EN_MISSION' or ev['SJ_ID'] == 'N/A':
+                        continue
+                    sj = sj_index.get(ev['SJ_ID'])
+                    if not sj:
+                        continue
+                    t_debut_mission = ev['Minute_Debut']
+                    h_fin_livraison = t_debut_mission + sj.poids_total
+                    deadline = to_min(sj.h_deadline_min)
+                    if h_fin_livraison > deadline:
+                        violations.append(sj.super_job_id)
+            if violations:
+                # Des deadlines sont violées → solution invalide
+                return None, violations  # on retourne les sj_ids en violation comme "non traités"
+            return postes, []
         minute += 1
     return None, jobs_restants
 
@@ -457,7 +478,11 @@ def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, 
                     res, jobs_nt = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
 
                     if res is not None and len(jobs_nt) > 0:
-                        st.write(f"  ⚠️ im={im} iam={iam} t={tension:.1f} → {len(jobs_v)-len(jobs_nt)}/{len(jobs_v)} traités — rejetée")
+                        # jobs_nt peut contenir des SJ non traités OU des SJ_IDs en violation de deadline
+                        if isinstance(jobs_nt[0], str):
+                            st.write(f"  ⚠️ im={im} iam={iam} t={tension:.1f} → {len(jobs_nt)} deadline(s) violée(s) — rejetée")
+                        else:
+                            st.write(f"  ⚠️ im={im} iam={iam} t={tension:.1f} → {len(jobs_v)-len(jobs_nt)}/{len(jobs_v)} traités — rejetée")
                         res = None
                     elif res is None:
                         st.write(f"  ❌ im={im} iam={iam} t={tension:.1f} → aucune solution")
