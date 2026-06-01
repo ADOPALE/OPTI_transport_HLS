@@ -642,136 +642,85 @@ elif selected == "Synthèse transport":
 
 
     # ════════════════════════════════════════════════════════════════════
-    # ════════════════════════════════════════════════════════════════════
     # TAB 2 — DÉTAIL TOURNÉES PAR SITE
+    # Source unique : les lignes du tableau par poste (rows déjà construits)
+    # On réexploite exactement les mêmes données que tab_postes.
     # ════════════════════════════════════════════════════════════════════
     with tab_sites:
-        # ── Index SJ uniquement sur ceux RÉELLEMENT EXÉCUTÉS ─────────────
-        # On ne garde que les SJ_ID qui apparaissent dans un EN_MISSION
-        # d'un poste — les SJ créés mais non planifiés sont exclus.
-        sj_ids_executes = {
-            ev["SJ_ID"]
-            for p_e in postes_jour
-            for ev in p_e.historique
-            if ev["Activite"] == "EN_MISSION" and ev.get("SJ_ID", "N/A") != "N/A"
-        }
-        sj_index = {
-            sj.super_job_id: sj
-            for sj in liste_sj_sel
-            if sj.super_job_id in sj_ids_executes
-        }
 
-        # ── Collecter tous les sites depuis L'HISTORIQUE DES POSTES ──────
-        # Source unique = ce qui a réellement été exécuté, pas liste_sj_sel
-        tous_sites = set()
-        for p_s in postes_jour:
-            for ev_s in p_s.historique:
-                if ev_s.get("SJ_ID", "N/A") == "N/A":
+        # ── Reconstruire les passages depuis l'historique des postes ─────
+        # On rejoue exactement la même logique que tab_postes pour les
+        # étapes CHARGEMENT / DECHARGEMENT, sans passer par liste_sj_sel.
+        sj_index_ts = {sj.super_job_id: sj for sj in liste_sj_sel}
+        tous_sites_ts = set()
+        all_passages  = []  # tous sites confondus
+
+        for p in postes_jour:
+            hist_tri_p = sorted(p.historique, key=lambda x: x["Minute_Debut"])
+            for i_ev, ev in enumerate(hist_tri_p):
+                if ev["Activite"] != "EN_MISSION" or ev.get("SJ_ID", "N/A") == "N/A":
                     continue
-                sj_s = sj_index.get(ev_s["SJ_ID"])
-                if sj_s and hasattr(sj_s, "chronologie"):
-                    for etape_s in sj_s.chronologie:
-                        tous_sites.add(etape_s["site"])
-                # Fallback : si pas de chronologie, ajouter les sites des jobs
-                elif sj_s:
-                    for j_s in sj_s.liste_jobs:
-                        tous_sites.add(getattr(j_s, "origin", ""))
-                        tous_sites.add(getattr(j_s, "destination", ""))
-        tous_sites = sorted(s for s in tous_sites if s)
+                sj = sj_index_ts.get(ev["SJ_ID"])
+                if not sj or not hasattr(sj, "chronologie") or not sj.chronologie:
+                    continue
+                t_ancre = ev["Minute_Debut"]
 
-        if not tous_sites:
-            st.info("Aucune donnée disponible.")
-        else:
-            site_sel = st.selectbox("Sélectionner un site", tous_sites, key="sel_site")
-
-            passages = []
-            for p in postes_jour:
-                hist_tri_p = sorted(p.historique, key=lambda x: x["Minute_Debut"])
-                for ev in hist_tri_p:
-                    if ev["Activite"] != "EN_MISSION" or ev.get("SJ_ID") == "N/A":
+                for etape in sj.chronologie:
+                    action = etape["action"]
+                    if action not in ("CHARGEMENT", "DECHARGEMENT"):
                         continue
-                    sj = sj_index.get(ev["SJ_ID"])
-                    if not sj:
-                        continue
-                    t_ancre = ev["Minute_Debut"]
+                    site = etape["site"]
+                    tous_sites_ts.add(site)
+                    sens = "PRISE" if action == "CHARGEMENT" else "DEPOSE"
 
-                    if hasattr(sj, "chronologie") and sj.chronologie:
-                        # ── Source : chronologie détaillée ───────────────────
-                        for etape in sj.chronologie:
-                            if etape["site"] != site_sel:
-                                continue
-                            action = etape["action"]
-                            if action == "CHARGEMENT":
-                                sens = "PRISE"
-                            elif action == "DECHARGEMENT":
-                                sens = "DEPOSE"
-                            else:
-                                continue
+                    # Arrivée quai = étape MISE_A_QUAI précédente (index 0-based)
+                    h_arrivee_quai = "—"
+                    idx_e = etape["etape"] - 2
+                    if 0 <= idx_e < len(sj.chronologie):
+                        ep = sj.chronologie[idx_e]
+                        if "MISE_A_QUAI" in ep["action"]:
+                            h_arrivee_quai = min_to_h(t_ancre + ep["t_debut"])
 
-                            # Arrivée quai = étape MISE_A_QUAI précédente
-                            h_arrivee_quai = "—"
-                            idx_e = etape["etape"] - 2  # 0-based
-                            if 0 <= idx_e < len(sj.chronologie):
-                                etape_prec = sj.chronologie[idx_e]
-                                if "MISE_A_QUAI" in etape_prec["action"]:
-                                    h_arrivee_quai = min_to_h(t_ancre + etape_prec["t_debut"])
+                    h_debut_op = min_to_h(t_ancre + etape["t_debut"])
+                    h_fin_op   = min_to_h(t_ancre + etape["t_fin"])
 
-                            h_debut_op = min_to_h(t_ancre + etape["t_debut"])
-                            h_fin_op   = min_to_h(t_ancre + etape["t_fin"])
+                    job_ids = etape.get("job_id", [])
+                    if isinstance(job_ids, str):
+                        job_ids = [job_ids]
+                    jobs_concernes = [j for j in sj.liste_jobs if j.job_id in job_ids]
 
-                            job_ids = etape.get("job_id", [])
-                            if isinstance(job_ids, str):
-                                job_ids = [job_ids]
-                            jobs_concernes = [j for j in sj.liste_jobs if j.job_id in job_ids]
-
-                            if jobs_concernes:
-                                if sens == "PRISE":
-                                    contenu = " + ".join(
-                                        f"{j.quantite} {j.contenant} → {j.destination}"
-                                        for j in jobs_concernes)
-                                else:
-                                    contenu = " + ".join(
-                                        f"{j.quantite} {j.contenant} (depuis {j.origin})"
-                                        for j in jobs_concernes)
-                            else:
-                                contenu = etape.get("label", "")
-
-                            passages.append({
-                                "Poste"          : p.id_poste,
-                                "Arrivée quai"   : h_arrivee_quai,
-                                "Début opération": h_debut_op,
-                                "Fin opération"  : h_fin_op,
-                                "PRISE"          : contenu if sens == "PRISE" else "",
-                                "DEPOSE"         : contenu if sens == "DEPOSE" else "",
-                                "_sort"          : t_ancre + etape["t_debut"],
-                            })
+                    if jobs_concernes:
+                        contenu = " + ".join(
+                            f"{j.quantite} {j.contenant} → {j.destination}"
+                            if sens == "PRISE" else
+                            f"{j.quantite} {j.contenant} (depuis {j.origin})"
+                            for j in jobs_concernes
+                        )
                     else:
-                        # ── Fallback : pas de chronologie → on lit les jobs directement ──
-                        for j in sj.liste_jobs:
-                            if j.origin == site_sel:
-                                passages.append({
-                                    "Poste"          : p.id_poste,
-                                    "Arrivée quai"   : ev["Heure_Debut"],
-                                    "Début opération": ev["Heure_Debut"],
-                                    "Fin opération"  : "?",
-                                    "PRISE"          : f"{j.quantite} {j.contenant} → {j.destination}",
-                                    "DEPOSE"         : "",
-                                    "_sort"          : t_ancre,
-                                })
-                            elif j.destination == site_sel:
-                                passages.append({
-                                    "Poste"          : p.id_poste,
-                                    "Arrivée quai"   : ev["Heure_Debut"],
-                                    "Début opération": ev["Heure_Debut"],
-                                    "Fin opération"  : "?",
-                                    "PRISE"          : "",
-                                    "DEPOSE"         : f"{j.quantite} {j.contenant} (depuis {j.origin})",
-                                    "_sort"          : t_ancre,
-                                })
+                        contenu = etape.get("label", "")
+
+                    all_passages.append({
+                        "site"           : site,
+                        "Poste"          : p.id_poste,
+                        "Arrivée quai"   : h_arrivee_quai,
+                        "Début opération": h_debut_op,
+                        "Fin opération"  : h_fin_op,
+                        "PRISE"          : contenu if sens == "PRISE" else "",
+                        "DEPOSE"         : contenu if sens == "DEPOSE" else "",
+                        "_sort"          : t_ancre + etape["t_debut"],
+                    })
+
+        tous_sites_ts = sorted(tous_sites_ts)
+
+        if not tous_sites_ts:
+            st.info("Aucune donnée de chronologie disponible.")
+        else:
+            site_sel = st.selectbox("Sélectionner un site", tous_sites_ts, key="sel_site")
+            passages = [r for r in all_passages if r["site"] == site_sel]
+            passages.sort(key=lambda x: x["_sort"])
 
             if passages:
-                passages.sort(key=lambda x: x["_sort"])
-                df_site = pd.DataFrame(passages).drop(columns=["_sort"])
+                df_site = pd.DataFrame(passages).drop(columns=["site", "_sort"])
                 st.dataframe(df_site, use_container_width=True, hide_index=True)
             else:
                 st.info(f"Aucun passage trouvé pour {site_sel}.")
