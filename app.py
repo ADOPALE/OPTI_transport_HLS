@@ -496,17 +496,34 @@ elif selected == "Synthèse transport":
                 t_dispo   = sum(duree_ev(i) for i, e in enumerate(evs) if e["Activite"] in ACTI_DISPO)
                 taux_occ  = round((1 - t_dispo / duree_service) * 100, 1)
 
+                # Trajet chargé = somme des étapes TRAJET dans les chronologies des missions
+                sj_index_p = {sj.super_job_id: sj for sj in liste_sj_sel}
+                t_trajet_charge = 0
+                for ev_m in evs:
+                    if ev_m["Activite"] != "EN_MISSION" or ev_m.get("SJ_ID", "N/A") == "N/A":
+                        continue
+                    sj_m = sj_index_p.get(ev_m["SJ_ID"])
+                    if sj_m and hasattr(sj_m, "chronologie"):
+                        t_trajet_charge += sum(
+                            e["duree"] for e in sj_m.chronologie
+                            if e["action"] == "TRAJET"
+                        )
+                t_roulage = t_trajet_charge + t_trajet  # chargé + à vide
+                ratio_charge = round(t_trajet_charge / t_roulage * 100, 1) if t_roulage > 0 else 0
+
                 with st.expander(
                     f"🚛 {p.id_poste}  —  Service {idx_s + 1}  |  {h_deb_s} → {h_fin_s}  "
                     f"|  {nb_missions} mission(s)  |  Taux occup. {taux_occ}%",
                     expanded=False
                 ):
                     # ── Métriques synthétiques ──────────────────────────────
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("⏱ En mission",        f"{t_mission} min")
-                    c2.metric("🚗 Trajet à vide",     f"{t_trajet} min")
-                    c3.metric("⏳ Dispo sans tâche",  f"{t_dispo} min")
-                    c4.metric("📊 Taux d'occupation", f"{taux_occ} %")
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric("⏱ En mission",          f"{t_mission} min")
+                    c2.metric("🚗 Trajet à vide",       f"{t_trajet} min")
+                    c3.metric("⏳ Dispo sans tâche",    f"{t_dispo} min")
+                    c4.metric("📊 Taux d'occupation",   f"{taux_occ} %")
+                    c5.metric("📦 Trajet chargé/roulage", f"{ratio_charge} %",
+                              help=f"Trajet chargé : {t_trajet_charge} min — Roulage total : {t_roulage} min")
                     st.divider()
 
                     rows = []
