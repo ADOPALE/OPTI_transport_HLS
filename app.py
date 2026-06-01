@@ -503,89 +503,136 @@ elif selected == "Synthèse transport":
                     st.divider()
 
                     rows = []
+
+                    # ── Capacité max du véhicule pour la heatmap ─────────────
+                    cap_max_cont = None
+                    for ev_cap in evs:
+                        if ev_cap.get("SJ_ID", "N/A") != "N/A":
+                            sj_cap = next((s for s in liste_sj_sel
+                                           if s.super_job_id == ev_cap["SJ_ID"]), None)
+                            if sj_cap and sj_cap.liste_jobs:
+                                j0 = sj_cap.liste_jobs[0]
+                                if j0.taux_occupation > 0:
+                                    cap_max_cont = round(j0.quantite / j0.taux_occupation)
+                                    break
+
                     for i, ev in enumerate(evs):
                         acti = ev["Activite"]
-                        if acti not in ("EN_MISSION", "EN_TRAJET_VIDE", "INTER_JOB",
-                                        "PRISE_POSTE", "PASSATION_FIN", "FIN_DE_SERVICE",
-                                        "EN_PAUSE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
-                            continue
-
                         debut  = ev["Minute_Debut"]
                         fin_m  = evs[i + 1]["Minute_Debut"] if i < len(evs) - 1 else debut + 15
                         h_fin_ev = min_to_h(fin_m)
-                        detail = ""
 
                         if acti == "EN_MISSION":
                             sj_id = ev.get("SJ_ID", "N/A")
                             sj = next((s for s in liste_sj_sel if s.super_job_id == sj_id), None)
                             if sj and hasattr(sj, "chronologie") and sj.chronologie:
-                                lignes = [f"{sj.type_logistique} — {sj_id}"]
+                                # En-tête mission
+                                rows.append({
+                                    "Heure début" : ev["Heure_Debut"],
+                                    "Heure fin"   : h_fin_ev,
+                                    "Activité"    : f"── {sj.type_logistique} {sj_id} ──",
+                                    "Détail"      : "",
+                                    "À bord"      : "",
+                                    "_bord_val"   : None,
+                                })
+                                cont_a_bord = 0
                                 for etape in sj.chronologie:
                                     h_deb_e = min_to_h(debut + etape["t_debut"])
                                     h_fin_e = min_to_h(debut + etape["t_fin"])
-                                    lignes.append(
-                                        f"  {etape['etape']}. {etape.get('label', etape['action'])}"
-                                        f"  {h_deb_e}→{h_fin_e}"
-                                    )
-                                detail = "\n".join(lignes)  # stocké pour le bloc texte
+                                    qte = etape.get("quantite", 0)
+                                    if etape["action"] == "CHARGEMENT":
+                                        cont_a_bord += qte
+                                    elif etape["action"] == "DECHARGEMENT":
+                                        cont_a_bord = max(0, cont_a_bord - qte)
+                                    if cap_max_cont and cap_max_cont > 0:
+                                        taux = round(cont_a_bord / cap_max_cont * 100)
+                                        bord_str = f"{int(cont_a_bord)} ({taux}%)"
+                                        bord_val = cont_a_bord / cap_max_cont
+                                    else:
+                                        bord_str = str(int(cont_a_bord)) if cont_a_bord > 0 else ""
+                                        bord_val = None
+                                    rows.append({
+                                        "Heure début" : h_deb_e,
+                                        "Heure fin"   : h_fin_e,
+                                        "Activité"    : etape["action"],
+                                        "Détail"      : etape.get("label", ""),
+                                        "À bord"      : bord_str,
+                                        "_bord_val"   : bord_val,
+                                    })
                             elif sj:
-                                detail = "\n".join(
-                                    f"{getattr(j,'origin','?')} → {getattr(j,'destination','?')} ({getattr(j,'quantite','?')} cont.)"
-                                    for j in sj.liste_jobs
-                                )
+                                rows.append({
+                                    "Heure début" : ev["Heure_Debut"],
+                                    "Heure fin"   : h_fin_ev,
+                                    "Activité"    : "EN_MISSION",
+                                    "Détail"      : " / ".join(
+                                        f"{getattr(j,'origin','?')}"
+                                        f" → {getattr(j,'destination','?')}"
+                                        f" ({getattr(j,'quantite','?')} cont.)"
+                                        for j in sj.liste_jobs),
+                                    "À bord"      : "",
+                                    "_bord_val"   : None,
+                                })
 
                         elif acti == "INTER_JOB":
-                            pos = ev.get("position_depart", "?")
-                            detail = f"Position : {pos} | Fin : {h_fin_ev}"
+                            rows.append({
+                                "Heure début" : ev["Heure_Debut"],
+                                "Heure fin"   : h_fin_ev,
+                                "Activité"    : acti,
+                                "Détail"      : f"Position : {ev.get('position_depart','?')}",
+                                "À bord"      : "",
+                                "_bord_val"   : None,
+                            })
 
                         elif acti in ("EN_TRAJET_VIDE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
                             pt_dep = ev.get("position_depart", "?")
                             if acti == "EN_TRAJET_VIDE" and ev.get("SJ_ID") != "N/A":
-                                sj = next((s for s in liste_sj_sel if s.super_job_id == ev.get("SJ_ID")), None)
+                                sj = next((s for s in liste_sj_sel
+                                           if s.super_job_id == ev.get("SJ_ID")), None)
                                 pt_arr = sj.points_depart[0] if sj else p.stationnement_initial
                             else:
                                 pt_arr = p.stationnement_initial
-                            detail = f"{pt_dep} → {pt_arr} | Arrivée : {h_fin_ev}"
+                            rows.append({
+                                "Heure début" : ev["Heure_Debut"],
+                                "Heure fin"   : h_fin_ev,
+                                "Activité"    : acti,
+                                "Détail"      : f"{pt_dep} → {pt_arr}",
+                                "À bord"      : "",
+                                "_bord_val"   : None,
+                            })
 
-                        elif acti == "EN_PAUSE":
-                            detail = f"Fin : {h_fin_ev}"
-
-                        elif acti in ("PRISE_POSTE", "PASSATION_FIN", "FIN_DE_SERVICE"):
-                            detail = ev.get("Details", "")
-
-                        rows.append({
-                            "Heure début" : ev["Heure_Debut"],
-                            "Heure fin"   : h_fin_ev,
-                            "Activité"    : acti,
-                            "Détail"      : detail,
-                        })
+                        elif acti in ("EN_PAUSE", "PRISE_POSTE", "PASSATION_FIN", "FIN_DE_SERVICE"):
+                            rows.append({
+                                "Heure début" : ev["Heure_Debut"],
+                                "Heure fin"   : h_fin_ev,
+                                "Activité"    : acti,
+                                "Détail"      : ev.get("Details", ""),
+                                "À bord"      : "",
+                                "_bord_val"   : None,
+                            })
 
                     if rows:
-                        # Séparer les lignes mission (détail multiligne) des autres
-                        rows_tableau = []
-                        for r in rows:
-                            if r["Activité"] == "EN_MISSION":
-                                # Ligne résumé dans le tableau
-                                rows_tableau.append({
-                                    "Heure début": r["Heure début"],
-                                    "Heure fin":   r["Heure fin"],
-                                    "Activité":    r["Activité"],
-                                    "Détail":      r["Détail"].split("\n")[0],  # première ligne = titre
-                                })
-                                # Détail complet en bloc texte sous la ligne
-                                st.dataframe(
-                                    pd.DataFrame(rows_tableau),
-                                    use_container_width=True, hide_index=True
+                        df_rows = pd.DataFrame(rows)
+                        bord_vals = df_rows["_bord_val"].tolist()
+                        df_display = df_rows.drop(columns=["_bord_val"])
+
+                        def color_bord(row):
+                            styles = [""] * len(row)
+                            idx_col = list(df_display.columns).index("À bord")
+                            bv = bord_vals[row.name] if row.name < len(bord_vals) else None
+                            if bv is not None and bv > 0:
+                                r_c = int(min(255, bv * 2 * 255))
+                                g_c = int(min(255, (1 - bv) * 2 * 255))
+                                styles[idx_col] = (
+                                    f"background-color: rgb({r_c},{g_c},50);"
+                                    f" color: white; font-weight: bold"
                                 )
-                                rows_tableau = []
-                                st.code(r["Détail"], language=None)
-                            else:
-                                rows_tableau.append(r)
-                        if rows_tableau:
-                            st.dataframe(
-                                pd.DataFrame(rows_tableau),
-                                use_container_width=True, hide_index=True
-                            )
+                            return styles
+
+                        st.dataframe(
+                            df_display.style.apply(color_bord, axis=1),
+                            use_container_width=True, hide_index=True
+                        )
+
 
     # ════════════════════════════════════════════════════════════════════
     # TAB 2 — DÉTAIL TOURNÉES PAR SITE
