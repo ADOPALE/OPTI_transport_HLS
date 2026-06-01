@@ -1004,7 +1004,7 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicule
     return super_jobs_optimises
 
 
-def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules, df_sites):
+def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules, df_sites, nom_jour='J'):
     """
     Transforme chaque Job complet en un SuperJob unique.
     Indispensable pour l'unification du traitement (ordonnancement et lissage).
@@ -1014,7 +1014,7 @@ def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules,
     for i, j in enumerate(jobs_complets):
         # On crée un SuperJob avec les paramètres requis par le __init__
         sj = SuperJob(
-            super_job_id=f"DIRECT_COMPLET_{i+1}_{job.vehicule_type}_{job.job_id}_{nom_jour}",
+            super_job_id=f"DIRECT_COMPLET_{i+1}_{j.vehicule_type}_{j.job_id}_{nom_jour}",
             v_type=j.vehicule_type,
             liste_jobs=[j],
             matrice_duree=matrice_duree,
@@ -1058,7 +1058,7 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
         # ETAPE 3 : Conversion des complets en SuperJobs
         # AJOUT : df_vehicules et df_sites pour l'init de SuperJob
-        sj_complets = convertir_complets_en_super_jobs(jobs_c, matrice_duree, df_vehicules, df_sites)
+        sj_complets = convertir_complets_en_super_jobs(jobs_c, matrice_duree, df_vehicules, df_sites, nom_jour=nom_jour)
         
         # ETAPE 4 : Gestion des tournées imposées
         # AJOUT : df_vehicules et df_sites
