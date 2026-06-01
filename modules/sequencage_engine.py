@@ -90,31 +90,153 @@ class PosteChauffeur:
 # 3. MOTEUR DE SIMULATION
 # =================================================================
 
-def selectionner_meilleur_job(p, dispos, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job=False):
+def selectionner_meilleur_job(p, dispos, minute, matrice_duree, nb_Jobs, jobs_restants,
+                              est_premier_job=False, jobs_reserves=None):
+    """
+    Sélectionne le meilleur SJ pour le poste p parmi dispos.
+    jobs_reserves : dict {sj_id → poste_reservataire} — les jobs réservés pour
+    un poste futur plus pertinent sont exclus sauf si p est le poste reservataire.
+    """
     if not dispos: return None
+    if jobs_reserves is None: jobs_reserves = {}
+
+    # Filtrer les jobs réservés pour un autre poste
+    dispos_filtres = [
+        sj for sj in dispos
+        if sj.super_job_id not in jobs_reserves          # pas réservé
+        or jobs_reserves[sj.super_job_id] is p           # ou réservé pour MOI
+    ]
+    if not dispos_filtres:
+        # Tous les jobs sont réservés pour d'autres — on tente quand même sur
+        # les jobs les plus urgents (évite le blocage total)
+        dispos_filtres = dispos
+
     liste_candidats = []
-    for sj in dispos:
+    for sj in dispos_filtres:
         stress = calculer_stress_maillon_critique(sj, minute, matrice_duree, p.position_actuelle)
         liste_candidats.append({'sj': sj, 'stress': stress})
-    
+
     liste_candidats.sort(key=lambda x: x['stress'], reverse=True)
     top_n_jobs = [item['sj'] for item in liste_candidats[:nb_Jobs]]
-    
+
+    # Priorité 1 : job réservé pour CE poste parmi les top-N (urgence absolue)
+    for sj in top_n_jobs:
+        if jobs_reserves.get(sj.super_job_id) is p:
+            return sj
+
+    # Priorité 2 : même couloir ET même position
     couloir_precedent = p.couloir_actuel
     for sj in top_n_jobs:
         if couloir_precedent and get_couloir_id(sj) == couloir_precedent and sj.points_depart[0] == p.position_actuelle:
             return sj
+    # Priorité 3 : même position exacte
     for sj in top_n_jobs:
         if sj.points_depart[0] == p.position_actuelle: return sj
+    # Priorité 4 : même zone géographique
     for sj in top_n_jobs:
         if sj.points_depart[0][:3] == p.position_actuelle[:3]: return sj
-            
+    # Priorité 5 : le plus proche
     best_sj_proximite, dist_min = None, float('inf')
     for sj in top_n_jobs:
         dist = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
         if dist < dist_min:
             dist_min, best_sj_proximite = dist, sj
     return best_sj_proximite
+
+
+SEUIL_STRESS_RESERVATION = 950   # jobs avec deadline dans < 50 min
+SEUIL_LOOK_AHEAD_MIN     = 15    # on regarde jusqu'à 15 min dans le futur
+
+def estimer_disponibilite_poste(p, minute, matrice):
+    """
+    Retourne (minute_dispo, position_dispo) :
+    la minute à laquelle le poste sera libre et sa position à ce moment.
+    - Poste DISPONIBLE/INACTIF → disponible maintenant, position actuelle
+    - Poste EN_MISSION → libre à minute + temps_restant, à la destination du SJ
+    - Poste EN_TRAJET_VIDE → libre à minute + temps_restant + poids SJ, à la destination
+    - Autres états → estimation conservative : minute + temps_restant
+    """
+    if p.etat in ('DISPONIBLE', 'INACTIF', 'INTER_JOB', 'EN_RETOUR_DEPOT'):
+        return minute, p.position_actuelle
+    if p.etat == 'EN_MISSION' and p.job_en_cours:
+        m_dispo = minute + p.temps_restant_etat
+        pos_dispo = p.job_en_cours.points_arrivee[-1]
+        return m_dispo, pos_dispo
+    if p.etat == 'EN_TRAJET_VIDE' and p.job_en_cours:
+        # Arrive sur site de départ dans temps_restant, puis fait la mission
+        m_dispo = minute + p.temps_restant_etat + p.job_en_cours.poids_total
+        pos_dispo = p.job_en_cours.points_arrivee[-1]
+        return m_dispo, pos_dispo
+    # Cas génériques (PAUSE, PRISE_POSTE, PASSATION…)
+    return minute + p.temps_restant_etat, p.position_actuelle
+
+
+def evaluer_faisabilite_globale(postes, jobs_restants, minute, matrice):
+    """
+    Pour chaque job urgent (stress > SEUIL_STRESS_RESERVATION), détermine
+    le meilleur poste capable de le traiter (maintenant ou dans les 15 min).
+
+    Retourne jobs_reserves : dict {super_job_id → meilleur_poste}
+    Un job est réservé si :
+      - Le meilleur poste n'est pas disponible maintenant (delta > 0)
+      - Mais il sera disponible dans <= SEUIL_LOOK_AHEAD_MIN minutes
+      - Et la livraison sera terminée avant h_deadline_min
+    Si le meilleur poste est déjà disponible maintenant, on ne réserve pas
+    (il prendra le job naturellement via selectionner_meilleur_job).
+    """
+    jobs_reserves = {}   # {sj.super_job_id: poste_reservataire}
+
+    postes_actifs = [p for p in postes
+                     if p.etat not in ('OPTIMISATION_AM', 'FIN_DE_SERVICE')
+                     and p.h_debut_service_actuel is not None]
+
+    for sj in jobs_restants:
+        # Filtrer sur les jobs urgents uniquement
+        stress = calculer_stress_maillon_critique(sj, minute, matrice,
+                                                  postes_actifs[0].position_actuelle if postes_actifs else '')
+        if stress <= SEUIL_STRESS_RESERVATION:
+            continue
+
+        deadline = to_min(sj.h_deadline_min)
+        meilleur_poste  = None
+        meilleur_score  = float('inf')   # on minimise (minute_fin_livraison)
+        poste_dispo_now = None           # meilleur poste disponible maintenant
+
+        for p in postes_actifs:
+            # Vérifier que le poste a encore de l'amplitude
+            h_limite = p.h_debut_service_actuel + p.amplitude_max - p.temps_passation
+            m_dispo, pos_dispo = estimer_disponibilite_poste(p, minute, matrice)
+            delta = m_dispo - minute
+
+            # On ne regarde pas au-delà du seuil look-ahead
+            if delta > SEUIL_LOOK_AHEAD_MIN:
+                continue
+
+            approche = matrice.get(pos_dispo, {}).get(sj.points_depart[0], 0)
+            m_fin = m_dispo + approche + sj.poids_total
+
+            # Vérifier faisabilité : livraison avant deadline ET avant fin de poste
+            if m_fin > deadline or m_fin > h_limite:
+                continue
+
+            if delta == 0:
+                # Poste disponible maintenant — candidat naturel, noter le meilleur
+                if m_fin < meilleur_score:
+                    meilleur_score = m_fin
+                    poste_dispo_now = p
+            else:
+                # Poste futur — candidat à réservation
+                if m_fin < meilleur_score:
+                    meilleur_score = m_fin
+                    meilleur_poste = p
+
+        # Décision de réservation :
+        # On réserve uniquement si le meilleur poste futur fait mieux que
+        # tous les postes disponibles maintenant.
+        if meilleur_poste and (poste_dispo_now is None or meilleur_score < poste_dispo_now.h_debut_service_actuel):
+            jobs_reserves[sj.super_job_id] = meilleur_poste
+
+    return jobs_reserves
 
 def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
     rh = params_logistique.get('rh', {})
@@ -192,15 +314,6 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
         # ── Visibilité anticipée des jobs ────────────────────────────────────────
-        # Un job est visible dès que le camion peut l'atteindre à temps depuis
-        # sa position actuelle, même si la dispo n'est pas encore atteinte.
-        #
-        # Règle : job visible si minute >= h_dispo_min(sj) - trajet(pos → départ_sj)
-        #   • poste INACTIF  : pos = dépôt, on soustrait aussi temps_prise
-        #   • poste actif    : pos = position_actuelle du poste
-        #
-        # Cela permet de voir très tôt les jobs contraints (stress élevé)
-        # sans jamais les affecter avant leur vraie h_dispo_min.
         def job_visible(sj, poste):
             pos = poste.position_actuelle
             trajet_approche = matrice_travail.get(pos, {}).get(sj.points_depart[0], 0)
@@ -209,12 +322,18 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 anticipation += poste.temps_prise
             return minute >= to_min(sj.h_dispo_min) - anticipation
 
-        # dispos globaux : union des jobs visibles par au moins un poste actif
-        # (utilisé pour les postes DISPONIBLE — chacun filtre ensuite par sa position)
         dispos = [j for j in jobs_restants if any(
             job_visible(j, p) for p in postes
             if p.etat not in ['OPTIMISATION_AM', 'FIN_DE_SERVICE']
         )]
+
+        # ── Évaluation globale et réservations look-ahead ────────────────────────
+        # Pour les jobs urgents (stress > 950), on identifie le meilleur poste
+        # futur (≤15 min) et on réserve le job pour lui si aucun poste disponible
+        # maintenant ne peut faire mieux.
+        jobs_reserves = evaluer_faisabilite_globale(
+            postes, jobs_restants, minute, matrice_travail
+        )
         for p in postes:
             if p.etat == 'OPTIMISATION_AM' or p.temps_restant_etat > 0: continue
             
@@ -269,7 +388,7 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 best_sj = None
                 if dispos_poste:
                     nb_Jobs = max(math.ceil(prio_tension * len(dispos_poste)), 1)
-                    candidat = selectionner_meilleur_job(p, dispos_poste, minute, matrice_travail, nb_Jobs, jobs_restants)
+                    candidat = selectionner_meilleur_job(p, dispos_poste, minute, matrice_travail, nb_Jobs, jobs_restants, jobs_reserves=jobs_reserves)
                     if candidat:
                         approche = matrice_travail.get(p.position_actuelle, {}).get(candidat.points_depart[0], 0)
                         if (minute + approche + candidat.poids_total + dist_ret) <= h_limite_job:
@@ -305,7 +424,7 @@ def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_trav
 def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job=False, limite_critique=270):
     zone_depot = p.stationnement_initial[:3]
     candidats_v = [sj for sj in dispos if sj.points_arrivee[-1][:3] == zone_depot and ((minute + matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 20) + sj.poids_total + matrice_duree.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 20)) - p.h_debut_service_actuel) <= limite_critique]
-    return selectionner_meilleur_job(p, candidats_v, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job) if candidats_v else None
+    return selectionner_meilleur_job(p, candidats_v, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job) if candidats_v else None  # pas de réservations pour selectionner_meilleur_job_retour
 
 # =================================================================
 # 4. FONCTION D'ENTRÉE PRINCIPALE (OPTIMISÉE)
