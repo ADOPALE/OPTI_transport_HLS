@@ -655,7 +655,14 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     temp_list = sj_jobs + [nouveau_job]
     origins = [j.origin for j in temp_list]
     destinations = [j.destination for j in temp_list]
-    v_type = nouveau_job.vehicule_type
+
+    # --- 0. VÉRIFICATION TYPE DE VÉHICULE IDENTIQUE ----------------------
+    # Le pivot et le candidat doivent impérativement partager le même
+    # type de véhicule — sinon le SuperJob ne pourrait jamais être exécuté.
+    v_type_pivot = sj_jobs[0].vehicule_type
+    if nouveau_job.vehicule_type != v_type_pivot:
+        return False
+    v_type = v_type_pivot  # type du SuperJob = type du pivot
 
     # --- 1. DÉTERMINATION DE LA NATURE ---
     is_groupage = len(set(origins)) == 1 and len(set(destinations)) == 1
@@ -677,8 +684,9 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
     if len(types_flux_presents) > 1:
         return False
 
-    # --- 2ter. COMPATIBILITÉ CONTENANT / VÉHICULE ---
-    # Vérifie que le véhicule accepte chaque type de contenant du candidat
+    # --- 2ter. COMPATIBILITÉ CONTENANT / VÉHICULE DU PIVOT ---
+    # On vérifie sur v_type_pivot (le véhicule qui exécutera le SuperJob),
+    # pas sur le véhicule du candidat qui peut être différent.
     v_info = df_vehicules[df_vehicules.iloc[:, 0] == v_type]
     if not v_info.empty:
         for j in temp_list:
@@ -689,10 +697,9 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
                     return False
 
     # --- 2quater. BIN-PACKING (volume + poids) ---
-    # Uniquement si df_contenants est fourni et types de contenants différents présents
     if df_contenants is not None and not v_info.empty:
         contenants_presents = set(j.contenant for j in temp_list)
-        if len(contenants_presents) > 1:  # groupage inter-contenants : vérifier le volume
+        if len(contenants_presents) > 1:
             vehicule_row = v_info.iloc[0].to_dict()
             if not verifier_bin_packing_mixte(vehicule_row, temp_list, df_contenants):
                 return False
