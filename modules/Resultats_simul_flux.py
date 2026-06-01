@@ -61,8 +61,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
                     for etape in target_sj.chronologie:
                         h_deb = min_to_heure(t_ancre + etape["t_debut"])
                         h_fin = min_to_heure(t_ancre + etape["t_fin"])
-                        qte = f" ({etape['quantite']} cont.)" if etape.get("quantite") else ""
-                        lignes.append(f"{etape['etape']}. {etape['action']} @ {etape['site']}{qte} — {h_deb}→{h_fin}")
+                        lignes.append(f"{etape['etape']}. {etape.get('label', etape['action'])} — {h_deb}→{h_fin}")
                     hover_detail = "<br>".join(lignes)
                 else:
                     # Fallback si pas de chronologie : liste des jobs
