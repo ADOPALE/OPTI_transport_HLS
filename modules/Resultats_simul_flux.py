@@ -28,50 +28,91 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
     for p in postes_filtres:
         if not hasattr(p, 'historique') or not p.historique:
             continue
-            
+
         hist = sorted(p.historique, key=lambda x: x["Minute_Debut"])
-        
+
+        # Index des événements EN_MISSION par SJ_ID pour retrouver l'heure de prise en charge
+        missions_par_sj = {
+            ev["SJ_ID"]: ev["Minute_Debut"]
+            for ev in hist if ev["Activite"] == "EN_MISSION" and ev.get("SJ_ID") != "N/A"
+        }
+
+        def min_to_heure(m):
+            """Convertit des minutes depuis minuit en chaîne HHhMM."""
+            return f"{int(m // 60):02d}h{int(m % 60):02d}"
+
         for i in range(len(hist)):
             ev = hist[i]
             debut = ev["Minute_Debut"]
-            
-            if i < len(hist) - 1:
-                fin = hist[i+1]["Minute_Debut"]
-            else:
-                fin = debut + 15
-            
+            fin = hist[i + 1]["Minute_Debut"] if i < len(hist) - 1 else debut + 15
             duree = max(2, fin - debut)
-            
-            # --- LOGIQUE DE DÉTAIL DES JOBS ---
+            activite = ev["Activite"]
+
+            # ── Contenu du hover selon le type d'activité ────────────────────
             hover_detail = ev.get("Details", "")
-            
-            # Si c'est une mission, on va chercher les détails dans la liste_globale_sj
-            if ev["Activite"] == "EN_MISSION" and ev.get("SJ_ID") != "N/A":
+
+            if activite == "EN_MISSION" and ev.get("SJ_ID") != "N/A":
+                # Chronologie complète du SuperJob en heures absolues
                 sj_id = ev.get("SJ_ID")
-                # On retrouve le SuperJob correspondant
                 target_sj = next((s for s in liste_globale_sj if s.super_job_id == sj_id), None)
-                
-                if target_sj:
-                    details_jobs = []
-                    for idx, j in enumerate(target_sj.liste_jobs):
-                        # On récupère les infos : Départ -> Dest (Nombre contenants)
-                        # Note: adapte les noms d'attributs 'origin', 'destination', 'nb_contenants' selon ta classe Job
-                        orig = getattr(j, 'origin', '?')
-                        dest = getattr(j, 'destination', '?')
-                        qty = getattr(j, 'quantite', 1) 
-                        details_jobs.append(f"Job {idx+1}: {orig} -> {dest} ({qty} cont.)")
-                    
-                    # On remplace ou on ajoute au détail existant avec des retours à la ligne HTML (<br>)
-                    hover_detail = "<br>".join(details_jobs)
+                if target_sj and hasattr(target_sj, "chronologie") and target_sj.chronologie:
+                    t_ancre = debut  # heure absolue de démarrage de la mission
+                    lignes = [f"<b>Mission {sj_id}</b> — {target_sj.type_logistique}"]
+                    for etape in target_sj.chronologie:
+                        h_deb = min_to_heure(t_ancre + etape["t_debut"])
+                        h_fin = min_to_heure(t_ancre + etape["t_fin"])
+                        qte = f" ({etape['quantite']} cont.)" if etape.get("quantite") else ""
+                        lignes.append(f"{etape['etape']}. {etape['action']} @ {etape['site']}{qte} — {h_deb}→{h_fin}")
+                    hover_detail = "<br>".join(lignes)
+                else:
+                    # Fallback si pas de chronologie : liste des jobs
+                    if target_sj:
+                        lignes = [f"<b>Mission {sj_id}</b>"]
+                        for idx, j in enumerate(target_sj.liste_jobs):
+                            lignes.append(f"Job {idx+1}: {getattr(j,'origin','?')} → {getattr(j,'destination','?')} ({getattr(j,'quantite',1)} cont.)")
+                        hover_detail = "<br>".join(lignes)
+
+            elif activite == "INTER_JOB":
+                # Position (dernier déchargement) + horaires
+                hover_detail = (
+                    f"<b>Inter-job</b><br>"
+                    f"Position : {p.position_actuelle if hasattr(p, 'position_actuelle') else '?'}<br>"
+                    f"Début : {min_to_heure(debut)}<br>"
+                    f"Fin   : {min_to_heure(fin)}"
+                )
+
+            elif activite in ("EN_TRAJET_VIDE", "RETOUR_DEPOT", "EN_RETOUR_DEPOT"):
+                # Point de départ (enregistré dans position_depart) + point d'arrivée + horaires
+                pt_depart = ev.get("position_depart", "?")
+                # Point d'arrivée : pour EN_TRAJET_VIDE = départ du SJ, sinon = dépôt
+                if activite == "EN_TRAJET_VIDE" and ev.get("SJ_ID") != "N/A":
+                    target_sj = next((s for s in liste_globale_sj if s.super_job_id == ev.get("SJ_ID")), None)
+                    pt_arrivee = target_sj.points_depart[0] if target_sj else p.stationnement_initial
+                else:
+                    pt_arrivee = p.stationnement_initial
+                details_bruts = ev.get("Details", "")
+                hover_detail = (
+                    f"<b>{activite.replace('_', ' ').title()}</b><br>"
+                    f"Départ  : {min_to_heure(debut)} — {pt_depart}<br>"
+                    f"Arrivée : {min_to_heure(fin)} — {pt_arrivee}<br>"
+                    f"{details_bruts}"
+                )
+
+            elif activite == "EN_PAUSE":
+                hover_detail = (
+                    f"<b>Pause</b><br>"
+                    f"Début : {min_to_heure(debut)}<br>"
+                    f"Fin   : {min_to_heure(fin)}"
+                )
 
             data.append({
                 "Poste": p.id_poste,
                 "Début": debut,
                 "Durée": duree,
-                "Activité": ev["Activite"],
+                "Activité": activite,
                 "SJ_ID": ev.get("SJ_ID", "N/A"),
                 "Heure": ev["Heure_Debut"],
-                "Détails_Jobs": hover_detail # Nouveau champ pour le hover
+                "Détails_Jobs": hover_detail,
             })
 
     df = pd.DataFrame(data)
@@ -101,6 +142,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
             "PRISE_POSTE"   : "#9467bd",   # Violet — admin/prépa
             "PASSATION_FIN" : "#8c564b",   # Marron — fin de poste
             "RETOUR_DEPOT"  : "#e377c2",   # Rose — retour dépôt
+            "EN_RETOUR_DEPOT": "#f7b6d2",  # Rose clair — retour dépôt interruptible
             "EN_PAUSE"      : "#d62728",   # Rouge — pause
             "VEHICULE_LIBERE": "#bcbd22",  # Jaune-vert — libéré
         }
@@ -122,7 +164,7 @@ def afficher_gantt_chauffeur_detaille(postes, v_type_selectionne, liste_globale_
     )
 
     # Forcer l'affichage multi-ligne dans le hover
-    fig.update_traces(hovertemplate="<b>%{y}</b><br>Activité: %{customdata[2]}<br>%{customdata[4]}")
+    fig.update_traces(hovertemplate="<b>%{y}</b><br>%{customdata[4]}<extra></extra>")
 
     st.plotly_chart(fig, use_container_width=True)
 
