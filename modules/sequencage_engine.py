@@ -187,7 +187,30 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 p.etat, p.h_debut_service_actuel, p.pause_faite, p.couloir_actuel = 'INACTIF', None, False, None
                 p.enregistrer(minute, "VEHICULE_LIBERE")
 
-        dispos = [j for j in jobs_restants if to_min(j.h_dispo_min) <= minute]
+        # ── Visibilité anticipée des jobs ────────────────────────────────────────
+        # Un job est visible dès que le camion peut l'atteindre à temps depuis
+        # sa position actuelle, même si la dispo n'est pas encore atteinte.
+        #
+        # Règle : job visible si minute >= h_dispo_min(sj) - trajet(pos → départ_sj)
+        #   • poste INACTIF  : pos = dépôt, on soustrait aussi temps_prise
+        #   • poste actif    : pos = position_actuelle du poste
+        #
+        # Cela permet de voir très tôt les jobs contraints (stress élevé)
+        # sans jamais les affecter avant leur vraie h_dispo_min.
+        def job_visible(sj, poste):
+            pos = poste.position_actuelle
+            trajet_approche = matrice_travail.get(pos, {}).get(sj.points_depart[0], 0)
+            anticipation = trajet_approche
+            if poste.etat == 'INACTIF':
+                anticipation += poste.temps_prise
+            return minute >= to_min(sj.h_dispo_min) - anticipation
+
+        # dispos globaux : union des jobs visibles par au moins un poste actif
+        # (utilisé pour les postes DISPONIBLE — chacun filtre ensuite par sa position)
+        dispos = [j for j in jobs_restants if any(
+            job_visible(j, p) for p in postes
+            if p.etat not in ['OPTIMISATION_AM', 'FIN_DE_SERVICE']
+        )]
         for p in postes:
             if p.etat == 'OPTIMISATION_AM' or p.temps_restant_etat > 0: continue
             
@@ -233,9 +256,11 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     continue
 
                 # ── Chercher un job disponible qui rentre dans le poste ───────
-                if dispos:
-                    nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
-                    best_sj = selectionner_meilleur_job(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants)
+                # Filtre propre au poste : jobs visibles depuis sa position actuelle
+                dispos_poste = [j for j in dispos if job_visible(j, p)]
+                if dispos_poste:
+                    nb_Jobs = max(math.ceil(prio_tension * len(dispos_poste)), 1)
+                    best_sj = selectionner_meilleur_job(p, dispos_poste, minute, matrice_travail, nb_Jobs, jobs_restants)
                     if best_sj and (minute + best_sj.poids_total + dist_ret) <= h_limite_job:
                         affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                         continue
