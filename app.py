@@ -441,7 +441,7 @@ elif selected == "Synthèse transport":
     # TAB 1 — DÉTAIL PAR POSTE
     # ════════════════════════════════════════════════════════════════════
     with tab_postes:
-        for p in postes_affiches:
+        for p in postes_jour:  # tous les postes, pas seulement le filtre véhicule
             hist_tri = sorted(p.historique, key=lambda x: x["Minute_Debut"])
 
             # Découper l'historique en intervalles PRISE_POSTE → PASSATION_FIN
