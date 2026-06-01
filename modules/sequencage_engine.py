@@ -159,13 +159,20 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                 p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
             elif p.etat == 'EN_RETOUR_DEPOT':
                 # EN_RETOUR_DEPOT = retour sans mission. À l'arrivée le poste
-                # repasse en DISPONIBLE pour que la boucle évalue la fin de poste.
+                # repasse en DISPONIBLE — sauf si la pause est encore due,
+                # auquel cas on la déclenche immédiatement pour éviter la boucle infinie.
                 p.position_actuelle = p.stationnement_initial
                 idx_p = int(p.id_poste.split('_')[-1])
                 if minute >= h_bascule and idx_p > I_am:
                     p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
                     p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
                     continue
+                if p.h_debut_service_actuel is not None:
+                    temps_trav_arrivee = minute - p.h_debut_service_actuel
+                    if temps_trav_arrivee >= p.amplitude_max // 2 and not p.pause_faite:
+                        p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
+                        p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
+                        continue
                 p.etat = 'DISPONIBLE'  # la boucle DISPONIBLE gère la suite
             elif p.etat == 'EN_MISSION':
                 p.position_actuelle = p.job_en_cours.points_arrivee[-1]
@@ -242,12 +249,14 @@ def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matr
                     if best_sj and (minute + approche + best_sj.poids_total + dist_ret) <= h_limite_job:
                         affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
                         continue
-                    # Aucun job compatible : retour dépôt pour pause
+                    # Aucun job compatible : aller au dépôt pour faire la pause.
+                    # Si déjà au dépôt : pause immédiate, pas de boucle EN_RETOUR_DEPOT.
                     if p.position_actuelle != p.stationnement_initial:
                         p.etat = 'EN_RETOUR_DEPOT'
                         p.temps_restant_etat = dist_ret
                         p.enregistrer(minute, "RETOUR_DEPOT", details="Retour Pause")
                     else:
+                        # Déjà au dépôt : pause déclenchée directement
                         p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
                         p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
                     continue
