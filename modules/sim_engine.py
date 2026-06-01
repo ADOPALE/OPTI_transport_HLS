@@ -565,14 +565,21 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
 
 
     # --- 4. SÉCURITÉ APPROCHE DYNAMIQUE ---
-    # On récupère la plus longue distance possible dans le réseau pour garantir 
-    # que le camion peut atteindre le point de départ peu importe où il était avant.
-    toutes_distances = []
-
-
-
-    # Pour obtenir le maximum global proprement avec Pandas :
-    temps_approche_max =  max(max(sous_dict.values()) for sous_dict in matrice_duree.values() if sous_dict)
+    # On utilise la distance max depuis le dépôt du type de véhicule concerné.
+    # C'est le pire cas réaliste : au moment du groupage le camion est au dépôt au plus loin.
+    # Bien plus précis que le pire cas absolu du réseau entier.
+    try:
+        depot = st.session_state.get("params_logistique", {}).get("stationnement_initial", None)
+        if depot and depot.upper() in matrice_duree:
+            distances_depuis_depot = matrice_duree.get(depot.upper(), {})
+            temps_approche_max = max(distances_depuis_depot.values()) if distances_depuis_depot else 30
+        else:
+            # Repli : moyenne des distances max par site (bien moins pessimiste que le max absolu)
+            temps_approche_max = sum(
+                max(d.values()) for d in matrice_duree.values() if d
+            ) / max(len(matrice_duree), 1)
+    except Exception:
+        temps_approche_max = 30  # valeur de secours raisonnable
 
     duree_totale = 0
     h_dispo_max = max(to_min(j.h_dispo) for j in temp_list)
@@ -669,42 +676,43 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
 
     # 2. Construction des SuperJobs par tournée
     for nom_t, liste_j in groupes_tournees.items():
-        # On trie la liste de la tournée par taux d'occupation décroissant (le pivot sera en tête)
         liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
-        
+
         while liste_j:
-            # On sort le job le plus lourd pour en faire le pivot du nouveau SuperJob
             current_sj_jobs = [liste_j.pop(0)]
-            
-            # On essaie de compléter ce SuperJob avec les jobs restants dans la liste
+            refus = []  # jobs refusés en passe 1 — candidats au backtracking
+
+            # --- PASSE 1 : parcours séquentiel ---
             idx = 0
             while idx < len(liste_j):
                 candidat = liste_j[idx]
-                
-                # Utilisation de la fonction de compatibilité robuste
-                """
-                compatible = est_compatible_sj_et_job(
-                    current_sj_jobs, 
-                    candidat, 
-                    matrice_duree, 
-                    df_vehicules, 
-                    df_sites, 
-                    taux_max_cible
-                )
-                """
                 if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible):
-                    # Le job est compatible (Temps, Contenant, Propre/Sale, Capacité)
                     current_sj_jobs.append(liste_j.pop(idx))
-                    # On ne随incrémente pas idx car l'élément suivant a glissé à la place de l'actuel
-                    
-                    # Optionnel : Si on est déjà très proche du taux_max_cible, on peut stopper
                     if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
+                        refus.extend(liste_j[idx:])
+                        liste_j = liste_j[:idx]
                         break
                 else:
-                    # Non compatible, on passe au candidat suivant dans la liste
-                    idx += 1
-            
-            # Une fois qu'on a parcouru toute la liste pour ce pivot, on crée l'objet SuperJob
+                    refus.append(liste_j.pop(idx))
+
+            # --- PASSE 2 : backtracking sur les refusés (du plus lourd au plus léger) ---
+            if sum(j.taux_occupation for j in current_sj_jobs) < (taux_max_cible - 0.01):
+                refus.sort(key=lambda x: x.taux_occupation, reverse=True)
+                encore_refus = []
+                for candidat in refus:
+                    if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible):
+                        current_sj_jobs.append(candidat)
+                        if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
+                            encore_refus.extend(refus[refus.index(candidat) + 1:])
+                            break
+                    else:
+                        encore_refus.append(candidat)
+                liste_j.extend(encore_refus)
+            else:
+                liste_j.extend(refus)
+
+            liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
+
             new_sj = SuperJob(
                 super_job_id=f"TOURNEE_{nom_t}_{len(super_jobs_tournees) + 1}",
                 v_type=current_sj_jobs[0].vehicule_type,
@@ -724,9 +732,11 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
     pour être 'scellés' et lesquels doivent être dégroupés pour optimisation.
     """
     params = st.session_state["params_logistique"]
-    autoriser_melange = params.get("optimiser_reliquats_tournees", False)
-    # On compare au remplissage MAX instantané pour ne pas casser les chaînages
-    seuil_rupture = params.get("seuil_rupture_reliquat", 70) / 100 
+    # autoriser_melange activé par défaut : les tournées sous le seuil retournent
+    # dans la pile commune pour être regroupées avec des solitaires.
+    autoriser_melange = params.get("optimiser_reliquats_tournees", True)
+    # Seuil à 70% : une tournée imposée à moins de 70% de remplissage est dégroupée.
+    seuil_rupture = params.get("seuil_rupture_reliquat", 70) / 100
 
     super_jobs_scelles = []
     pile_a_optimiser = jobs_solitaires_initiaux.copy()
