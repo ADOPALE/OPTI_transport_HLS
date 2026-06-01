@@ -3,7 +3,6 @@ import math
 import streamlit as st
 from datetime import time, datetime, timedelta
 
-
 # =================================================================
 # 1. UTILITAIRES & LOGIQUE DE SÉLECTION
 # =================================================================
@@ -95,19 +94,9 @@ def selectionner_meilleur_job(p, dispos, minute, matrice_duree, nb_Jobs, jobs_re
     if not dispos: return None
     liste_candidats = []
     for sj in dispos:
-        # ── Filtre deadline strict ────────────────────────────────────────
-        # On exclut tout job dont la livraison se terminerait après sa
-        # h_deadline_min, quel que soit son stress.
-        approche = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
-        heure_fin_livraison = minute + approche + sj.poids_total
-        if heure_fin_livraison > to_min(sj.h_deadline_min):
-            continue  # deadline déjà dépassée → on ne propose jamais ce job
-
         stress = calculer_stress_maillon_critique(sj, minute, matrice_duree, p.position_actuelle)
         liste_candidats.append({'sj': sj, 'stress': stress})
     
-    if not liste_candidats:
-        return None
     liste_candidats.sort(key=lambda x: x['stress'], reverse=True)
     top_n_jobs = [item['sj'] for item in liste_candidats[:nb_Jobs]]
     
