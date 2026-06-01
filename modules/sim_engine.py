@@ -645,10 +645,12 @@ def fragmenter_en_jobs(df_eclate_v, v_type_str, df_vehicules, df_contenants):
 
 
 
-def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, df_sites, taux_max_cible):
+def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, df_sites, taux_max_cible, df_contenants=None):
     """
     Vérifie la faisabilité technique et temporelle.
-    Critère : Fenêtre de tir commune pour l'imbriqué, succession pour le chaînage.
+    Seuls les groupages imbriqués (GROUPAGE_PUR, DISTRIBUTION, RAMASSAGE) sont autorisés.
+    Les chaînages (plusieurs origines ET plusieurs destinations) sont refusés —
+    ils seront construits dynamiquement par le séquençage.
     """
     temp_list = sj_jobs + [nouveau_job]
     origins = [j.origin for j in temp_list]
@@ -657,25 +659,43 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
 
     # --- 1. DÉTERMINATION DE LA NATURE ---
     is_groupage = len(set(origins)) == 1 and len(set(destinations)) == 1
-    is_distrib = len(set(origins)) == 1 and len(set(destinations)) > 1
-    is_ramasse = len(set(origins)) > 1 and len(set(destinations)) == 1
-    is_imbrique = is_groupage or is_distrib or is_ramasse
+    is_distrib   = len(set(origins)) == 1 and len(set(destinations)) > 1
+    is_ramasse   = len(set(origins)) > 1 and len(set(destinations)) == 1
+    is_imbrique  = is_groupage or is_distrib or is_ramasse
 
-    # --- 2. VÉRIFICATION CAPACITÉ ---
-    if is_imbrique:
-        if sum(j.taux_occupation for j in temp_list) > taux_max_cible:
-            return False
-    else:
-        if nouveau_job.taux_occupation > taux_max_cible:
-            return False
+    # REFUS EXPLICITE des chaînages : plusieurs origines ET plusieurs destinations
+    # → le séquençage se chargera de les enchaîner
+    if not is_imbrique:
+        return False
 
-    # --- 2bis. VÉRIFICATION COMPATIBILITE PROPRE/SALE ---
-    # Vérification Propre / Sale (Protocole)
-    # On s'assure que tous les jobs ont la même étiquette (ex: tous 'PROPRE' ou tous 'SALE')
+    # --- 2. VÉRIFICATION CAPACITÉ (taux occupation) ---
+    if sum(j.taux_occupation for j in temp_list) > taux_max_cible:
+        return False
+
+    # --- 2bis. COMPATIBILITÉ PROPRE/SALE ---
     types_flux_presents = set(j.type_propre_sale for j in temp_list)
     if len(types_flux_presents) > 1:
-        # Incompatible : on ne mélange pas le propre et le sale dans le même SuperJob
         return False
+
+    # --- 2ter. COMPATIBILITÉ CONTENANT / VÉHICULE ---
+    # Vérifie que le véhicule accepte chaque type de contenant du candidat
+    v_info = df_vehicules[df_vehicules.iloc[:, 0] == v_type]
+    if not v_info.empty:
+        for j in temp_list:
+            cont = str(j.contenant).strip()
+            if cont in v_info.columns:
+                accepte = str(v_info[cont].values[0]).strip().upper()
+                if accepte != "OUI":
+                    return False
+
+    # --- 2quater. BIN-PACKING (volume + poids) ---
+    # Uniquement si df_contenants est fourni et types de contenants différents présents
+    if df_contenants is not None and not v_info.empty:
+        contenants_presents = set(j.contenant for j in temp_list)
+        if len(contenants_presents) > 1:  # groupage inter-contenants : vérifier le volume
+            vehicule_row = v_info.iloc[0].to_dict()
+            if not verifier_bin_packing_mixte(vehicule_row, temp_list, df_contenants):
+                return False
     
     # --- 3. SIMULATION TEMPORELLE ---
     
@@ -760,28 +780,10 @@ def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, 
         if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
             return False
 
-    else: # CHAINAGE (A->B puis C->D)
-        # On garde la simulation séquentielle mais avec vérification à chaque étape
-        temps_simule = to_min(temp_list[0].h_dispo)
-        current_pos = temp_list[0].origin
-        for j in temp_list:
-            t_q_o, t_c_o = get_manut(j.origin)
-            t_q_d, t_c_d = get_manut(j.destination)
-            
-            temps_simule += matrice_duree.get(current_pos, {}).get(j.origin, 10)
-            temps_simule = max(temps_simule, to_min(j.h_dispo))
-            temps_simule += (t_q_o + j.quantite * t_c_o) + \
-                            matrice_duree.get(j.origin, {}).get(j.destination, 20) + \
-                            (t_q_d + j.quantite * t_c_d)
-            
-            if temps_simule > to_min(j.h_deadline):
-                return False
-            current_pos = j.destination
-        
     return True
 
 
-def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df_sites):
+def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df_sites, df_contenants=None):
     """
     Regroupe les jobs par tournée imposée en utilisant une stratégie de 'Pivot' (le plus lourd d'abord)
     et vérifie la compatibilité dynamique (temps, espace, hygiène).
@@ -813,7 +815,7 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
             idx = 0
             while idx < len(liste_j):
                 candidat = liste_j[idx]
-                if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible):
+                if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible, df_contenants):
                     current_sj_jobs.append(liste_j.pop(idx))
                     if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
                         refus.extend(liste_j[idx:])
@@ -827,7 +829,7 @@ def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df
                 refus.sort(key=lambda x: x.taux_occupation, reverse=True)
                 encore_refus = []
                 for candidat in refus:
-                    if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible):
+                    if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible, df_contenants):
                         current_sj_jobs.append(candidat)
                         if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
                             encore_refus.extend(refus[refus.index(candidat) + 1:])
@@ -890,7 +892,7 @@ def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
 
 
 
-def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites):
+def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites, df_contenants=None):
     """
     Regroupe les jobs solitaires en limitant la durée totale du SJ 
     à 50% de l'amplitude maximale d'un poste.
@@ -919,7 +921,7 @@ def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicule
             for i, candidat in enumerate(restants):
                 # 1. Vérification de compatibilité standard (Volume, Horaires)
                 if est_compatible_sj_et_job(current_jobs, candidat, matrice_duree, 
-                                            df_vehicules, df_sites, taux_max_cible):
+                                            df_vehicules, df_sites, taux_max_cible, df_contenants):
                     
                     # 2. Création virtuelle pour tester la nouvelle durée
                     sj_simul = SuperJob(
@@ -1033,7 +1035,7 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
         # ETAPE 4 : Gestion des tournées imposées
         # AJOUT : df_vehicules et df_sites
-        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree, df_vehicules, df_sites)
+        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree, df_vehicules, df_sites, df_contenants)
         
         # ETAPE 5 : Préparation de la pile (Reliquats + Solitaires)
         # Cette fonction utilise sj.type_logistique pour l'arbitrage
@@ -1041,7 +1043,7 @@ def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_s
         
         # ETAPE 6 : Arbitrage et optimisation des solitaires
         # AJOUT : df_vehicules et df_sites
-        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree, df_vehicules, df_sites)
+        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree, df_vehicules, df_sites, df_contenants)
         
         # Fusion pour ce type de véhicule
         tous_les_super_jobs_du_jour.extend(sj_complets)
