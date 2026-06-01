@@ -3,6 +3,7 @@ import math
 import streamlit as st
 from datetime import time, datetime, timedelta
 
+
 # =================================================================
 # 1. UTILITAIRES & LOGIQUE DE SÉLECTION
 # =================================================================
