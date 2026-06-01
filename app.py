@@ -209,12 +209,6 @@ elif selected == "Simul tournées":
         # 3. Calcul de la Séquence Type (Etape 2.a.ii)
         st.subheader("📌 Génération de la Séquence Type (Jmax)")
 
-        # Debug temporaire à ajouter avant le séquençage
-        sj_bio = [sj for sj in liste_sj_jour 
-                  if any('BIOLOGIE' in str(j.contenant).upper() for j in sj.liste_jobs)]
-        for sj in sj_bio:
-            print(f"{sj.super_job_id} | h_dispo_min={sj.h_dispo_min} | h_deadline_min={sj.h_deadline_min} | v_type={sj.v_type}")
-        
         if st.button("Lancer le calcul du Jmax", type="primary", use_container_width=True):
             with st.spinner("🧠 Analyse des poids fictifs..."):
                 try:
@@ -296,6 +290,16 @@ elif selected == "Synthèse transport":
                         nom_jour=str(jour))
                     nb_sj_total = len(liste_sj_jour)
                     intensite   = calculer_nmax_par_type(liste_sj_jour)
+
+                    # ── DEBUG BIOLOGIE ──────────────────────────────────
+                    sj_bio = [sj for sj in liste_sj_jour
+                              if any('BIOLOGIE' in str(j.contenant).upper()
+                                     for j in sj.liste_jobs)]
+                    for sj in sj_bio:
+                        h_d = round(sj.h_dispo_min / 60, 2)
+                        h_dl = round(sj.h_deadline_min / 60, 2)
+                        st.write(f"🧪 BIO {sj.super_job_id} | dispo={sj.h_dispo_min:.0f}min ({h_d}h) | deadline={sj.h_deadline_min:.0f}min ({h_dl}h) | v_type={sj.v_type}")
+                    # ── FIN DEBUG ───────────────────────────────────────
 
                     st.write(f"  ↳ 🧠 Séquençage ({nb_sj_total} blocs)...")
                     res = trouver_meilleure_configuration_journee(
