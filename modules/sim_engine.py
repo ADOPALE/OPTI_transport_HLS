@@ -54,7 +54,7 @@ class Job:
         
         # --- ATTRIBUTS DE PHASE 4 (ORDONNANCEMENT) ---
         self.est_planifie = False
-        self.poids_temps = 0 
+        self.poids_temps = 0
 
     def __repr__(self):
         # Affichage enrichi pour le debug
@@ -76,6 +76,10 @@ class SuperJob:
         # Identification du type logistique
         self.type_logistique = self._determiner_type_logistique()
         
+        # Chronologie des étapes du camion (temps relatif, t=0 = départ)
+        # Renseignée par calculer_duree_operationnelle ci-dessous
+        self.chronologie = []
+
         # Calcul avec les vrais paramètres
         self.poids_total = self.calculer_duree_operationnelle(matrice_duree, df_vehicules, df_sites)
 
@@ -181,60 +185,115 @@ class SuperJob:
         return t_quai_base, t_cont
 
     def calculer_duree_operationnelle(self, matrice_duree, df_vehicules, df_sites):
+        """
+        Calcule la durée totale du SuperJob et construit self.chronologie,
+        liste ordonnée d'étapes en temps RELATIF (t=0 = départ du camion).
+        Chaque étape : {etape, job_id, site, action, t_debut, t_fin, quantite}
+        Les Jobs ne sont pas modifiés.
+        """
         total_min = 0
-        
+        chrono = []
+        t = 0  # curseur temps relatif
+        num = 1
+
+        def _etape(job_id, site, action, duree, quantite=0):
+            nonlocal t, num
+            chrono.append({
+                "etape":    num,
+                "job_id":   job_id,
+                "site":     site,
+                "action":   action,
+                "t_debut":  round(t, 2),
+                "t_fin":    round(t + duree, 2),
+                "duree":    round(duree, 2),
+                "quantite": quantite
+            })
+            t += duree
+            num += 1
+
         if self.type_logistique == "GROUPAGE_PUR":
+            # Camion : CHARGEMENT(A) ──trajet──► DECHARGEMENT(B)
             orig, dest = self.points_depart[0], self.points_arrivee[0]
             t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
             t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
-            
             nb_total = sum(j.quantite for j in self.liste_jobs)
             trajet = matrice_duree.get(orig, {}).get(dest, 30)
-            
             total_min = (t_q_o + nb_total * t_c_o) + trajet + (t_q_d + nb_total * t_c_d)
 
+            job_ids = [j.job_id for j in self.liste_jobs]
+            _etape(job_ids, orig, "MISE_A_QUAI_CHARGEMENT", t_q_o, quantite=0)
+            _etape(job_ids, orig, "CHARGEMENT",              nb_total * t_c_o, quantite=nb_total)
+            _etape(job_ids, dest, "TRAJET",                  trajet)
+            _etape(job_ids, dest, "MISE_A_QUAI_DECHARGEMENT",t_q_d, quantite=0)
+            _etape(job_ids, dest, "DECHARGEMENT",            nb_total * t_c_d, quantite=nb_total)
+
         elif self.type_logistique == "DISTRIBUTION":
-            # Un seul chargement au départ
+            # Camion : CHARGEMENT(A) ──► DEP(B) ──► DEP(C) ──► …
             orig = self.points_depart[0]
             t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
             nb_total = sum(j.quantite for j in self.liste_jobs)
             total_min = t_q_o + (nb_total * t_c_o)
-            
+
+            job_ids_all = [j.job_id for j in self.liste_jobs]
+            _etape(job_ids_all, orig, "MISE_A_QUAI_CHARGEMENT", t_q_o)
+            _etape(job_ids_all, orig, "CHARGEMENT",              nb_total * t_c_o, quantite=nb_total)
+
             pos_actuelle = orig
             for j in self.liste_jobs:
-                total_min += matrice_duree.get(pos_actuelle, {}).get(j.destination, 20)
+                troncon = matrice_duree.get(pos_actuelle, {}).get(j.destination, 20)
                 t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
-                total_min += t_q_d + (j.quantite * t_c_d)
+                total_min += troncon + t_q_d + (j.quantite * t_c_d)
                 pos_actuelle = j.destination
 
+                _etape(j.job_id, j.destination, "TRAJET",                   troncon)
+                _etape(j.job_id, j.destination, "MISE_A_QUAI_DECHARGEMENT", t_q_d)
+                _etape(j.job_id, j.destination, "DECHARGEMENT",             j.quantite * t_c_d, quantite=j.quantite)
+
         elif self.type_logistique == "RAMASSAGE":
+            # Camion : COL(A) ──► COL(B) ──► … ──trajet──► DECHARGEMENT(DEST)
+            dest = self.points_arrivee[0]
+            t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
+            nb_total = sum(j.quantite for j in self.liste_jobs)
+
             pos_actuelle = self.points_depart[0]
             for j in self.liste_jobs:
-                # Trajet vers le point de collecte
-                total_min += matrice_duree.get(pos_actuelle, {}).get(j.origin, 15)
+                troncon = matrice_duree.get(pos_actuelle, {}).get(j.origin, 15)
                 t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
-                total_min += t_q_o + (j.quantite * t_c_o)
+                total_min += troncon + t_q_o + (j.quantite * t_c_o)
                 pos_actuelle = j.origin
-            
-            # Trajet final et un seul déchargement
-            dest = self.points_arrivee[0]
-            total_min += matrice_duree.get(pos_actuelle, {}).get(dest, 20)
-            t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
-            total_min += t_q_d + (sum(j.quantite for j in self.liste_jobs) * t_c_d)
 
-        else: # CHAINAGE_SUCCESSION
+                _etape(j.job_id, j.origin, "TRAJET",                  troncon)
+                _etape(j.job_id, j.origin, "MISE_A_QUAI_CHARGEMENT",  t_q_o)
+                _etape(j.job_id, j.origin, "CHARGEMENT",              j.quantite * t_c_o, quantite=j.quantite)
+
+            trajet_final = matrice_duree.get(pos_actuelle, {}).get(dest, 20)
+            total_min += trajet_final + t_q_d + (nb_total * t_c_d)
+            job_ids_all = [j.job_id for j in self.liste_jobs]
+            _etape(job_ids_all, dest, "TRAJET",                   trajet_final)
+            _etape(job_ids_all, dest, "MISE_A_QUAI_DECHARGEMENT", t_q_d)
+            _etape(job_ids_all, dest, "DECHARGEMENT",             nb_total * t_c_d, quantite=nb_total)
+
+        else:  # CHAINAGE_SUCCESSION
+            # Camion : A→B  |inter|  B→C  |inter|  C→D …
             for i, j in enumerate(self.liste_jobs):
                 t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
                 t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
-                
-                duree_job = (t_q_o + j.quantite * t_c_o) + \
-                            matrice_duree.get(j.origin, {}).get(j.destination, 20) + \
-                            (t_q_d + j.quantite * t_c_d)
-                total_min += duree_job
-                
-                if i < len(self.liste_jobs) - 1:
-                    total_min += matrice_duree.get(j.destination, {}).get(self.liste_jobs[i+1].origin, 0)
+                troncon = matrice_duree.get(j.origin, {}).get(j.destination, 20)
+                total_min += (t_q_o + j.quantite * t_c_o) + troncon + (t_q_d + j.quantite * t_c_d)
 
+                _etape(j.job_id, j.origin,       "MISE_A_QUAI_CHARGEMENT",  t_q_o)
+                _etape(j.job_id, j.origin,       "CHARGEMENT",              j.quantite * t_c_o, quantite=j.quantite)
+                _etape(j.job_id, j.destination,  "TRAJET",                  troncon)
+                _etape(j.job_id, j.destination,  "MISE_A_QUAI_DECHARGEMENT",t_q_d)
+                _etape(j.job_id, j.destination,  "DECHARGEMENT",            j.quantite * t_c_d, quantite=j.quantite)
+
+                if i < len(self.liste_jobs) - 1:
+                    inter = matrice_duree.get(j.destination, {}).get(self.liste_jobs[i+1].origin, 0)
+                    total_min += inter
+                    if inter > 0:
+                        _etape(j.job_id, j.destination, "TRAJET_INTER_JOBS", inter)
+
+        self.chronologie = chrono
         return total_min
 
     def obtenir_details_contenants(self, minute_relative):
