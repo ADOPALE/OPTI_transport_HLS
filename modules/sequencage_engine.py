@@ -3,7 +3,6 @@ import math
 import streamlit as st
 from datetime import time, datetime, timedelta
 
-
 # =================================================================
 # 1. UTILITAIRES & LOGIQUE DE SÉLECTION
 # =================================================================
@@ -82,7 +81,9 @@ class PosteChauffeur:
             "Activite": activite,
             "SJ_ID": sj_id,
             "sj_poids": sj_poids,
-            "Details": details
+            "Details": details,
+            # Position au moment de l'enregistrement — utile pour l'affichage Gantt
+            "position_depart": self.position_actuelle,
         })
 
 # =================================================================
