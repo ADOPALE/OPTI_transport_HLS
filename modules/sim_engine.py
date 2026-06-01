@@ -1,2002 +1,463 @@
 import pandas as pd
-import numpy as np
 import math
-import streamlit as st 
-from datetime import datetime, time, timedelta
-import copy 
-
-
-# Imports de tes modules existants
-from modules.Prep_simul_flux import calculer_capacite_max, to_decimal_minutes, identifier_meilleur_vehicule
+import streamlit as st
+from datetime import time, datetime, timedelta
 
 # =================================================================
-# CLASSE DE BASE
+# 1. UTILITAIRES & LOGIQUE DE SÉLECTION
 # =================================================================
-class Job:
-    """
-    Représente une unité de transport élémentaire.
-    Inclut la logique de Hub pour HSJ et la gestion des tournées imposées.
-    """
-    def __init__(self, job_id, flux_id, type_job, origin, destination, 
-                 h_dispo, h_deadline, quantite, contenant, 
-                 vehicule_type, type_propre_sale, aller_retour,
-                 tournee_rattachement=None, taux_occupation=0):
-        
-        self.job_id = job_id          
-        self.flux_id = flux_id        
-        self.type_job = type_job      # 'COMPLET' ou 'INCOMPLET'
-        
-        # --- GÉOGRAPHIE & LOGIQUE DE HUB ---
-        self.origin = str(origin).strip().upper()
-        self.destination = str(destination).strip().upper()
-        
-        # Logique de regroupement (Macro-sites)
-        self.origin_group = "HUB_HSJ" if "HSJ_" in self.origin else self.origin
-        self.dest_group = "HUB_HSJ" if "HSJ_" in self.destination else self.destination
-        
-        # --- PROTECTION VÉHICULE ---
-        if isinstance(vehicule_type, (pd.Series, list)):
-            self.vehicule_type = str(vehicule_type[0]).strip().upper() if len(vehicule_type) > 0 else "INCONNU"
-        else:
-            self.vehicule_type = str(vehicule_type).strip().upper()
-
-        # --- TEMPS & QUANTITÉS ---
-        self.h_dispo = h_dispo        
-        self.h_deadline = h_deadline  
-        self.quantite = quantite
-        self.contenant = str(contenant).strip().upper()
-        self.type_propre_sale = type_propre_sale
-        self.aller_retour = aller_retour 
-
-        # --- ATTRIBUTS DE PHASE 3 (COMBINAISON) ---
-        self.tournee_rattachement = tournee_rattachement
-        self.taux_occupation = taux_occupation
-        
-        # --- ATTRIBUTS DE PHASE 4 (ORDONNANCEMENT) ---
-        self.est_planifie = False
-        self.poids_temps = 0
-
-    def __repr__(self):
-        # Affichage enrichi pour le debug
-        return (f"Job({self.job_id} | {self.origin_group}->{self.dest_group} | "
-                f"Qte:{self.quantite} {self.contenant} | Occ:{round(self.taux_occupation,2)})")    
-
-
-
-
-class SuperJob:
-    def __init__(self, super_job_id, v_type, liste_jobs, matrice_duree, df_vehicules, df_sites, est_imbrique=False):
-        self.super_job_id = super_job_id
-        self.v_type = v_type
-        self.liste_jobs = liste_jobs
-        
-        self.points_depart = [j.origin for j in liste_jobs]
-        self.points_arrivee = [j.destination for j in liste_jobs]
-        
-        # Identification du type logistique
-        self.type_logistique = self._determiner_type_logistique()
-        
-        # Chronologie des étapes du camion (temps relatif, t=0 = départ)
-        # Renseignée par calculer_duree_operationnelle ci-dessous
-        self.chronologie = []
-
-        # Calcul avec les vrais paramètres
-        self.poids_total = self.calculer_duree_operationnelle(matrice_duree, df_vehicules, df_sites)
-
-        # --- CALCULS DYNAMIQUES ---
-        self.h_dispo_min = self._simuler_heure_depart_minimale(matrice_duree)
-        # La deadline reste le verrou le plus strict pour l'ensemble
-        self.h_deadline_min = min(to_min(j.h_deadline) for j in liste_jobs) if liste_jobs else 1440
-
-    def _simuler_heure_depart_minimale(self, matrice_duree):
-        """
-        Calcule l'heure de départ (minute_actuelle) minimale pour que 
-        est_sj_disponible_dynamique devienne True.
-        """
-        if not self.liste_jobs:
-            return 0
-
-        # CAS 1 : GROUPAGE / DISTRIBUTION
-        # Le départ est bloqué par le job le plus tardif
-        if self.type_logistique in ['GROUPAGE_PUR', 'DISTRIBUTION']:
-            return max(to_min(j.h_dispo) for j in self.liste_jobs)
-
-        # CAS 2 : CHAINAGE / RAMASSAGE (Logique progressive)
-        # On doit trouver la minute_actuelle la plus basse qui valide tout le flux
-        # On commence par la dispo du premier job
-        t_depart_candidat = to_min(self.liste_jobs[0].h_dispo)
-        
-        # On simule le parcours pour ajuster t_depart_candidat si nécessaire
-        temps_cumule = t_depart_candidat
-        position_actuelle = self.points_depart[0]
-        
-        for i, job in enumerate(self.liste_jobs):
-            if i > 0:
-                # Trajet entre destination précédente et origine actuelle
-                trajet = matrice_duree.get(position_actuelle, {}).get(job.origin, 0)
-                temps_cumule += trajet
-                
-                # Si on arrive trop tôt par rapport à la dispo du job actuel, 
-                # il faut "décaler" l'heure de départ initiale du camion
-                if temps_cumule < to_min(job.h_dispo):
-                    decalage = to_min(job.h_dispo) - temps_cumule
-                    t_depart_candidat += decalage
-                    temps_cumule += decalage # On recalibre le temps cumulé
-            
-            # Avancement normal du temps pour le job en cours
-            duree_job = job.poids_total if hasattr(job, 'poids_total') else 30
-            temps_cumule += duree_job
-            position_actuelle = job.destination
-            
-        return t_depart_candidat
-
-    def _determiner_type_logistique(self):
-        origins = self.points_depart
-        destinations = self.points_arrivee
-
-        # Test 1 : Groupage Pur (Même A -> Même B)
-        if len(set(origins)) == 1 and len(set(destinations)) == 1:
-            self.est_imbrique = True
-            return "GROUPAGE_PUR"
-
-        # Test 2 : Distribution (une seule origine, plusieurs destinations)
-        if len(set(origins)) == 1 and len(set(destinations)) > 1:
-            self.est_imbrique = True
-            return "DISTRIBUTION"
-
-        # Test 3 : Ramassage (plusieurs origines, une seule destination)
-        if len(set(origins)) > 1 and len(set(destinations)) == 1:
-            self.est_imbrique = True
-            return "RAMASSAGE"
-
-        # Test 4 : Plusieurs origines ET plusieurs destinations
-        # → CHAINAGE_MIXTE : on traitera par groupes d'origines dans calculer_duree_operationnelle
-        # La matrice n'est pas encore disponible ici, la fusion des groupes se fait à la construction.
-        self.est_imbrique = True
-        return "CHAINAGE_MIXTE"
-
-    def _get_params_manutention(self, site, df_vehicules, df_sites):
-        """Récupère les temps T_QUAI et T_CONT spécifiques au couple Véhicule/Site."""
-        # 1. Infos Véhicule
-        v_info = df_vehicules[df_vehicules.iloc[:, 0] == self.v_type]
-        if v_info.empty:
-            return 15, 2 # Valeurs de secours
-        
-        t_quai_base = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0]
-        t_quai_base = to_min(t_quai_base)
-        
-        # 2. Infos Site (Présence de quai)
-        site_info = df_sites[df_sites.iloc[:, 0] == site]
-        a_un_quai = False
-        if not site_info.empty:
-            # On gère l'espace dans "Présence de quai "
-            val_quai = str(site_info['PRÉSENCE DE QUAI'].values[0]).upper()
-            a_un_quai = "OUI" in val_quai or "1" in val_quai
-
-        # 3. Sélection du T_CONT (Chargement/Déchargement)
-        # Si quai -> temps avec quai, sinon temps avec hayon
-        col_t_cont = "Manutention avec quai (minutes / contenants)" if a_un_quai \
-                     else "Manutention sans quai (minutes / contenants)"
-        
-        t_cont = v_info[col_t_cont].values[0]
-        t_cont = to_min(t_cont)
-        
-        return t_quai_base, t_cont
-
-    def calculer_duree_operationnelle(self, matrice_duree, df_vehicules, df_sites):
-        """
-        Calcule la durée totale du SuperJob et construit self.chronologie,
-        liste ordonnée d'étapes en temps RELATIF (t=0 = départ du camion).
-        Chaque étape : {etape, job_id, site, action, t_debut, t_fin, quantite}
-        Les Jobs ne sont pas modifiés.
-        """
-        total_min = 0
-        chrono = []
-        t = 0  # curseur temps relatif
-        num = 1
-
-        def _etape(job_id, site, action, duree, quantite=0, label=""):
-            nonlocal t, num
-            chrono.append({
-                "etape":    num,
-                "job_id":   job_id,
-                "site":     site,
-                "action":   action,
-                "label":    label or action,   # texte lisible pour l'affichage
-                "t_debut":  round(t, 2),
-                "t_fin":    round(t + duree, 2),
-                "duree":    round(duree, 2),
-                "quantite": quantite,
-            })
-            t += duree
-            num += 1
-
-        if self.type_logistique == "GROUPAGE_PUR":
-            # Camion : CHARGEMENT(A) ──trajet──► DECHARGEMENT(B)
-            orig, dest = self.points_depart[0], self.points_arrivee[0]
-            t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
-            t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
-            nb_total = sum(j.quantite for j in self.liste_jobs)
-            trajet = matrice_duree.get(orig, {}).get(dest, 30)
-            total_min = (t_q_o + nb_total * t_c_o) + trajet + (t_q_d + nb_total * t_c_d)
-
-            job_ids = [j.job_id for j in self.liste_jobs]
-            cont = self.liste_jobs[0].contenant if self.liste_jobs else "cont."
-            _etape(job_ids, orig, "MISE_A_QUAI_CHARGEMENT", t_q_o,
-                   label=f"Mise à quai @ {orig}")
-            for j in self.liste_jobs:
-                _etape(j.job_id, orig, "CHARGEMENT", j.quantite * t_c_o, quantite=j.quantite,
-                       label=f"Chargement {j.quantite} {j.contenant} ({orig} → {dest})")
-            _etape(job_ids, dest, "TRAJET", trajet,
-                   label=f"Trajet {orig} → {dest}")
-            _etape(job_ids, dest, "MISE_A_QUAI_DECHARGEMENT", t_q_d,
-                   label=f"Mise à quai @ {dest}")
-            for j in self.liste_jobs:
-                _etape(j.job_id, dest, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
-                       label=f"Déchargement {j.quantite} {j.contenant} pour {dest}")
-
-        elif self.type_logistique == "DISTRIBUTION":
-            # Camion : chargement de tout en A, puis livraisons successives B→C→D…
-            orig = self.points_depart[0]
-            t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
-            nb_total = sum(j.quantite for j in self.liste_jobs)
-            total_min = t_q_o + (nb_total * t_c_o)
-
-            # 1. Mise à quai unique à l'origine
-            job_ids_all = [j.job_id for j in self.liste_jobs]
-            _etape(job_ids_all, orig, "MISE_A_QUAI_CHARGEMENT", t_q_o,
-                   label=f"Mise à quai @ {orig}")
-            # 2. Chargement détaillé par job (on voit exactement ce qui monte pour chaque destination)
-            for j in self.liste_jobs:
-                _etape(j.job_id, orig, "CHARGEMENT", j.quantite * t_c_o, quantite=j.quantite,
-                       label=f"Chargement {j.quantite} {j.contenant} ({orig} → {j.destination})")
-
-            # 3. Livraisons successives dans l'ordre
-            pos_actuelle = orig
-            for j in self.liste_jobs:
-                troncon = matrice_duree.get(pos_actuelle, {}).get(j.destination, 20)
-                t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
-                total_min += troncon + t_q_d + (j.quantite * t_c_d)
-
-                _etape(j.job_id, j.destination, "TRAJET", troncon,
-                       label=f"Trajet {pos_actuelle} → {j.destination}")
-                _etape(j.job_id, j.destination, "MISE_A_QUAI_DECHARGEMENT", t_q_d,
-                       label=f"Mise à quai @ {j.destination}")
-                _etape(j.job_id, j.destination, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
-                       label=f"Déchargement {j.quantite} {j.contenant} pour {j.destination}")
-                pos_actuelle = j.destination
-
-        elif self.type_logistique == "RAMASSAGE":
-            # Camion : collectes successives A→B→… puis dépôt unique en DEST
-            dest = self.points_arrivee[0]
-            t_q_d, t_c_d = self._get_params_manutention(dest, df_vehicules, df_sites)
-            nb_total = sum(j.quantite for j in self.liste_jobs)
-
-            # Collectes successives
-            pos_actuelle = self.points_depart[0]
-            for j in self.liste_jobs:
-                troncon = matrice_duree.get(pos_actuelle, {}).get(j.origin, 15)
-                t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
-                total_min += troncon + t_q_o + (j.quantite * t_c_o)
-
-                _etape(j.job_id, j.origin, "TRAJET", troncon,
-                       label=f"Trajet {pos_actuelle} → {j.origin}")
-                _etape(j.job_id, j.origin, "MISE_A_QUAI_CHARGEMENT", t_q_o,
-                       label=f"Mise à quai @ {j.origin}")
-                _etape(j.job_id, j.origin, "CHARGEMENT", j.quantite * t_c_o, quantite=j.quantite,
-                       label=f"Chargement {j.quantite} {j.contenant} @ {j.origin}")
-                pos_actuelle = j.origin
-
-            # Trajet final + déchargement unique
-            trajet_final = matrice_duree.get(pos_actuelle, {}).get(dest, 20)
-            total_min += trajet_final + t_q_d + (nb_total * t_c_d)
-            job_ids_all = [j.job_id for j in self.liste_jobs]
-            _etape(job_ids_all, dest, "TRAJET", trajet_final,
-                   label=f"Trajet {pos_actuelle} → {dest}")
-            _etape(job_ids_all, dest, "MISE_A_QUAI_DECHARGEMENT", t_q_d,
-                   label=f"Mise à quai @ {dest}")
-            for j in self.liste_jobs:
-                _etape(j.job_id, dest, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
-                       label=f"Déchargement {j.quantite} {j.contenant} (collecté en {j.origin})")
-
-        elif self.type_logistique == "CHAINAGE_SUCCESSION":
-            # Camion : missions indépendantes A→B | B→C | C→D …
-            for i, j in enumerate(self.liste_jobs):
-                t_q_o, t_c_o = self._get_params_manutention(j.origin, df_vehicules, df_sites)
-                t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
-                troncon = matrice_duree.get(j.origin, {}).get(j.destination, 20)
-                total_min += (t_q_o + j.quantite * t_c_o) + troncon + (t_q_d + j.quantite * t_c_d)
-
-                _etape(j.job_id, j.origin, "MISE_A_QUAI_CHARGEMENT", t_q_o,
-                       label=f"Mise à quai @ {j.origin}")
-                _etape(j.job_id, j.origin, "CHARGEMENT", j.quantite * t_c_o, quantite=j.quantite,
-                       label=f"Chargement {j.quantite} {j.contenant} ({j.origin} → {j.destination})")
-                _etape(j.job_id, j.destination, "TRAJET", troncon,
-                       label=f"Trajet {j.origin} → {j.destination}")
-                _etape(j.job_id, j.destination, "MISE_A_QUAI_DECHARGEMENT", t_q_d,
-                       label=f"Mise à quai @ {j.destination}")
-                _etape(j.job_id, j.destination, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
-                       label=f"Déchargement {j.quantite} {j.contenant} pour {j.destination}")
-
-                if i < len(self.liste_jobs) - 1:
-                    inter = matrice_duree.get(j.destination, {}).get(self.liste_jobs[i+1].origin, 0)
-                    total_min += inter
-                    if inter > 0:
-                        _etape(j.job_id, j.destination, "TRAJET_INTER_JOBS", inter,
-                               label=f"Repositionnement {j.destination} → {self.liste_jobs[i+1].origin}")
-
-        else:  # CHAINAGE_MIXTE
-            # Plusieurs origines et destinations.
-            # 1. Trier les jobs par h_dispo_min
-            # 2. Regrouper par origine commune (groupes consécutifs de même origine)
-            # 3. Fusionner deux groupes consécutifs si trajet entre leurs origines <= seuil (0 min)
-            # 4. Pour chaque groupe fusionné : chargement multi-origines puis livraisons séquentielles
-            SEUIL_FUSION = 0  # minutes — modifiable si besoin
-
-            jobs_tries = sorted(self.liste_jobs, key=lambda j: j.h_dispo_min)
-
-            # Construire les groupes par origine consécutive
-            groupes = []  # chaque groupe = {"jobs": [...], "origine": str}
-            for j in jobs_tries:
-                if groupes and groupes[-1]["origine"] == j.origin:
-                    groupes[-1]["jobs"].append(j)
-                else:
-                    groupes.append({"origine": j.origin, "jobs": [j]})
-
-            # Fusionner les groupes consécutifs si repositionnement <= SEUIL_FUSION
-            groupes_fusionnes = [groupes[0]]
-            for g in groupes[1:]:
-                derniere_orig = groupes_fusionnes[-1]["origines"][-1] if "origines" in groupes_fusionnes[-1] else groupes_fusionnes[-1]["origine"]
-                reposistionnement = matrice_duree.get(derniere_orig, {}).get(g["origine"], 999)
-                if reposistionnement <= SEUIL_FUSION:
-                    # Fusion : on étend le groupe précédent
-                    if "origines" not in groupes_fusionnes[-1]:
-                        groupes_fusionnes[-1]["origines"] = [groupes_fusionnes[-1]["origine"]]
-                    groupes_fusionnes[-1]["origines"].append(g["origine"])
-                    groupes_fusionnes[-1]["jobs"].extend(g["jobs"])
-                else:
-                    g["origines"] = [g["origine"]]
-                    groupes_fusionnes.append(g)
-
-            # Normaliser : s'assurer que chaque groupe a bien "origines"
-            for g in groupes_fusionnes:
-                if "origines" not in g:
-                    g["origines"] = [g["origine"]]
-
-            # Construire la chronologie groupe par groupe
-            pos_actuelle = groupes_fusionnes[0]["origines"][0]
-
-            for idx_g, groupe in enumerate(groupes_fusionnes):
-                origines_groupe = groupe["origines"]
-                jobs_groupe = groupe["jobs"]
-
-                # ── Repositionnement vers la première origine du groupe ────────
-                if idx_g > 0:
-                    reposistionnement = matrice_duree.get(pos_actuelle, {}).get(origines_groupe[0], 0)
-                    total_min += reposistionnement
-                    if reposistionnement > 0:
-                        job_ids_g = [j.job_id for j in jobs_groupe]
-                        _etape(job_ids_g, origines_groupe[0], "TRAJET_INTER_JOBS", reposistionnement,
-                               label=f"Repositionnement {pos_actuelle} → {origines_groupe[0]}")
-
-                # ── Chargements : visite de chaque origine du groupe ──────────
-                pos_charg = origines_groupe[0]
-                for orig in origines_groupe:
-                    # Trajet inter-origines si fusion de plusieurs origines
-                    if orig != pos_charg:
-                        inter_orig = matrice_duree.get(pos_charg, {}).get(orig, 0)
-                        total_min += inter_orig
-                        job_ids_g = [j.job_id for j in jobs_groupe]
-                        _etape(job_ids_g, orig, "TRAJET_INTER_JOBS", inter_orig,
-                               label=f"Repositionnement chargement {pos_charg} → {orig}")
-                    # Jobs dont l'origine est ce site
-                    jobs_de_cette_orig = [j for j in jobs_groupe if j.origin == orig]
-                    if jobs_de_cette_orig:
-                        t_q_o, t_c_o = self._get_params_manutention(orig, df_vehicules, df_sites)
-                        total_min += t_q_o
-                        job_ids_o = [j.job_id for j in jobs_de_cette_orig]
-                        _etape(job_ids_o, orig, "MISE_A_QUAI_CHARGEMENT", t_q_o,
-                               label=f"Mise à quai @ {orig}")
-                        for j in jobs_de_cette_orig:
-                            total_min += j.quantite * t_c_o
-                            _etape(j.job_id, orig, "CHARGEMENT", j.quantite * t_c_o, quantite=j.quantite,
-                                   label=f"Chargement {j.quantite} {j.contenant} ({orig} → {j.destination})")
-                    pos_charg = orig
-
-                # ── Livraisons séquentielles depuis la dernière origine chargée ─
-                pos_livr = pos_charg
-                for j in jobs_groupe:
-                    troncon = matrice_duree.get(pos_livr, {}).get(j.destination, 20)
-                    t_q_d, t_c_d = self._get_params_manutention(j.destination, df_vehicules, df_sites)
-                    total_min += troncon + t_q_d + (j.quantite * t_c_d)
-
-                    _etape(j.job_id, j.destination, "TRAJET", troncon,
-                           label=f"Trajet {pos_livr} → {j.destination}")
-                    _etape(j.job_id, j.destination, "MISE_A_QUAI_DECHARGEMENT", t_q_d,
-                           label=f"Mise à quai @ {j.destination}")
-                    _etape(j.job_id, j.destination, "DECHARGEMENT", j.quantite * t_c_d, quantite=j.quantite,
-                           label=f"Déchargement {j.quantite} {j.contenant} pour {j.destination}")
-                    pos_livr = j.destination
-
-                pos_actuelle = pos_livr
-
-        self.chronologie = chrono
-        return total_min
-
-    def obtenir_details_contenants(self, minute_relative):
-        """Utile pour l'affichage : liste ce qui est dans le camion à l'instant T."""
-        if self.type_logistique in ["GROUPAGE_PUR", "DISTRIBUTION", "RAMASSAGE", "TOURNEE_MIXTE"]:
-            return f"Charge cumulée : {sum(j.quantite for j in self.liste_jobs)} contenants"
-        else:
-            return "Charge successive (Missions point-à-point)"
-        
-    def __repr__(self):
-        """ Affichage détaillé pour le débug et le graphe d'intensité """
-        h_start = f"{int(self.h_dispo_min // 60):02d}h{int(self.h_dispo_min % 60):02d}"
-        return (f"SuperJob(Véhicule: {self.v_type}, "
-                f"Contenus: {len(self.liste_jobs)} jobs, "
-                f"Remplissage: {round(self.taux_occupation_total, 1)}%, "
-                f"Mobilisation: {round(self.poids_total, 1)} min, "
-                f"Dispo: {h_start})")
-
-# =================================================================
-# FONCTIONS DE CALCUL SANITAIRE ET OPPORTUNISTE
-# =================================================================
-
-def preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour_nom):
-    """
-    Fusionne les flux et harmonise les noms de colonnes.
-    """
-    # 1. On définit ce que le moteur de simulation attend ABSOLUMENT
-    COL_CIBLE_TYPE = 'Type (propre/sale)'
-    
-    # 2. Préparation des Récurrents
-    df_rec = df_recurrent.copy()
-    
-    # Si la colonne s'appelle 'Sale / propre', on la renomme pour le moteur
-    if 'Sale / propre' in df_rec.columns:
-        df_rec = df_rec.rename(columns={'Sale / propre': COL_CIBLE_TYPE})
-        
-    df_rec['Quantite_du_jour'] = df_rec['Quantité_Séquence_Type']
-    df_rec['Origine_Flux'] = 'RECURRENT'
-    
-    # 3. Préparation des Spécifiques
-    df_spec = pd.DataFrame()
-    if df_specifique is not None and not df_specifique.empty:
-        # Recherche de la colonne de quantité pour le jour J
-        col_quantite = next((c for c in df_specifique.columns if jour_nom.lower() in c.lower() and ("quant" in c.lower() or "qt" in c.lower())), None)
-        
-        if col_quantite:
-            df_spec = df_specifique[df_specifique[col_quantite] > 0].copy()
-            df_spec['Quantite_du_jour'] = df_spec[col_quantite]
-            df_spec['Origine_Flux'] = 'SPECIFIQUE'
-            
-            # Harmonisation pour les spécifiques aussi
-            if 'Sale / propre' in df_spec.columns:
-                df_spec = df_spec.rename(columns={'Sale / propre': COL_CIBLE_TYPE})
-            
-            # On aligne les autres colonnes critiques au cas où
-            mapping_autres = {
-                'Heure de livraison': 'Heure max de livraison à la destination',
-                'Heure de dispo': 'Heure de mise à disposition min départ'
-            }
-            df_spec = df_spec.rename(columns=mapping_autres)
-
-    # 4. Fusion finale sécurisée
-    if not df_spec.empty:
-        # On ne garde que les colonnes communes pour éviter les NaN polluants
-        colonnes_communes = [c for c in df_rec.columns if c in df_spec.columns]
-        return pd.concat([df_rec[colonnes_communes], df_spec[colonnes_communes]], ignore_index=True)
-    
-    return df_rec
-
-
-
-def Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites):
-    """
-    Etape 2 : Utilise les fonctions métiers pour affecter le meilleur véhicule 
-    et calculer la capacité utile réelle.
-    """
-    # 1. RÉCUPÉRATION DES PARAMÈTRES
-    params = st.session_state.get("params_logistique", {})
-    vehicules_autorises = params.get("vehicules_selectionnes", [])
-    taux_remplissage = params.get("securite_remplissage", 1.0)
-    
-    # Filtrage de la flotte sur celle sélectionnée par l'utilisateur
-    col_nom_v = df_vehicules.columns[0]
-    df_v_actifs = df_vehicules[df_vehicules[col_nom_v].isin(vehicules_autorises)].copy()
-
-    # Nettoyage des noms de colonnes sites (comme dans tes fonctions)
-    df_sites.columns = [str(c).strip().upper() for c in df_sites.columns]
-    col_libelle = next((c for c in df_sites.columns if "LIBEL" in c or "SITE" in c), None)
-
-    resultats = []
-
-    for index, flux in df_complet_jour.iterrows():
-        site_dep = str(flux['Point de départ']).strip().upper()
-        site_arr = str(flux['Point de destination']).strip().upper()
-        type_cont = str(flux['Nature de contenant']).strip().upper()
-
-        # 2. APPEL À TA FONCTION : identifier_meilleur_vehicule
-        # Elle vérifie l'accessibilité (est_accessible) et cherche la meilleure capacité au sol
-        v_elu, capa_max_theorique = identifier_meilleur_vehicule(
-            site_dep, 
-            site_arr, 
-            type_cont, 
-            df_v_actifs, 
-            df_contenants, 
-            df_sites, 
-            col_libelle
-        )
-
-        if v_elu is not None and capa_max_theorique > 0:
-            # 3. CALCUL DE LA CAPACITÉ UTILE (avec ton taux de remplissage)
-            # On applique le floor car on ne transporte pas de fractions de contenants
-            capa_utile = math.floor(capa_max_theorique * taux_remplissage)
-            
-            # Sécurité : au moins 1 si le véhicule est compatible
-            capa_utile = max(1, capa_utile)
-            
-            v_nom = v_elu[col_nom_v]
-        else:
-            v_nom = "NON_COMPATIBLE_OU_PAS_SELECTIONNE"
-            capa_utile = 0
-
-        # Mise à jour de la ligne
-        flux_maj = flux.to_dict()
-        flux_maj['Vehicule_Affecte'] = v_nom
-        flux_maj['Capa_Max_Transport'] = capa_utile
-        resultats.append(flux_maj)
-
-    return pd.DataFrame(resultats)
-
-
-def fragmenter_en_jobs(df_eclate_v, v_type_str, df_vehicules, df_contenants):
-    """
-    Eclate chaque ligne de flux en N jobs complets + 1 job incomplet (résiduel).
-    Calcule le taux d'occupation réel par rapport à la capacité technique max.
-    """
-    jobs_complets = []
-    jobs_incomplets = []
-    
-    # On récupère le nom de la colonne des types dans le référentiel véhicule
-    col_nom_v = df_vehicules.columns[0]
-
-    for index, row in df_eclate_v.iterrows():
-        qte_totale = row['Quantite_du_jour']
-        capa_u = row['Capa_Max_Transport'] # Capacité avec taux de remplissage (ex: 28)
-        
-        # --- GESTION DES ERREURS CRITIQUES ---
-        
-        # Cas 1 : Quantité positive mais capacité nulle (Incompatibilité véhicule/contenant)
-        if qte_totale > 0 and capa_u <= 0:
-            st.error(f"### ❌ Erreur de Capacité : {v_type_str}")
-            st.warning(f"""
-            **Flux impossible à charger :**
-            - **Origine :** {row['Point de départ']}
-            - **Destination :** {row['Point de destination']}
-            - **Contenant :** {row['Nature de contenant']}
-            
-            **Cause probable :** Le véhicule sélectionné ne peut techniquement pas transporter ce contenant.
-            """)
-            st.stop()
-
-        # Cas 2 : Quantité nulle ou négative (Erreur de données source)
-        if qte_totale <= 0:
-            # On ignore les lignes à 0 sans bloquer, 
-            # SAUF si tu considères que c'est une anomalie de ton fichier.
-            # Ici, on continue simplement pour ne pas créer de jobs vides.
-            continue
-
-        # --- CALCUL DU TAUX D'OCCUPATION RÉEL ---
-        # On récupère la capacité max théorique (100%) pour le calcul du taux physique
-        try:
-            v_info = df_vehicules[df_vehicules[col_nom_v] == v_type_str].iloc[0]
-            c_info = df_contenants[df_contenants['libellé'] == row['Nature de contenant']].iloc[0]
-            capa_theorique_100 = calculer_capacite_max(v_info, c_info)
-        except:
-            capa_theorique_100 = capa_u # Backup si erreur de recherche
-
-        # 1. Création des jobs complets (au sens "complet selon taux paramétré")
-        nb_pleins = int(qte_totale // capa_u)
-        for i in range(nb_pleins):
-            job_c = Job(
-                job_id=f"{row['Origine_Flux']}_{index}_C{i}",
-                flux_id=index,
-                type_job='COMPLET',
-                origin=row['Point de départ'],
-                destination=row['Point de destination'],
-                h_dispo=to_decimal_minutes(row['Heure de mise à disposition min départ']),
-                h_deadline=to_decimal_minutes(row['Heure max de livraison à la destination']),
-                quantite=capa_u,
-                contenant=row['Nature de contenant'],
-                vehicule_type=v_type_str,
-                type_propre_sale=row['Type (propre/sale)'],
-                aller_retour=row['Aller/Retour'],
-                tournee_rattachement=row.get('Nom de la tournée mutualisée le cas échéant'),
-                # Taux d'occupation physique réel
-                taux_occupation=capa_u / capa_theorique_100 if capa_theorique_100 > 0 else 1.0
-            )
-            jobs_complets.append(job_c)
-            
-        # 2. Création du job incomplet (le résiduel)
-        reste = qte_totale % capa_u
-        if reste > 0:
-            job_i = Job(
-                job_id=f"{row['Origine_Flux']}_{index}_R",
-                flux_id=index,
-                type_job='INCOMPLET',
-                origin=row['Point de départ'],
-                destination=row['Point de destination'],
-                h_dispo=to_decimal_minutes(row['Heure de mise à disposition min départ']),
-                h_deadline=to_decimal_minutes(row['Heure max de livraison à la destination']),
-                quantite=reste,
-                contenant=row['Nature de contenant'],
-                vehicule_type=v_type_str,
-                type_propre_sale=row['Type (propre/sale)'],
-                aller_retour=row['Aller/Retour'],
-                tournee_rattachement=row.get('Nom de la tournée mutualisée le cas échéant'),
-                # Taux d'occupation physique réel du reste
-                taux_occupation=reste / capa_theorique_100 if capa_theorique_100 > 0 else reste/capa_u
-            )
-            jobs_incomplets.append(job_i)
-            
-    return jobs_complets, jobs_incomplets
-
-
-
-def est_compatible_sj_et_job(sj_jobs, nouveau_job, matrice_duree, df_vehicules, df_sites, taux_max_cible, df_contenants=None):
-    """
-    Vérifie la faisabilité technique et temporelle.
-    Seuls les groupages imbriqués (GROUPAGE_PUR, DISTRIBUTION, RAMASSAGE) sont autorisés.
-    Les chaînages (plusieurs origines ET plusieurs destinations) sont refusés —
-    ils seront construits dynamiquement par le séquençage.
-    """
-    temp_list = sj_jobs + [nouveau_job]
-    origins = [j.origin for j in temp_list]
-    destinations = [j.destination for j in temp_list]
-
-    # --- 0. VÉRIFICATION TYPE DE VÉHICULE IDENTIQUE ----------------------
-    # Le pivot et le candidat doivent impérativement partager le même
-    # type de véhicule — sinon le SuperJob ne pourrait jamais être exécuté.
-    v_type_pivot = sj_jobs[0].vehicule_type
-    if nouveau_job.vehicule_type != v_type_pivot:
-        return False
-    v_type = v_type_pivot  # type du SuperJob = type du pivot
-
-    # --- 1. DÉTERMINATION DE LA NATURE ---
-    is_groupage = len(set(origins)) == 1 and len(set(destinations)) == 1
-    is_distrib   = len(set(origins)) == 1 and len(set(destinations)) > 1
-    is_ramasse   = len(set(origins)) > 1 and len(set(destinations)) == 1
-    is_imbrique  = is_groupage or is_distrib or is_ramasse
-
-    # REFUS EXPLICITE des chaînages : plusieurs origines ET plusieurs destinations
-    # → le séquençage se chargera de les enchaîner
-    if not is_imbrique:
-        return False
-
-    # --- 2. VÉRIFICATION CAPACITÉ (taux occupation) ---
-    if sum(j.taux_occupation for j in temp_list) > taux_max_cible:
-        return False
-
-    # --- 2bis. COMPATIBILITÉ PROPRE/SALE ---
-    types_flux_presents = set(j.type_propre_sale for j in temp_list)
-    if len(types_flux_presents) > 1:
-        return False
-
-    # --- 2ter. COMPATIBILITÉ CONTENANT / VÉHICULE DU PIVOT ---
-    # On vérifie sur v_type_pivot (le véhicule qui exécutera le SuperJob),
-    # pas sur le véhicule du candidat qui peut être différent.
-    v_info = df_vehicules[df_vehicules.iloc[:, 0] == v_type]
-    if not v_info.empty:
-        for j in temp_list:
-            cont = str(j.contenant).strip()
-            if cont in v_info.columns:
-                accepte = str(v_info[cont].values[0]).strip().upper()
-                if accepte != "OUI":
-                    return False
-
-    # --- 2quater. BIN-PACKING (volume + poids) ---
-    if df_contenants is not None and not v_info.empty:
-        contenants_presents = set(j.contenant for j in temp_list)
-        if len(contenants_presents) > 1:
-            vehicule_row = v_info.iloc[0].to_dict()
-            if not verifier_bin_packing_mixte(vehicule_row, temp_list, df_contenants):
-                return False
-    
-    # --- 3. SIMULATION TEMPORELLE ---
-    
-    def get_manut(site):
-        v_info = df_vehicules[df_vehicules.iloc[:, 0] == v_type]
-        t_q = v_info["Temps de mise à quai - manœuvre, contact/admin (minutes)"].values[0] if not v_info.empty else 15
-        s_info = df_sites[df_sites.iloc[:, 0] == site]
-        has_q = "OUI" in str(s_info['PRÉSENCE DE QUAI'].values[0]).upper() if not s_info.empty else True
-        col = "Manutention avec quai (minutes / contenants)" if has_q else "Manutention sans quai (minutes / contenants)"
-        t_c = v_info[col].values[0] if not v_info.empty else 2
-        t_q = to_min(t_q)
-        t_c = to_min(t_c)
-        return t_q, t_c
-
-
-    # --- 4. SÉCURITÉ APPROCHE DYNAMIQUE ---
-    # On utilise la distance max depuis le dépôt du type de véhicule concerné.
-    # C'est le pire cas réaliste : au moment du groupage le camion est au dépôt au plus loin.
-    # Bien plus précis que le pire cas absolu du réseau entier.
-    try:
-        depot = st.session_state.get("params_logistique", {}).get("stationnement_initial", None)
-        if depot and depot.upper() in matrice_duree:
-            distances_depuis_depot = matrice_duree.get(depot.upper(), {})
-            temps_approche_max = max(distances_depuis_depot.values()) if distances_depuis_depot else 30
-        else:
-            # Repli : moyenne des distances max par site (bien moins pessimiste que le max absolu)
-            temps_approche_max = sum(
-                max(d.values()) for d in matrice_duree.values() if d
-            ) / max(len(matrice_duree), 1)
-    except Exception:
-        temps_approche_max = 30  # valeur de secours raisonnable
-
-    duree_totale = 0
-    h_dispo_max = max(to_min(j.h_dispo) for j in temp_list)
-    h_deadline_min = min(to_min(j.h_deadline) for j in temp_list)
-
-    if is_groupage:
-        # A -> B : Somme manut départs + Trajet + Somme manut arrivées
-        t_q_o, t_c_o = get_manut(origins[0])
-        t_q_d, t_c_d = get_manut(destinations[0])
-        qte_totale = sum(j.quantite for j in temp_list)
-        
-        duree_totale = (t_q_o + qte_totale * t_c_o) + \
-                       matrice_duree.get(origins[0], {}).get(destinations[0], 30) + \
-                       (t_q_d + qte_totale * t_c_d)
-        
-        # Condition : La durée doit tenir dans la fenêtre la plus serrée
-        if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
-            return False
-
-    elif is_distrib:
-        # 1 Pick (A) -> Multi Drops (B, C...)
-        t_q_o, t_c_o = get_manut(origins[0])
-        qte_totale = sum(j.quantite for j in temp_list)
-        duree_totale = t_q_o + (qte_totale * t_c_o) # Chargement initial unique
-        
-        current_pos = origins[0]
-        # On suit l'ordre des destinations (ici l'ordre d'ajout)
-        for j in temp_list:
-            duree_totale += matrice_duree.get(current_pos, {}).get(j.destination, 20)
-            t_q_d, t_c_d = get_manut(j.destination)
-            duree_totale += t_q_d + (j.quantite * t_c_d)
-            # Vérification : est-ce que ce drop respecte SA deadline ?
-            if h_dispo_max + duree_totale + temps_approche_max > to_min(j.h_deadline):
-                return False
-            current_pos = j.destination
-
-    elif is_ramasse:
-        # Multi Picks (A, B...) -> 1 Drop (C)
-        current_pos = origins[0]
-        for j in temp_list:
-            duree_totale += matrice_duree.get(current_pos, {}).get(j.origin, 15)
-            t_q_o, t_c_o = get_manut(j.origin)
-            duree_totale += t_q_o + (j.quantite * t_c_o)
-            current_pos = j.origin
-        
-        # Trajet final vers destination unique
-        duree_totale += matrice_duree.get(current_pos, {}).get(destinations[0], 20)
-        t_q_d, t_c_d = get_manut(destinations[0])
-        duree_totale += t_q_d + (sum(j.quantite for j in temp_list) * t_c_d)
-        
-        if h_dispo_max + duree_totale + temps_approche_max > h_deadline_min:
-            return False
-
-    return True
-
-
-def regrouper_tournees_imposees(jobs_incomplets, matrice_duree, df_vehicules, df_sites, df_contenants=None):
-    """
-    Regroupe les jobs par tournée imposée en utilisant une stratégie de 'Pivot' (le plus lourd d'abord)
-    et vérifie la compatibilité dynamique (temps, espace, hygiène).
-    """
-    params = st.session_state["params_logistique"]
-    taux_max_cible = params.get("securite_remplissage", 0.9)
-    
-    super_jobs_tournees = []
-    jobs_solitaires = []
-    
-    # 1. Groupement initial par nom de tournée
-    groupes_tournees = {}
-    for j in jobs_incomplets:
-        nom_t = str(j.tournee_rattachement).strip().upper() if pd.notna(j.tournee_rattachement) else None
-        if nom_t and nom_t != "":
-            groupes_tournees.setdefault(nom_t, []).append(j)
-        else:
-            jobs_solitaires.append(j)
-
-    # 2. Construction des SuperJobs par tournée
-    for nom_t, liste_j in groupes_tournees.items():
-        liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
-
-        while liste_j:
-            current_sj_jobs = [liste_j.pop(0)]
-            refus = []  # jobs refusés en passe 1 — candidats au backtracking
-
-            # --- PASSE 1 : parcours séquentiel ---
-            idx = 0
-            while idx < len(liste_j):
-                candidat = liste_j[idx]
-                if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible, df_contenants):
-                    current_sj_jobs.append(liste_j.pop(idx))
-                    if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
-                        refus.extend(liste_j[idx:])
-                        liste_j = liste_j[:idx]
-                        break
-                else:
-                    refus.append(liste_j.pop(idx))
-
-            # --- PASSE 2 : backtracking sur les refusés (du plus lourd au plus léger) ---
-            if sum(j.taux_occupation for j in current_sj_jobs) < (taux_max_cible - 0.01):
-                refus.sort(key=lambda x: x.taux_occupation, reverse=True)
-                encore_refus = []
-                for candidat in refus:
-                    if est_compatible_sj_et_job(current_sj_jobs, candidat, matrice_duree, df_vehicules, df_sites, taux_max_cible, df_contenants):
-                        current_sj_jobs.append(candidat)
-                        if sum(j.taux_occupation for j in current_sj_jobs) >= (taux_max_cible - 0.01):
-                            encore_refus.extend(refus[refus.index(candidat) + 1:])
-                            break
-                    else:
-                        encore_refus.append(candidat)
-                liste_j.extend(encore_refus)
-            else:
-                liste_j.extend(refus)
-
-            liste_j.sort(key=lambda x: x.taux_occupation, reverse=True)
-
-            new_sj = SuperJob(
-                super_job_id=f"TOURNEE_{nom_t}_{len(super_jobs_tournees) + 1}",
-                v_type=current_sj_jobs[0].vehicule_type,
-                liste_jobs=current_sj_jobs,
-                matrice_duree=matrice_duree,
-                df_vehicules=df_vehicules,
-                df_sites=df_sites
-            )
-            new_sj.nom_tournee_origine = nom_t
-            super_jobs_tournees.append(new_sj)
-            
-    return super_jobs_tournees, jobs_solitaires
-
-def preparer_pile_optimisation(super_jobs_tournees, jobs_solitaires_initiaux):
-    """
-    Décide quels SuperJobs issus des tournées imposées sont assez pleins 
-    pour être 'scellés' et lesquels doivent être dégroupés pour optimisation.
-    """
-    params = st.session_state["params_logistique"]
-    # autoriser_melange activé par défaut : les tournées sous le seuil retournent
-    # dans la pile commune pour être regroupées avec des solitaires.
-    autoriser_melange = params.get("optimiser_reliquats_tournees", True)
-    # Seuil à 70% : une tournée imposée à moins de 70% de remplissage est dégroupée.
-    seuil_rupture = params.get("seuil_rupture_reliquat", 70) / 100
-
-    super_jobs_scelles = []
-    pile_a_optimiser = jobs_solitaires_initiaux.copy()
-
-    for sj in super_jobs_tournees:
-        # 1. On détermine le remplissage réel (le pic de charge pendant la mission)
-        # Pour un imbriqué, c'est la somme. Pour un chaînage, c'est le max d'un des jobs.
-        if sj.type_logistique in ["GROUPAGE_PUR", "DISTRIBUTION", "RAMASSAGE", "TOURNEE_MIXTE"]:
-            remplissage_reel = sum(j.taux_occupation for j in sj.liste_jobs)
-        else:
-            # Pour le chaînage, on regarde le job le plus lourd de la séquence
-            remplissage_reel = max(j.taux_occupation for j in sj.liste_jobs)
-
-        # 2. Arbitrage
-        if autoriser_melange and remplissage_reel < seuil_rupture:
-            # Le camion est jugé "trop vide" : on renvoie les jobs à la pile commune
-            # pour essayer de les marier avec des solitaires à l'étape 2
-            pile_a_optimiser.extend(sj.liste_jobs)
-        else:
-            # Le camion est assez plein ou on n'a pas le droit de mélanger
-            super_jobs_scelles.append(sj)
-
-    return super_jobs_scelles, pile_a_optimiser
-
-
-
-def optimiser_combinaison_solitaires(jobs_solitaires, matrice_duree, df_vehicules, df_sites, df_contenants=None):
-    """
-    Regroupe les jobs solitaires en limitant la durée totale du SJ 
-    à 50% de l'amplitude maximale d'un poste.
-    """
-    params = st.session_state["params_logistique"]
-    taux_max_cible = params.get("securite_remplissage", 0.9)
-    
-    # --- AJOUT : RÉCUPÉRATION DE LA LIMITE DE DURÉE ---
-    # On récupère l'amplitude (ex: 450 min) et on définit le plafond à 50%
-    plafond_duree_sj = params.get("duree_max_superjob", 225)
-    
-    super_jobs_optimises = []
-    restants = jobs_solitaires.copy()
-
-    # On commence par les jobs les plus lourds
-    restants.sort(key=lambda x: x.taux_occupation, reverse=True)
-
-    while restants:
-        job_pivot = restants.pop(0)
-        current_jobs = [job_pivot]
-        
-        continuer_remplissage = True
-        while continuer_remplissage:
-            simulations = []
-            
-            for i, candidat in enumerate(restants):
-                # 1. Vérification de compatibilité standard (Volume, Horaires)
-                if est_compatible_sj_et_job(current_jobs, candidat, matrice_duree, 
-                                            df_vehicules, df_sites, taux_max_cible, df_contenants):
-                    
-                    # 2. Création virtuelle pour tester la nouvelle durée
-                    sj_simul = SuperJob(
-                        super_job_id="SIMUL",
-                        v_type=current_jobs[0].vehicule_type,
-                        liste_jobs=current_jobs + [candidat],
-                        matrice_duree=matrice_duree,
-                        df_vehicules=df_vehicules,
-                        df_sites=df_sites
-                    )
-                    
-                    # --- CONDITION DE GARDE-FOU ---
-                    # On n'ajoute le candidat que si le SJ reste "casable" (< 50% amplitude)
-                    if sj_simul.poids_total <= plafond_duree_sj:
-                        
-                        segments = {}
-                        for j in sj_simul.liste_jobs:
-                            cle_segment = (j.origin, j.destination)
-                            segments.setdefault(cle_segment, []).append(j)
-                        
-                        occ_pic = max(sum(j.taux_occupation for j in j_list) for j_list in segments.values())
-                        
-                        simulations.append({
-                            'index': i,
-                            'temps': sj_simul.poids_total,
-                            'occupation': occ_pic
-                        })
-            
-            # --- ARBITRAGE ET VALIDATION ---
-            if simulations:
-                simulations.sort(key=lambda x: (x['temps'], -x['occupation']))
-                meilleur = simulations[0]
-                
-                current_jobs.append(restants.pop(meilleur['index']))
-                
-                # Sortie si remplissage cible atteint
-                if meilleur['occupation'] >= (taux_max_cible - 0.005):
-                    continuer_remplissage = False
-            else:
-                continuer_remplissage = False
-        
-        # FINALISATION
-        new_sj = SuperJob(
-            super_job_id=f"OPT_SOL_{len(super_jobs_optimises)+1}",
-            v_type=current_jobs[0].vehicule_type,
-            liste_jobs=current_jobs,
-            matrice_duree=matrice_duree,
-            df_vehicules=df_vehicules,
-            df_sites=df_sites
-        )
-        super_jobs_optimises.append(new_sj)
-
-    return super_jobs_optimises
-
-
-def convertir_complets_en_super_jobs(jobs_complets, matrice_duree, df_vehicules, df_sites):
-    """
-    Transforme chaque Job complet en un SuperJob unique.
-    Indispensable pour l'unification du traitement (ordonnancement et lissage).
-    """
-    super_jobs_complets = []
-    
-    for i, j in enumerate(jobs_complets):
-        # On crée un SuperJob avec les paramètres requis par le __init__
-        sj = SuperJob(
-            super_job_id=f"DIRECT_COMPLET_{i+1}",
-            v_type=j.vehicule_type,
-            liste_jobs=[j],
-            matrice_duree=matrice_duree,
-            df_vehicules=df_vehicules,
-            df_sites=df_sites
-        )
-        
-        # On marque l'origine pour la traçabilité
-        sj.type_combinaison = "DIRECT_COMPLET"
-        
-        # Le type_logistique sera automatiquement "GROUPAGE_PUR" 
-        # (puisque 1 seul couple origine/destination)
-        
-        super_jobs_complets.append(sj)
-        
-    return super_jobs_complets
-
-
-
-def tunnel_consolidation_flux(df_complet_jour, df_vehicules, df_contenants, df_sites, matrice_duree):
-    """
-    Transforme les flux bruts du jour en une liste de SuperJobs optimisés.
-    Architecture mise à jour avec les nouveaux paramètres d'instanciation.
-    """
-    # ETAPE 1 : Choix du véhicule et calcul capacité utile
-    df_eclate = Eclater_par_vehicule(df_complet_jour, df_vehicules, df_contenants, df_sites)
-    
-    tous_les_super_jobs_du_jour = []
-    
-    # On segmente par type de véhicule pour ne pas mélanger les capacités
-    types_vehicules = df_eclate['Vehicule_Affecte'].unique()
-    
-    for v_type in types_vehicules:
-        if v_type == "NON_COMPATIBLE_OU_PAS_SELECTIONNE":
-            continue
-            
-        df_v = df_eclate[df_eclate['Vehicule_Affecte'] == v_type]
-        
-        # ETAPE 2 : Fragmentation (Complets vs Incomplets)
-        jobs_c, jobs_i = fragmenter_en_jobs(df_v, v_type, df_vehicules, df_contenants)
-        
-        # ETAPE 3 : Conversion des complets en SuperJobs
-        # AJOUT : df_vehicules et df_sites pour l'init de SuperJob
-        sj_complets = convertir_complets_en_super_jobs(jobs_c, matrice_duree, df_vehicules, df_sites)
-        
-        # ETAPE 4 : Gestion des tournées imposées
-        # AJOUT : df_vehicules et df_sites
-        sj_imposes, solitaires_initiaux = regrouper_tournees_imposees(jobs_i, matrice_duree, df_vehicules, df_sites, df_contenants)
-        
-        # ETAPE 5 : Préparation de la pile (Reliquats + Solitaires)
-        # Cette fonction utilise sj.type_logistique pour l'arbitrage
-        sj_scelles, pile_a_optimiser = preparer_pile_optimisation(sj_imposes, solitaires_initiaux)
-        
-        # ETAPE 6 : Arbitrage et optimisation des solitaires
-        # AJOUT : df_vehicules et df_sites
-        sj_optimises = optimiser_combinaison_solitaires(pile_a_optimiser, matrice_duree, df_vehicules, df_sites, df_contenants)
-        
-        # Fusion pour ce type de véhicule
-        tous_les_super_jobs_du_jour.extend(sj_complets)
-        tous_les_super_jobs_du_jour.extend(sj_scelles)
-        tous_les_super_jobs_du_jour.extend(sj_optimises)
-        
-    return tous_les_super_jobs_du_jour
-
-
-
-def calculer_nmax_par_type(liste_super_jobs):
-    """
-    Calcule l'intensité de charge (besoin en camions) ventilée par type de véhicule.
-    Retourne un dictionnaire { 'TYPE_V': [48 intensités (1 par 30min)] }.
-    """
-    import math
-    nb_creneaux = 48
-    pas = 30
-    
-    intensite_par_type = {}
-
-    for sj in liste_super_jobs:
-        # On utilise le type de véhicule affecté au SuperJob
-        v_type = sj.v_type
-        if v_type not in intensite_par_type:
-            intensite_par_type[v_type] = [0.0] * nb_creneaux
-            
-        # h_dispo_min et h_deadline_min sont calculés dans le __init__ du SuperJob
-        t_debut = sj.h_dispo_min
-        t_fin_autorisee = min(to_min(j.h_deadline) for j in sj.liste_jobs)
-        poids_total = sj.poids_total # Durée de la mission en minutes
-        
-        amplitude = max(1, t_fin_autorisee - t_debut)
-        ratio_theorique = poids_total / amplitude
-
-        # --- CAS A : Lissage (La mission est plus courte que la fenêtre disponible) ---
-        if ratio_theorique <= 1:
-            curr = t_debut
-            while curr < t_fin_autorisee:
-                idx = int((curr % 1440) // pas)
-                if idx >= nb_creneaux: break
-                fin_creneau = (idx + 1) * pas
-                temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
-                # On répartit la charge proportionnellement
-                intensite_par_type[v_type][idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
-                curr += temps_dans_ce_creneau
-
-        # --- CAS B : Débordement / Saturation (La mission est plus longue que la fenêtre) ---
-        else:
-            poids_restant = poids_total
-            curr = t_debut
-            while poids_restant > 0 and curr < 1440:
-                idx = int((curr % 1440) // pas)
-                if idx >= nb_creneaux: break
-                fin_creneau = (idx + 1) * pas
-                # On consomme 100% de la capacité du créneau jusqu'à épuisement du poids_total
-                consommation = min(poids_restant, fin_creneau - curr)
-                intensite_par_type[v_type][idx] += (consommation / pas)
-                poids_restant -= consommation
-                curr += consommation
-
-    return intensite_par_type
-
-
-def calculer_nmax_theorique(liste_super_jobs):
-    """
-    Calcule l'intensité de charge globale pour déterminer le nombre de chauffeurs requis.
-    Retourne (Nmax_final_arrondi, liste_des_48_creneaux).
-    """
-    import math
-    nb_creneaux = 48
-    pas = 30
-    intensite_creneaux = [0.0] * nb_creneaux
-
-    for sj in liste_super_jobs:
-        t_debut = sj.h_dispo_min
-        t_fin_autorisee = sj.h_deadline_min
-        poids_total = sj.poids_total
-        
-        amplitude = max(1, t_fin_autorisee - t_debut)
-        ratio_theorique = poids_total / amplitude
-
-        # On applique la même logique de répartition que dans la fonction précédente
-        if ratio_theorique <= 1:
-            curr = t_debut
-            while curr < t_fin_autorisee:
-                idx = int((curr % 1440) // pas)
-                if idx >= nb_creneaux: break
-                fin_creneau = (idx + 1) * pas
-                temps_dans_ce_creneau = min(t_fin_autorisee, fin_creneau) - curr
-                intensite_creneaux[idx] += (temps_dans_ce_creneau / pas) * ratio_theorique
-                curr += temps_dans_ce_creneau
-        else:
-            poids_restant = poids_total
-            curr = t_debut
-            while poids_restant > 0 and curr < 1440:
-                idx = int((curr % 1440) // pas)
-                if idx >= nb_creneaux: break
-                fin_creneau = (idx + 1) * pas
-                consommation = min(poids_restant, fin_creneau - curr)
-                intensite_creneaux[idx] += (consommation / pas)
-                poids_restant -= consommation
-                curr += consommation
-
-    # Récupération du pic maximum sur 24h
-    pic_max = max(intensite_creneaux) if intensite_creneaux else 0
-    
-    # On applique une marge de sécurité (ici 20%) pour absorber les aléas de route
-    # et on arrondit à l'entier supérieur (on ne peut pas avoir 4.5 chauffeurs)
-    n_max_theorique = math.ceil(pic_max * 1.20)
-    
-    return n_max_theorique, intensite_creneaux
-
-
-def lancer_simulation(liste_super_jobs):
-    st.header("🚀 Simulation des Tournées")
-    
-    if not liste_super_jobs:
-        st.warning("⚠️ Aucun SuperJob disponible.")
-        return
-
-    # --- ÉTAPE 1 : CALCUL VENTILÉ ---
-    intensite_dict = calculer_nmax_par_type(liste_super_jobs)
-
-    # --- ÉTAPE 2 : AFFICHAGE ---
-    st.subheader("📊 Intensité de charge par type de véhicule")
-    
-    # Préparation des libellés d'heures
-    labels_heures = [f"{int(i*30//60):02d}:{(i*30)%60:02d}" for i in range(48)]
-    
-    # Création du DataFrame pour le graphe
-    # index = Heures, colonnes = Types de véhicules
-    df_graph = pd.DataFrame(intensite_dict, index=labels_heures)
-    
-    # Affichage du graphe empilé (Stacked Area Chart)
-    st.area_chart(df_graph)
-
-    # --- ÉTAPE 3 : INDICATEURS PAR TYPE ---
-    st.write("**Besoin maximum par catégorie (Nmax) :**")
-    cols = st.columns(len(intensite_dict))
-    
-    for i, (v_type, intensites) in enumerate(intensite_dict.items()):
-        pic = max(intensites)
-        n_max_v = math.ceil(pic * 1.20)
-        with cols[i]:
-            st.metric(f"Nmax {v_type}", f"{n_max_v} cam.")
-
-    st.divider()
-    return intensite_dict
-
-
-
-
-
-
-
-
 
 def to_min(t):
     if isinstance(t, (time, datetime)):
         return t.hour * 60 + t.minute
     return float(t)
 
+def get_couloir_id(sj):
+    pts = sorted([sj.points_depart[0], sj.points_arrivee[-1]])
+    return f"{pts[0]}--{pts[1]}"
 
-
-
-
-
-
-
-
-def calculer_delta_temps_mission(p, sj, matrice_duree, t_nettoyage):
-    """
-    Calcule le trajet d'approche en intégrant le détour par HUB_HSJ 
-    si un nettoyage (Sale -> Propre) est nécessaire.
-    """
-    site_dep_sj = sj['jobs'][0].origin.upper()
+def calculer_stress_maillon_critique(sj, minute_actuelle, matrice_duree, p_position_actuelle):
+    dist_approche = matrice_duree.get(p_position_actuelle, {}).get(sj.points_depart[0], 0)
+    lst_sj = 0
+    if sj.type_logistique in ['GROUPAGE_PUR', 'RAMASSAGE']:
+        h_deadline_min = min(to_min(j.h_deadline) for j in sj.liste_jobs)
+        lst_sj = h_deadline_min - sj.poids_total
+    else:
+        lst_candidats = []
+        temps_cumule_trajets = 0
+        pos_precedente = sj.points_depart[0]
+        for job in sj.liste_jobs:
+            trajet_interne = matrice_duree.get(pos_precedente, {}).get(job.origin, 0)
+            temps_cumule_trajets += trajet_interne
+            duree_propre = (job.poids_total if hasattr(job, 'poids_total') else 30)
+            lst_job = to_min(job.h_deadline) - (temps_cumule_trajets + duree_propre)
+            lst_candidats.append(lst_job)
+            pos_precedente = job.destination
+            temps_cumule_trajets += duree_propre
+        lst_sj = min(lst_candidats)
     
-    # Trajet d'approche standard (direct)
-    t_approche = matrice_duree.loc[p['pos'], site_dep_sj]
-    besoin_nettoyage = False
-    
-    # Règle Sanitaire : Un camion SALE doit passer par HSJ pour devenir PROPRE
-    if p['dernier_type_sanitaire'] == "SALE" and sj['jobs'][0].type_propre_sale == "PROPRE":
-        besoin_nettoyage = True
-        t_vers_hsj = matrice_duree.loc[p['pos'], "HUB_HSJ"]
-        t_hsj_vers_dep = matrice_duree.loc["HUB_HSJ", site_dep_sj]
-        # Nouveau trajet : Pos actuelle -> HSJ -> Nettoyage -> Départ Job
-        t_approche = t_vers_hsj + t_nettoyage + t_hsj_vers_dep
+    marge_depart = lst_sj - (minute_actuelle + dist_approche)
+    return 1000 - marge_depart
 
-    return t_approche, besoin_nettoyage
-
-def calculer_score_opportuniste(p, sj, matrice_duree, t_nettoyage, h_limite_avance=30):
-    """
-    Arbitre entre :
-    1. Attendre sur place (Temps mort)
-    2. Avancer le job (max 30min avant l'heure lissée)
-    3. Trajet à vide vers un autre site
-    """
-    t_approche, nettoyage = calculer_delta_temps_mission(p, sj, matrice_duree, t_nettoyage)
-    
-    h_arrivee_site = p['h_dispo'] + t_approche
-    h_lissee = sj['h_depart_actuelle']
-    h_prete = sj['h_dispo_max']
-    
-    # Heure de départ autorisée : au plus tôt entre la marchandise prête et (Lissage - 30min)
-    h_dep_autorisee = max(h_prete, h_lissee - h_limite_avance)
-    
-    # Heure réelle de départ pour ce chauffeur
-    h_dep_reel = max(h_arrivee_site, h_dep_autorisee)
-    
-    # Coût de l'attente (temps mort)
-    t_attente = max(0, h_dep_reel - h_arrivee_site)
-    
-    # Pénalité si on dévie du lissage (on préfère rester proche de l'heure cible)
-    penalite_avance = max(0, h_lissee - h_dep_reel) * 0.5
-    
-    # Score final : plus il est bas, plus l'affectation est rentable
-    score = t_approche + t_attente + penalite_avance + (2000 if nettoyage else 0)
-    
-    return score, h_dep_reel, nettoyage
+def obtenir_couloir_groupage_prioritaire(jobs_restants):
+    stats_couloirs = {}
+    for sj in jobs_restants:
+        if sj.type_logistique == 'GROUPAGE_PUR':
+            zone_dep, zone_arr = sj.points_depart[0][:3], sj.points_arrivee[-1][:3]
+            c_id = f"{zone_dep}--{zone_arr}"
+            stats_couloirs[c_id] = stats_couloirs.get(c_id, 0) + len(sj.liste_jobs)
+    return max(stats_couloirs, key=stats_couloirs.get) if stats_couloirs else None
 
 # =================================================================
-# MOTEUR DE SÉQUENÇAGE ET ORDONNANCEMENT
+# 2. CLASSE POSTE CHAUFFEUR
 # =================================================================
 
-def ordonnancer_flotte_optimale(couloirs, matrice_duree, v_type):
-    """
-    Cherche le nombre minimal de véhicules pour un type spécifique.
-    """
-    if "params_logistique" not in st.session_state:
-        return None
-
-    params = st.session_state["params_logistique"]
-    rh = params["rh"]
-
-    h_prise_min = to_decimal_minutes(rh["h_prise_min"])
-    h_fin_max = to_decimal_minutes(rh["h_fin_max"])
-    duree_poste_max = rh["amplitude_totale"]
-    t_prepa = rh["temps_fixes"] / 2  
-    t_fin_poste = rh["temps_fixes"] / 2
-    depot = params.get("stationnement_initial", "HLS").upper()
-
-    # Mise à plat des jobs du segment
-    tous_les_jobs = []
-    for sens_dict in couloirs.values():
-        for liste_sj in sens_dict.values():
-            tous_les_jobs.extend(liste_sj)
-
-    if not tous_les_jobs:
-        return {"succes": True, "n_camions": 0, "postes": []}
-
-    tous_les_jobs.sort(key=lambda x: x.get('h_depart_actuelle', 0))
-
-    # Test itératif (de 1 à N jobs)
-    for n_test in range(1, len(tous_les_jobs) + 1):
-        res = tenter_sequencage(
-            n_test, tous_les_jobs, depot, matrice_duree, 
-            h_prise_min, h_fin_max, duree_poste_max, t_prepa, t_fin_poste, v_type
-        )
-        if res["succes"]:
-            tous_les_postes = []
-            for c in res['camions']:
-                for p in c['postes']:
-                    p['id_camion'] = c['id_camion']
-                    p['v_type'] = v_type
-                    tous_les_postes.append(p)
-            return {"succes": True, "n_camions": n_test, "postes": tous_les_postes}
-
-    return {"succes": False}
-
-def tenter_sequencage(n_camions, jobs_a_faire, depot, matrice_duree, h_start, h_limite, max_poste, t_prepa, t_fin, v_type):
-    """
-    Tente d'attribuer les jobs à une flotte de n_camions pour un type donné.
-    """
-    camions = []
-    for i in range(n_camions):
-        camions.append({
-            'id_camion': f"{v_type}_{i+1:02d}", # ID unique par type
-            'type': v_type,
-            'pos_actuelle': depot,
-            'h_dispo_vehicule': h_start,
-            'postes': []
+class PosteChauffeur:
+    def __init__(self, id_p, v_type, site_depot, params_rh):
+        self.id_poste = id_p
+        self.vehicule_type = v_type
+        self.stationnement_initial = site_depot
+        self.position_actuelle = site_depot
+        self.etat = 'INACTIF'
+        self.temps_restant_etat = 0
+        self.job_en_cours = None
+        self.couloir_actuel = None
+        self.h_debut_service_actuel = None 
+        self.pause_faite = False
+        self.historique = []
+        self.amplitude_max = params_rh.get('amplitude_totale', 450)
+        self.duree_pause = params_rh.get('pause', 20)
+        self.temps_passation = params_rh.get('temps_fixes_fin', 15)
+        self.temps_prise = params_rh.get('temps_fixes_prise', 15)
+        self.vehicule_deja_affecte = False
+        self.marge_inter_job = 0  # initialisée depuis params_logistique
+        
+    def enregistrer(self, minute, activite, sj=None, details=""):
+        sj_id = sj.super_job_id if sj else "N/A"
+        sj_poids = sj.poids_total if sj else 0
+        self.historique.append({
+            "Minute_Debut": minute,
+            "Heure_Debut": f"{int(minute//60):02d}h{int(minute%60):02d}",
+            "Activite": activite,
+            "SJ_ID": sj_id,
+            "sj_poids": sj_poids,
+            "Details": details,
+            # Position au moment de l'enregistrement — utile pour l'affichage Gantt
+            "position_depart": self.position_actuelle,
         })
 
-    # Tri par heure de départ pour la logique de remplissage
-    jobs_copy = sorted(copy.deepcopy(jobs_a_faire), key=lambda x: x.get('h_depart_actuelle', 0))
+# =================================================================
+# 3. MOTEUR DE SIMULATION
+# =================================================================
 
-    for sj in jobs_copy:
-        attribue = False
-        for c in camions:
-            besoin_nouveau_p = False
-            # Vérification si le chauffeur actuel peut prendre le job
-            if not c['postes'] or c['postes'][-1]['fini']:
-                besoin_nouveau_p = True
-            else:
-                p_act = c['postes'][-1]
-                score, h_dep, net = calculer_score_opportuniste(p_act, sj, matrice_duree, t_fin)
-                h_fin_m = h_dep + sj['poids_total']
-                h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
-                debut = p_act['h_debut_service'] if p_act['h_debut_service'] is not None else (h_dep - t_prepa)
-                
-                # Si le job dépasse l'amplitude ou l'heure de fin max -> Fin de poste
-                if (h_ret - debut > max_poste) or (h_ret > h_limite):
-                    p_act['fini'] = True
-                    besoin_nouveau_p = True
+def selectionner_meilleur_job(p, dispos, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job=False):
+    if not dispos: return None
+    liste_candidats = []
+    for sj in dispos:
+        # ── Filtre deadline strict ────────────────────────────────────────
+        # On exclut tout job dont la livraison se terminerait après sa
+        # h_deadline_min, quel que soit son stress.
+        approche = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+        heure_fin_livraison = minute + approche + sj.poids_total
+        if heure_fin_livraison > to_min(sj.h_deadline_min):
+            continue  # deadline déjà dépassée → on ne propose jamais ce job
+
+        stress = calculer_stress_maillon_critique(sj, minute, matrice_duree, p.position_actuelle)
+        liste_candidats.append({'sj': sj, 'stress': stress})
+    
+    if not liste_candidats:
+        return None
+    liste_candidats.sort(key=lambda x: x['stress'], reverse=True)
+    top_n_jobs = [item['sj'] for item in liste_candidats[:nb_Jobs]]
+    
+    couloir_precedent = p.couloir_actuel
+    for sj in top_n_jobs:
+        if couloir_precedent and get_couloir_id(sj) == couloir_precedent and sj.points_depart[0] == p.position_actuelle:
+            return sj
+    for sj in top_n_jobs:
+        if sj.points_depart[0] == p.position_actuelle: return sj
+    for sj in top_n_jobs:
+        if sj.points_depart[0][:3] == p.position_actuelle[:3]: return sj
             
-            if besoin_nouveau_p:
-                # Nouveau poste (relève de chauffeur) sur le même camion
-                h_dispo_v = max(c['h_dispo_vehicule'], h_start)
-                p_neuf = {
-                    'id_chauffeur': f"{c['id_camion']}_CH_{len(c['postes'])+1}",
-                    'h_debut_service': None,
-                    'h_dispo': h_dispo_v + t_prepa,
-                    'pos': c['pos_actuelle'],
-                    'missions': [],
-                    'amplitude': 0,
-                    'fini': False,
-                    'dernier_type_sanitaire': None,
-                    'total_nettoyages': 0
-                }
-                score, h_dep, net = calculer_score_opportuniste(p_neuf, sj, matrice_duree, t_fin)
-                h_fin_m = h_dep + sj['poids_total']
-                h_ret = h_fin_m + matrice_duree.loc[sj['jobs'][-1].destination.upper(), depot] + t_fin
-                
-                # Vérification faisabilité pour le nouveau chauffeur
-                if h_fin_m <= sj['h_deadline_min'] and (h_ret - (h_dep - t_prepa)) <= max_poste and h_ret <= h_limite:
-                    p_neuf['h_debut_service'] = h_dep - t_prepa
-                    c['postes'].append(p_neuf)
-                    p_cible = c['postes'][-1]
-                else:
+    best_sj_proximite, dist_min = None, float('inf')
+    for sj in top_n_jobs:
+        dist = matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+        if dist < dist_min:
+            dist_min, best_sj_proximite = dist, sj
+    return best_sj_proximite
+
+def simuler_faisabilite(I_matin, I_am, prio_tension, liste_sj_type, v_type, matrice_duree, params_logistique, df_vehicules):
+    rh = params_logistique.get('rh', {})
+    h_start = to_min(rh.get('h_prise_min', 360))
+    h_end = to_min(rh.get('h_fin_max', 1380))
+    h_bascule = h_start + to_min(rh.get('amplitude_totale', 450)) - 100
+    
+    facteur_alea = 1 + (params_logistique.get('alea_circulation', 0) / 100)
+    matrice_travail = {o: {d: dur * facteur_alea for d, dur in dests.items()} for o, dests in matrice_duree.items()}
+    
+    filtre = df_vehicules[df_vehicules['Types'] == v_type]
+    depot_initial = filtre['Stationnement initial'].iloc[0] if not filtre.empty else "HSJ"
+
+    marge_inter_job = params_logistique.get('marge_inter_job', 0)
+    postes = [PosteChauffeur(f"{v_type}_{i+1}", v_type, depot_initial, rh) for i in range(I_matin)]
+    for p in postes:
+        p.marge_inter_job = marge_inter_job
+    jobs_restants = list(liste_sj_type)
+    minute = h_start
+
+    while minute <= h_end:
+        for p in postes:
+            if p.etat == 'OPTIMISATION_AM': continue
+            # EN_RETOUR_DEPOT est interruptible : on décrémente mais on ne skip pas
+            # la suite de la boucle, pour réévaluer les jobs à chaque minute.
+            if p.etat == 'EN_RETOUR_DEPOT':
+                if p.temps_restant_etat > 0:
+                    p.temps_restant_etat -= 1
+                # Si le compteur atteint 0, le bloc EN_RETOUR_DEPOT ci-dessous
+                # mettra le poste en DISPONIBLE pour évaluation immédiate.
+                if p.temps_restant_etat > 0:
+                    # Encore en route : réévaluer si un job urgent est apparu
+                    pass  # continue vers les blocs d'état ci-dessous
+            elif p.temps_restant_etat > 0:
+                p.temps_restant_etat -= 1
+                continue
+            
+            if p.etat == 'PRISE_POSTE':
+                p.etat, p.vehicule_deja_affecte = 'DISPONIBLE', True
+            elif p.etat == 'EN_TRAJET_VIDE':
+                # EN_TRAJET_VIDE = trajet vers un job. À l'arrivée on démarre la mission.
+                p.position_actuelle = p.job_en_cours.points_depart[0]
+                p.etat, p.temps_restant_etat = 'EN_MISSION', p.job_en_cours.poids_total
+                p.enregistrer(minute, "EN_MISSION", p.job_en_cours)
+            elif p.etat == 'EN_RETOUR_DEPOT':
+                # EN_RETOUR_DEPOT = retour sans mission. À l'arrivée le poste
+                # repasse en DISPONIBLE — sauf si la pause est encore due,
+                # auquel cas on la déclenche immédiatement pour éviter la boucle infinie.
+                p.position_actuelle = p.stationnement_initial
+                idx_p = int(p.id_poste.split('_')[-1])
+                if minute >= h_bascule and idx_p > I_am:
+                    p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
+                    p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
                     continue
-            else:
-                p_cible = c['postes'][-1]
-
-            # Attribution du job
-            score, h_dep, net = calculer_score_opportuniste(p_cible, sj, matrice_duree, t_fin)
-            h_fin_m = h_dep + sj['poids_total']
-            
-            p_cible['missions'].append({'sj': sj, 'h_dep': h_dep, 'h_fin': h_fin_m, 'nettoyage_effectue': net})
-            p_cible['pos'] = sj['jobs'][-1].destination.upper()
-            p_cible['h_dispo'] = h_fin_m
-            p_cible['dernier_type_sanitaire'] = sj['jobs'][0].type_propre_sale
-            if net: p_cible['total_nettoyages'] += 1
-            
-            c['pos_actuelle'] = p_cible['pos']
-            c['h_dispo_vehicule'] = h_fin_m
-            
-            h_ret_final = h_fin_m + matrice_duree.loc[p_cible['pos'], depot] + t_fin
-            p_cible['amplitude'] = h_ret_final - p_cible['h_debut_service']
-            attribue = True
-            break
-            
-        if not attribue:
-            return {"succes": False}
-
-    return {"succes": True, "camions": camions}
-
-
-
-def eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants):
-    df_travail = df_sequence_type.copy()
-    col_site = df_sites.columns[0] 
-    
-    vehicules_cibles = []
-    capacites_max = []
-
-    for _, flux in df_travail.iterrows():
-        site_dep = str(flux['Point de départ']).strip()
-        site_arr = str(flux['Point de destination']).strip()
-        type_cont = str(flux['Nature de contenant']).strip()
-        
-        v_elu, capa = identifier_meilleur_vehicule(
-            site_dep, site_arr, type_cont, 
-            df_vehicules, df_contenants, df_sites, col_site
-        )
-        
-        if v_elu is not None:
-            # Sécurité : Extraire la valeur texte proprement
-            # Si v_elu est une ligne de DataFrame (Series), v_elu['Types'] peut encore être une Series
-            valeur_type = v_elu['Types']
-            if isinstance(valeur_type, pd.Series):
-                valeur_type = valeur_type.iloc[0]
-            
-            vehicules_cibles.append(str(valeur_type).strip().upper())
-            capacites_max.append(capa)
-        else:
-            vehicules_cibles.append("INCONNU")
-            capacites_max.append(0)
-
-    df_travail['vehicule_cible'] = vehicules_cibles
-    df_travail['capa_max_vehicule'] = capacites_max
-    
-    # On éclate en sous-tableaux
-    sous_problemes = {
-        str(v_type): df_travail[df_travail['vehicule_cible'] == v_type].copy()
-        for v_type in df_travail['vehicule_cible'].unique() if v_type != "INCONNU"
-    }
-    
-    return sous_problemes
-
-
-
-
-"""
-Transforme chaque ligne de flux en N jobs complets et au max 1 job incomplet.
-"""
-
-def fragmenter_flux_en_jobs(df_sous_probleme, h_prise_min, h_fin_max):
-    """
-    Transforme chaque ligne de flux en N jobs complets et au max 1 job incomplet.
-    """
-    jobs_complets = []
-    jobs_incomplets = []
-    
-    start_global = to_decimal_minutes(h_prise_min)
-    end_global = to_decimal_minutes(h_fin_max)
-    
-    job_counter = 0
-
-    for index, flux in df_sous_probleme.iterrows():
-        # Extraction des données de base
-        qte_totale = int(flux['Quantité_Séquence_Type'])
-        capa_v = int(flux['capa_max_vehicule'])
-        
-        # Si capa_max est 0, on ne peut rien faire (sécurité)
-        if capa_v <= 0:
-            continue
-            
-        # Calcul des horaires
-        h_dispo = to_decimal_minutes(flux.get("Heure de mise à disposition min départ")) if pd.notna(flux.get("Heure de mise à disposition min départ")) else start_global
-        h_deadline = to_decimal_minutes(flux.get("Heure max de livraison à la destination")) if pd.notna(flux.get("Heure max de livraison à la destination")) else end_global
-        
-        # --- A. Création des jobs COMPLETDS ---
-        nb_complets = qte_totale // capa_v
-        for _ in range(nb_complets):
-            job_counter += 1
-            new_job = Job(
-                job_id=f"JOB_C_{job_counter}",
-                flux_id=index,
-                type_job='COMPLET',
-                origin=str(flux['Point de départ']).strip(),
-                destination=str(flux['Point de destination']).strip(),
-                h_dispo=h_dispo,
-                h_deadline=h_deadline,
-                quantite=capa_v,
-                contenant=str(flux['Nature de contenant']).strip(),
-                vehicule_type=str(flux['vehicule_cible']).strip(),
-                type_propre_sale=str(flux.get('Type (propre/sale)', 'Inconnu')).strip(),
-                aller_retour=str(flux.get('Aller/Retour', 'Aller')).strip()
-            )
-            jobs_complets.append(new_job)
-            
-        # --- B. Création du job INCOMPLET (le reste) ---
-        reste = qte_totale % capa_v
-        if reste > 0:
-            job_counter += 1
-            new_job = Job(
-                job_id=f"JOB_I_{job_counter}",
-                flux_id=index,
-                type_job='INCOMPLET',
-                origin=str(flux['Point de départ']).strip(),
-                destination=str(flux['Point de destination']).strip(),
-                h_dispo=h_dispo,
-                h_deadline=h_deadline,
-                quantite=reste,
-                contenant=str(flux['Nature de contenant']).strip(),
-                vehicule_type=str(flux['vehicule_cible']).strip(),
-                type_propre_sale=str(flux.get('Type (propre/sale)', 'Inconnu')).strip(),
-                aller_retour=str(flux.get('Aller/Retour', 'Aller')).strip()
-            )
-            jobs_incomplets.append(new_job)
-            
-    return jobs_complets, jobs_incomplets
-
-
-
-
-"""
-Vérifie si une liste de jobs (mix de contenants) rentre physiquement dans un véhicule.
-Limite le test à la surface au sol et aux dimensions, en mode "First Fit" simple.
-"""
-def verifier_bin_packing_mixte(vehicule, liste_jobs, df_contenants):
-    # 1. Extraction des dimensions du véhicule
-    L_v = vehicule['dim longueur interne (m)']
-    l_v = vehicule['dim largeur interne (m)']
-    poids_max = vehicule['Poids max chargement']
-    
-    poids_total = 0
-    surfaces_objets = []
-    
-    # 2. Préparation des dimensions de chaque unité de chaque job
-    for job in liste_jobs:
-        try:
-            cont_info = df_contenants[df_contenants['libellé'].str.strip().str.upper() == job.contenant.upper()].iloc[0]
-            L_c = cont_info['dim longueur (m)']
-            l_c = cont_info['dim largeur (m)']
-            poids_c = cont_info['Poids plein (T)']
-            
-            for _ in range(job.quantite):
-                surfaces_objets.append((L_c, l_c))
-                poids_total += poids_c
-        except:
-            return False # Contenant inconnu
-
-    # 3. Vérification immédiate du poids
-    if poids_total > poids_max:
-        return False
-
-    # 4. Vérification simplifiée par surface au sol (Filtre 1)
-    surf_totale_objets = sum(item[0] * item[1] for item in surfaces_objets)
-    if surf_totale_objets > (L_v * l_v):
-        return False
-
-    # 5. Algorithme de placement "Next Fit Decreasing Height" (NFDH)
-    # On trie les objets par hauteur décroissante pour optimiser le rangement en rangées
-    surfaces_objets.sort(key=lambda x: max(x), reverse=True)
-    
-    x_curr, y_curr, h_ligne_max = 0, 0, 0
-    for w, h in surfaces_objets:
-        # On teste l'objet dans le sens qui prend le moins de largeur
-        obj_w, obj_h = (min(w, h), max(w, h))
-        
-        if x_curr + obj_w > l_v: # On passe à la ligne suivante
-            x_curr = 0
-            y_curr += h_ligne_max
-            h_ligne_max = 0
-            
-        if y_curr + obj_h > L_v: # Ça ne rentre plus
-            return False
-            
-        x_curr += obj_w
-        h_ligne_max = max(h_ligne_max, obj_h)
-        
-    return True
-
-
-
-
-"""
-Cherche les partenaires idéaux pour un job pivot vers une destination commune.
-Vérifie la compatibilité sanitaire (Propre/Sale) et le bin-packing.
-"""
-def trouver_meilleure_comb_dest(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    """Groupe par destination (Collecte multi-points) avec vérification temporelle"""
-    v_type = str(job_pivot.vehicule_type).strip().upper()
-    col_nom_v = df_vehicules.columns[0]
-    
-    mask_v = df_vehicules[col_nom_v].str.strip().str.upper() == v_type
-    if not mask_v.any():
-        return [], 9999
-    vehicule = df_vehicules[mask_v].iloc[0]
-    
-    candidats = [j for j in pool_candidats if 
-                 j.dest_group == job_pivot.dest_group and 
-                 j.type_propre_sale == job_pivot.type_propre_sale and
-                 str(j.vehicule_type).strip().upper() == v_type]
-    
-    meilleure_comb = []
-    try:
-        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination] + 10
-    except KeyError:
-        return [], 9999
-
-    comb_test = [job_pivot]
-    for c in candidats:
-        if len(comb_test) >= 3: break
-        
-        # 1. Vérification physique (Bin Packing)
-        if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
-            comb_test_temp = comb_test + [c]
-            
-            # 2. Calcul du nouveau temps de trajet (poids)
-            points_dep = list(set([j.origin for j in comb_test_temp]))
-            try:
-                poids_test = 0
-                curr = points_dep[0]
-                for next_pt in points_dep[1:]:
-                    poids_test += matrice_duree.loc[curr, next_pt] + 10 
-                    curr = next_pt
-                poids_test += matrice_duree.loc[curr, job_pivot.destination] + 10
-                
-                # 3. VERIFICATION TEMPORELLE CRITIQUE
-                h_dispo_groupe = max(j.h_dispo for j in comb_test_temp)
-                h_deadline_groupe = min(j.h_deadline for j in comb_test_temp)
-                
-                if h_dispo_groupe + poids_test <= h_deadline_groupe:
-                    comb_test = comb_test_temp
-                    meilleure_comb = comb_test[1:] 
-                    poids_min = poids_test
+                if p.h_debut_service_actuel is not None:
+                    temps_trav_arrivee = minute - p.h_debut_service_actuel
+                    if temps_trav_arrivee >= p.amplitude_max // 2 and not p.pause_faite:
+                        p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
+                        p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
+                        continue
+                p.etat = 'DISPONIBLE'  # la boucle DISPONIBLE gère la suite
+            elif p.etat == 'EN_MISSION':
+                p.position_actuelle = p.job_en_cours.points_arrivee[-1]
+                p.couloir_actuel = get_couloir_id(p.job_en_cours)
+                p.job_en_cours = None
+                if p.marge_inter_job > 0:
+                    p.etat, p.temps_restant_etat = 'INTER_JOB', p.marge_inter_job
+                    p.enregistrer(minute, "INTER_JOB", details=f"Marge inter-job: {p.marge_inter_job}min")
                 else:
-                    continue # Trop long pour la deadline
-            except KeyError:
+                    p.etat = 'DISPONIBLE' 
+            elif p.etat == 'EN_PAUSE': p.etat = 'DISPONIBLE'
+            elif p.etat == 'INTER_JOB': p.etat = 'DISPONIBLE'
+            elif p.etat == 'FIN_DE_SERVICE' and p.temps_restant_etat == 0 :
+                p.etat, p.h_debut_service_actuel, p.pause_faite, p.couloir_actuel = 'INACTIF', None, False, None
+                p.enregistrer(minute, "VEHICULE_LIBERE")
+
+        # ── Visibilité anticipée des jobs ────────────────────────────────────────
+        # Un job est visible dès que le camion peut l'atteindre à temps depuis
+        # sa position actuelle, même si la dispo n'est pas encore atteinte.
+        #
+        # Règle : job visible si minute >= h_dispo_min(sj) - trajet(pos → départ_sj)
+        #   • poste INACTIF  : pos = dépôt, on soustrait aussi temps_prise
+        #   • poste actif    : pos = position_actuelle du poste
+        #
+        # Cela permet de voir très tôt les jobs contraints (stress élevé)
+        # sans jamais les affecter avant leur vraie h_dispo_min.
+        def job_visible(sj, poste):
+            pos = poste.position_actuelle
+            trajet_approche = matrice_travail.get(pos, {}).get(sj.points_depart[0], 0)
+            anticipation = trajet_approche
+            if poste.etat == 'INACTIF':
+                anticipation += poste.temps_prise
+            return minute >= to_min(sj.h_dispo_min) - anticipation
+
+        # dispos globaux : union des jobs visibles par au moins un poste actif
+        # (utilisé pour les postes DISPONIBLE — chacun filtre ensuite par sa position)
+        dispos = [j for j in jobs_restants if any(
+            job_visible(j, p) for p in postes
+            if p.etat not in ['OPTIMISATION_AM', 'FIN_DE_SERVICE']
+        )]
+        for p in postes:
+            if p.etat == 'OPTIMISATION_AM' or p.temps_restant_etat > 0: continue
+            
+            idx_p = int(p.id_poste.split('_')[-1])
+            if p.etat == 'DISPONIBLE' and minute >= h_bascule and idx_p > I_am:
+                if p.position_actuelle == p.stationnement_initial:
+                    p.etat, p.temps_restant_etat = 'OPTIMISATION_AM', 9999
+                    p.enregistrer(minute, "VEHICULE_LIBERE", details="Désengagement (Optimisation AM)")
+                else:
+                    p.etat = 'EN_RETOUR_DEPOT'
+                    p.temps_restant_etat = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                    p.enregistrer(minute, "RETOUR_DEPOT", details="Retour pour libération AM")
                 continue
-    return meilleure_comb, poids_min
 
+            if p.etat == 'INACTIF' and dispos:
+                p.etat, p.temps_restant_etat = 'PRISE_POSTE', p.temps_prise
+                p.h_debut_service_actuel = minute if p.vehicule_deja_affecte else (minute - p.temps_prise)
+                p.enregistrer(minute, "PRISE_POSTE")
+                continue
 
+            if p.etat in ('DISPONIBLE', 'EN_RETOUR_DEPOT'):
+                temps_trav = minute - p.h_debut_service_actuel
+                dist_ret = matrice_travail.get(p.position_actuelle, {}).get(p.stationnement_initial, 30)
+                h_fin_poste = p.h_debut_service_actuel + p.amplitude_max
+                h_limite_job = h_fin_poste - p.temps_passation  # dernière minute pour démarrer un job
 
-
-
-"""
-Cherche à grouper des jobs partant du même quai vers des destinations différentes (Tournée).
-Ordonne les destinations par proximité pour minimiser les kilomètres et respecte la compatibilité sanitaire.
-"""
-def trouver_meilleure_comb_dep(job_pivot, pool_candidats, df_vehicules, df_contenants, matrice_duree):
-    """Groupe par départ (Tournée de distribution) avec vérification temporelle"""
-    v_type = str(job_pivot.vehicule_type).strip().upper()
-    col_nom_v = df_vehicules.columns[0]
-    
-    mask_v = df_vehicules[col_nom_v].str.strip().str.upper() == v_type
-    if not mask_v.any():
-        return [], 9999
-    vehicule = df_vehicules[mask_v].iloc[0]
-    
-    candidats = [j for j in pool_candidats if 
-                 j.origin_group == job_pivot.origin_group and 
-                 j.type_propre_sale == job_pivot.type_propre_sale and
-                 str(j.vehicule_type).strip().upper() == v_type]
-    
-    meilleure_comb = []
-    poids_min = 9999
-    
-    # Init poids par défaut
-    try:
-        poids_min = matrice_duree.loc[job_pivot.origin, job_pivot.destination] + 10
-    except:
-        pass
-
-    comb_test = [job_pivot]
-    for c in candidats:
-        if len(comb_test) >= 3: break
-        
-        # 1. Vérification physique
-        if verifier_bin_packing_mixte(vehicule, comb_test + [c], df_contenants):
-            comb_test_temp = comb_test + [c]
-            dests_uniques = list(set([j.destination for j in comb_test_temp]))
-            
-            try:
-                poids_test = 0
-                curr = job_pivot.origin
-                temp_dests = dests_uniques.copy()
-                while temp_dests:
-                    proche = min(temp_dests, key=lambda d: matrice_duree.loc[curr, d])
-                    poids_test += matrice_duree.loc[curr, proche] + 10 
-                    curr = proche
-                    temp_dests.remove(proche)
-                
-                # 2. VERIFICATION TEMPORELLE CRITIQUE
-                h_dispo_groupe = max(j.h_dispo for j in comb_test_temp)
-                h_deadline_groupe = min(j.h_deadline for j in comb_test_temp)
-                
-                if h_dispo_groupe + poids_test <= h_deadline_groupe:
-                    comb_test = comb_test_temp
-                    meilleure_comb = comb_test[1:]
-                    poids_min = poids_test
-                else:
+                # ── Pause obligatoire ─────────────────────────────────────────
+                besoin_p = (temps_trav >= p.amplitude_max // 2 and not p.pause_faite)
+                if besoin_p:
+                    nb_Jobs = max(math.ceil(prio_tension * len(dispos)), 1)
+                    best_sj = selectionner_meilleur_job_retour(p, dispos, minute, matrice_travail, nb_Jobs, jobs_restants, est_premier_job=(p.couloir_actuel is None))
+                    # Compatibilité stricte : approche + job + retour dépôt <= h_limite_job
+                    approche = matrice_travail.get(p.position_actuelle, {}).get(best_sj.points_depart[0], 0) if best_sj else 0
+                    if best_sj and (minute + approche + best_sj.poids_total + dist_ret) <= h_limite_job:
+                        affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                        continue
+                    # Aucun job compatible : aller au dépôt pour faire la pause.
+                    # Si déjà au dépôt : pause immédiate, pas de boucle EN_RETOUR_DEPOT.
+                    if p.position_actuelle != p.stationnement_initial:
+                        p.etat = 'EN_RETOUR_DEPOT'
+                        p.temps_restant_etat = dist_ret
+                        p.enregistrer(minute, "RETOUR_DEPOT", details="Retour Pause")
+                    else:
+                        # Déjà au dépôt : pause déclenchée directement
+                        p.etat, p.temps_restant_etat, p.pause_faite = 'EN_PAUSE', p.duree_pause, True
+                        p.enregistrer(minute, "EN_PAUSE", details=f"Durée: {p.duree_pause}min")
                     continue
-            except KeyError:
-                continue
+
+                # ── Chercher un job compatible ────────────────────────────────
+                # Condition stricte : minute + approche + durée_job + retour_dépôt <= h_limite_job
+                dispos_poste = [j for j in dispos if job_visible(j, p)]
+                best_sj = None
+                if dispos_poste:
+                    nb_Jobs = max(math.ceil(prio_tension * len(dispos_poste)), 1)
+                    candidat = selectionner_meilleur_job(p, dispos_poste, minute, matrice_travail, nb_Jobs, jobs_restants)
+                    if candidat:
+                        approche = matrice_travail.get(p.position_actuelle, {}).get(candidat.points_depart[0], 0)
+                        if (minute + approche + candidat.poids_total + dist_ret) <= h_limite_job:
+                            best_sj = candidat
+
+                if best_sj:
+                    affecter_job_avec_matrice(p, best_sj, jobs_restants, dispos, minute, matrice_travail)
+                    continue
+
+                # ── Aucun job compatible ──────────────────────────────────────
+                # Si pas au dépôt : lancer EN_RETOUR_DEPOT (interruptible à chaque minute)
+                # Si au dépôt    : attendre jusqu'à h_limite_job puis déclencher fin de poste
+                if p.position_actuelle != p.stationnement_initial:
+                    p.etat = 'EN_RETOUR_DEPOT'
+                    p.temps_restant_etat = dist_ret
+                    p.enregistrer(minute, "RETOUR_DEPOT", details="Retour fin de poste")
+                elif minute >= h_limite_job:
+                    p.etat, p.temps_restant_etat = 'FIN_DE_SERVICE', p.temps_passation
+                    p.enregistrer(minute, "PASSATION_FIN")
+                # Sinon : on reste DISPONIBLE, réévaluation à la prochaine minute
+
+        if not jobs_restants and all(p.etat in ['INACTIF', 'FIN_DE_SERVICE', 'OPTIMISATION_AM', 'INTER_JOB', 'EN_RETOUR_DEPOT'] for p in postes): return postes, []
+        minute += 1
+    return None, jobs_restants
+
+def affecter_job_avec_matrice(p, sj, jobs_restants, dispos, minute, matrice_travail):
+    p.job_en_cours = sj
+    jobs_restants.remove(sj)
+    if sj in dispos: dispos.remove(sj)
+    p.etat, p.temps_restant_etat = 'EN_TRAJET_VIDE', matrice_travail.get(p.position_actuelle, {}).get(sj.points_depart[0], 0)
+    p.enregistrer(minute, "EN_TRAJET_VIDE", sj, "Approche Mission")
+
+def selectionner_meilleur_job_retour(p, dispos, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job=False, limite_critique=270):
+    zone_depot = p.stationnement_initial[:3]
+    candidats_v = [sj for sj in dispos if sj.points_arrivee[-1][:3] == zone_depot and ((minute + matrice_duree.get(p.position_actuelle, {}).get(sj.points_depart[0], 20) + sj.poids_total + matrice_duree.get(sj.points_arrivee[-1], {}).get(p.stationnement_initial, 20)) - p.h_debut_service_actuel) <= limite_critique]
+    return selectionner_meilleur_job(p, candidats_v, minute, matrice_duree, nb_Jobs, jobs_restants, est_premier_job) if candidats_v else None
+
+# =================================================================
+# 4. FONCTION D'ENTRÉE PRINCIPALE (OPTIMISÉE)
+# =================================================================
+
+def trouver_meilleure_configuration_journee(liste_sj, n_max_dict, df_vehicules, matrice_duree, params_logistique):
+    postes_complets = []
+    tensions_test = [0.2, 0.4, 0.6, 0.8, 1.0]
+    
+    for v_type, val_max in n_max_dict.items():
+        pic_charge = max(val_max) if isinstance(val_max, list) else val_max
+        n_depart, n_limite = max(1, math.floor(pic_charge * 0.5)), math.ceil(pic_charge * 2.5)
+        jobs_v = [sj for sj in liste_sj if sj.v_type == v_type]
+        if not jobs_v: continue
             
-    return meilleure_comb, poids_min
+        meilleure_sol = None
+        min_im = float('inf')
+        min_iam = float('inf')
+        max_occ = -1
 
+        st.write(f"🔍 **{v_type}** | {len(jobs_v)} SJ | pic={pic_charge:.1f} | n=[{n_depart}..{min(n_limite,len(jobs_v))}]")
 
+        for tension in tensions_test:
+            for im in range(n_depart, min(n_limite, len(jobs_v)) + 1):
+                if im > min_im: break
 
+                for iam in range(1, im + 1):
+                    if im == min_im and iam > min_iam: break
 
-"""
-Orchestre l'appairage global de tous les jobs incomplets. 
-Pour chaque job, teste les deux logiques de combinaison et retient la plus performante 
-en termes de temps de mobilisation (poids).
-"""
-def appairer_tous_les_jobs_incomplets(liste_incomplets, df_vehicules, df_contenants, matrice_duree):
-    pool_restant = liste_incomplets.copy()
-    liste_super_jobs_finale = []
-    
-    # On trie par h_dispo pour traiter les flux chronologiquement (priorité au premier prêt)
-    pool_restant.sort(key=lambda x: x.h_dispo)
-    
-    while len(pool_restant) > 0:
-        # On extrait le premier job de la liste (le pivot)
-        job_pivot = pool_restant.pop(0)
-        
-        # 1. On cherche la meilleure combinaison par DESTINATION (même point d'arrivée)
-        partenaires_dest, poids_dest = trouver_meilleure_comb_dest(
-            job_pivot, pool_restant, df_vehicules, df_contenants, matrice_duree
-        )
-        
-        # 2. On cherche la meilleure combinaison par DEPART (même point d'origine)
-        partenaires_dep, poids_dep = trouver_meilleure_comb_dep(
-            job_pivot, pool_restant, df_vehicules, df_contenants, matrice_duree
-        )
-        
-        # 3. Arbitrage : Quelle logique est la plus "légère" en temps ?
-        # Si poids_dest <= poids_dep, on choisit le groupage destination
-        if poids_dest <= poids_dep:
-            elus = [job_pivot] + partenaires_dest
-            poids_final = poids_dest
-            type_comb = "DESTINATION"
+                    res, jobs_nt = simuler_faisabilite(im, iam, tension, jobs_v, v_type, matrice_duree, params_logistique, df_vehicules)
+
+                    if res is not None and len(jobs_nt) > 0:
+                        st.write(f"  ⚠️ im={im} iam={iam} t={tension:.1f} → {len(jobs_v)-len(jobs_nt)}/{len(jobs_v)} traités — rejetée")
+                        res = None
+                    elif res is None:
+                        st.write(f"  ❌ im={im} iam={iam} t={tension:.1f} → aucune solution")
+                    else:
+                        st.write(f"  ✅ im={im} iam={iam} t={tension:.1f} → complète !")
+
+                    if res:
+                        # Calcul de la performance de cette solution
+                        trav_utile, ampl_conso = 0, 0
+                        for p in res:
+                            if p.historique:
+                                ampl_conso += (p.historique[-1]['Minute_Debut'] - p.historique[0]['Minute_Debut'])
+                                for h in p.historique:
+                                    if h['Activite'] == 'EN_MISSION': 
+                                        trav_utile += h.get('sj_poids', 0)
+                                    elif any(x in h['Activite'] for x in ['TRAJET_VIDE', 'RETOUR', 'INTERMISSION']): 
+                                        trav_utile += 15 # Valorisation du temps de trajet/attente
+                        
+                        taux_occ = trav_utile / max(ampl_conso, 1)
+
+                        # LOGIQUE DE DÉCISION HIÉRARCHIQUE :
+                        # 1. Est-ce que le nombre de véhicules (im) est meilleur ?
+                        if im < min_im:
+                            min_im, min_iam, max_occ, meilleure_sol = im, iam, taux_occ, res
+                        
+                        # 2. Si im identique, est-ce que le nombre de postes (iam) est meilleur ?
+                        elif im == min_im:
+                            if iam < min_iam:
+                                min_iam, max_occ, meilleure_sol = iam, taux_occ, res
+                            
+                            # 3. Si im et iam identiques, est-ce que le taux d'occupation est meilleur ?
+                            elif iam == min_iam:
+                                if taux_occ > max_occ:
+                                    max_occ, meilleure_sol = taux_occ, res
+                        
+                        # On a trouvé une solution pour ce couple (im, iam), 
+                        # on passe à la tension suivante ou on break selon besoin.
+                        # Ici on break iam car on cherche le iam MIN pour ce im.
+                        break 
+
+        if meilleure_sol:
+            st.success(f"✅ **{v_type}** : Optimisé (Im:{min_im}, Iam:{min_iam}, Occ:{max_occ:.1%})")
+            postes_complets.extend(meilleure_sol)
         else:
-            elus = [job_pivot] + partenaires_dep
-            poids_final = poids_dep
-            type_comb = "DEPART"
-            
-        # 4. Création du Super Job (Dictionnaire pour faciliter le lissage ensuite)
-        super_job = {
-            'id_super_job': f"SJ_{elus[0].job_id}",
-            'jobs': elus,                      # Liste des 1, 2 ou 3 objets Job
-            'poids_total': poids_final,        # Temps camion mobilisé
-            'type_combinaison': type_comb,
-            'h_dispo_max': max(j.h_dispo for j in elus), # Le camion ne peut partir que quand TOUT est prêt
-            'h_deadline_min': min(j.h_deadline for j in elus) # Le camion doit arriver pour le plus urgent
-        }
-        
-        liste_super_jobs_finale.append(super_job)
-        
-        # 5. Mise à jour du pool : on retire les jobs qui ont été appairés
-        id_elus = [j.job_id for j in elus[1:]] # On ignore le pivot car il est déjà pop()
-        pool_restant = [j for j in pool_restant if j.job_id not in id_elus]
-        
-    return liste_super_jobs_finale
+            st.error(f"❌ **{v_type}** : Échec de planification.")
 
-
-
-"""
-Fusionne les jobs complets et les super-jobs d'incomplets dans une liste unique.
-Chaque job complet devient un Super Job à part entière pour uniformiser le traitement.
-"""
-def preparer_liste_tous_super_jobs(jobs_complets, super_jobs_incomplets, matrice_duree):
-    """Fusionne et sécurise les jobs complets et groupés"""
-    liste_finale = []
-    
-    # 1. Traitement des jobs complets
-    for j in jobs_complets:
-        try:
-            poids = matrice_duree.loc[j.origin, j.destination] + 10
-        except KeyError:
-            st.error(f"❌ Site manquant dans la matrice : {j.origin} ou {j.destination}")
-            poids = 30 
-        
-        # SÉCURITÉ : Vérifier si le job complet est réalisable en direct
-        if j.h_dispo + poids > j.h_deadline:
-            st.warning(f"⚠️ JOB IMPOSSIBLE (Excel) : {j.job_id} ({j.origin}->{j.destination}). "
-                       f"Prêt à {j.h_dispo} min, trajet {poids} min, mais deadline à {j.h_deadline} min. Ignoré.")
-            continue
-            
-        sj = {
-            "id_super_job": f"SJ_C_{j.job_id}",
-            "jobs": [j],
-            "poids_total": poids,
-            "type_combinaison": "DIRECT_COMPLET",
-            "h_dispo_max": j.h_dispo,
-            "h_deadline_min": j.h_deadline
-        }
-        liste_finale.append(sj)
-        
-    # 2. Ajout des super jobs issus des incomplets (déjà filtrés par les fonctions précédentes)
-    liste_finale.extend(super_jobs_incomplets)
-    
-    return liste_finale
-
-
-"""
-Regroupe les Super Jobs par couloirs géographiques bidirectionnels.
-Normalise tous les sites contenant 'HSJ' en un hub unique pour faciliter l'appairage.
-"""
-def cartographier_couloirs(liste_tous_super_jobs):
-    couloirs = {} # Clé : frozenset({SiteA, SiteB}), Valeur : {'A_vers_B': [], 'B_vers_A': []}
-
-    for sj in liste_tous_super_jobs:
-        # 1. Normalisation HSJ
-        # On transforme "HSJ_PUI" ou "HSJ_STERIL" en "HUB_HSJ"
-        orig_raw = sj['jobs'][0].origin
-        dest_raw = sj['jobs'][0].destination
-        
-        orig = "HUB_HSJ" if "HSJ_" in orig_raw.upper() else orig_raw
-        dest = "HUB_HSJ" if "HSJ_" in dest_raw.upper() else dest_raw
-        
-        # On ignore les mouvements internes au HUB HSJ (si existants)
-        if orig == dest:
-            continue
-
-        # 2. Création de la clé du couloir (non-ordonnée pour grouper A->B et B->A)
-        # Un frozenset({A, B}) est identique à frozenset({B, A})
-        nom_couloir = frozenset([orig, dest])
-        
-        if nom_couloir not in couloirs:
-            # On initialise le couloir avec les deux sens possibles
-            # On utilise un tuple ordonné pour les clés internes pour savoir qui est qui
-            site_liste = list(nom_couloir)
-            s1, s2 = site_liste[0], site_liste[1]
-            couloirs[nom_couloir] = {
-                f"{s1}_vers_{s2}": [],
-                f"{s2}_vers_{s1}": []
-            }
-        
-        # 3. Rangement du Super Job dans le bon sens
-        sens = f"{orig}_vers_{dest}"
-        couloirs[nom_couloir][sens].append(sj)
-
-    return couloirs
+    return {"succes": len(postes_complets) > 0, "postes": postes_complets}
 
 
 
 
-"""
-Répartit les jobs par couloir selon leur représentativité :
-- Groupes (fenêtres identiques) : Étalement uniforme sur la fenêtre.
-- Solitaires : Positionnement strict au plus tôt (h_dispo_max).
-"""
-def etaler_uniformément_par_couloir(couloirs):
+def afficher_controle_coherence(liste_globale_sj, postes_complets):
     """
-    Répartit les départs sur toute la plage disponible.
-    Sécurité : Initialise h_depart_actuelle pour éviter les KeyError.
+    Compare les flux demandés vs les flux réalisés par type de contenant.
     """
-    for key in couloirs:
-        for sens in ["ALLER", "RETOUR"]:
-            if sens not in couloirs[key]:
-                continue
-                
-            jobs = couloirs[key][sens]
-            if not jobs:
-                continue
-            
-            # --- SÉCURITÉ : Initialisation systématique ---
-            for sj in jobs:
-                if 'h_depart_actuelle' not in sj:
-                    sj['h_depart_actuelle'] = sj['h_dispo_max']
-            
-            # Trier par deadline pour le lissage
-            jobs.sort(key=lambda x: x.get('h_deadline_min', 0))
-            
-            n = len(jobs)
-            t_start = min(sj['h_dispo_max'] for sj in jobs)
-            t_end = max(sj['h_deadline_min'] for sj in jobs)
-            
-            plage = max(30, t_end - t_start)
-            pas = plage / n if n > 1 else 0
-
-            for i, sj in enumerate(jobs):
-                cible = t_start + (i * pas)
-                h_depart = max(cible, sj['h_dispo_max'])
-                
-                # On ne dépasse pas la deadline
-                if h_depart > sj['h_deadline_min']:
-                    h_depart = sj['h_deadline_min']
-                
-                sj['h_depart_actuelle'] = h_depart
-                
-    return couloirs
-
-
-"""
-Lissage marginal dynamique (on ajuste la charge pour le véhicule au cours de la journée. 
-"""
-def ajustement_marginal_dynamique(couloirs):
-    """
-    Évite les collisions de départ par site. 
-    Sécurité : utilise .get() pour éviter KeyError lors du tri.
-    """
-    tous_les_sj = []
-    for key in couloirs:
-        for sens in couloirs[key]:
-            tous_les_sj.extend(couloirs[key][sens])
-            
-    if not tous_les_sj:
-        return couloirs
-            
-    # SÉCURITÉ : On s'assure que chaque job a une heure, même si le lissage a échoué
-    for sj in tous_les_sj:
-        if 'h_depart_actuelle' not in sj:
-            sj['h_depart_actuelle'] = sj['h_dispo_max']
-
-    # 1. Tri chronologique sécurisé
-    tous_les_sj.sort(key=lambda x: x.get('h_depart_actuelle', x['h_dispo_max']))
+    st.subheader("Validator : Contrôle de cohérence des flux")
     
-    # 2. Suivi des départs par site pour le cadencement (10 min)
-    dernier_depart_par_site = {}
-    CADENCE_MINUTAGE = 10 
+    # 1. Calcul du Théorique (ce qui était dans la liste de départ)
+    flux_theorique = {}
+    for sj in liste_globale_sj:
+        for job in sj.liste_jobs:
+            c_type = getattr(job, 'contenant', 'Inconnu')
+            flux_theorique[c_type] = flux_theorique.get(c_type, 0) + 1
 
-    for sj in tous_les_sj:
-        # On vérifie qu'il y a bien un job dans le super_job pour trouver l'origine
-        if not sj['jobs']: continue
-        
-        site_origine = sj['jobs'][0].origin_group
-        h_prevue = sj['h_depart_actuelle']
-        
-        if site_origine in dernier_depart_par_site:
-            h_mini_possible = dernier_depart_par_site[site_origine] + CADENCE_MINUTAGE
-            
-            if h_prevue < h_mini_possible:
-                # Décalage sans dépasser la deadline
-                h_limite = sj.get('h_deadline_min', h_prevue + 60)
-                sj['h_depart_actuelle'] = min(h_mini_possible, h_limite)
-        
-        dernier_depart_par_site[site_origine] = sj['h_depart_actuelle']
-
-    return couloirs
-
-
-def traitement_flux_recurrents(df_sequence_type, df_sites, df_vehicules, df_contenants, matrice_duree):
-    st.info("🚀 Démarrage du traitement segmenté par type de véhicule...")
-
-    if not isinstance(matrice_duree.index, pd.Index) or isinstance(matrice_duree.index, pd.RangeIndex):
-        matrice_duree = matrice_duree.set_index(matrice_duree.columns[0])
-        
-    sous_problemes = eclater_flux_par_vehicule(df_sequence_type, df_sites, df_vehicules, df_contenants)
+    # 2. Calcul du Réel (ce qui est présent dans l'historique des postes)
+    flux_reel = {c: 0 for c in flux_theorique.keys()}
+    jobs_vus = set() # Pour éviter les doublons si un historique est mal lu
     
-    params = st.session_state["params_logistique"]
-    h_start = params["rh"]["h_prise_min"]
-    h_end = params["rh"]["h_fin_max"]
+    for p in postes_complets:
+        for h in p.historique:
+            if h['Activite'] == 'EN_MISSION' and h['SJ_ID'] != "N/A":
+                # On retrouve le SuperJob original pour compter ses jobs internes
+                sj_id = h['SJ_ID']
+                if sj_id not in jobs_vus:
+                    # On cherche le SJ dans la liste globale pour avoir le détail des contenants
+                    target_sj = next((s for s in liste_globale_sj if s.super_job_id == sj_id), None)
+                    if target_sj:
+                        for j_interne in target_sj.liste_jobs:
+                            c_type = getattr(j_interne, 'contenant', 'Inconnu')
+                            flux_reel[c_type] = flux_reel.get(c_type, 0) + 1
+                        jobs_vus.add(sj_id)
 
-    tous_les_postes_finaux = []
-    dimensionnement_total = {}
+    # 3. Construction de la Matrice (Tableau)
+    donnees_controle = []
+    total_theorique = 0
+    total_reel = 0
 
-    for v_type, df_v in sous_problemes.items():
-        v_type_str = str(v_type).upper()
+    for contenant in sorted(flux_theorique.keys()):
+        theo = flux_theorique[contenant]
+        reel = flux_reel.get(contenant, 0)
+        status = "✅" if theo == reel else "❌"
         
-        with st.status(f"🚛 Calcul du segment : {v_type_str}...", expanded=False) as status:
-            # 1. Préparation (Fragmentation, Appairage, Fusion, Cartographie)
-            jobs_c, jobs_i = fragmenter_flux_en_jobs(df_v, h_start, h_end)
-            super_jobs_i = appairer_tous_les_jobs_incomplets(jobs_i, df_vehicules, df_contenants, matrice_duree)
-            liste_sj_v = preparer_liste_tous_super_jobs(jobs_c, super_jobs_i, matrice_duree)
-            couloirs_v = cartographier_couloirs(liste_sj_v)
-            
-            # 2. Lissage
-            couloirs_v = etaler_uniformément_par_couloir(couloirs_v)
-            couloirs_v = ajustement_marginal_dynamique(couloirs_v)
-            
-            # 3. Ordonnancement du SOUS-PROBLÈME (Appel segmenté)
-            res_segment = ordonnancer_flotte_optimale(couloirs_v, matrice_duree, v_type_str)
-            
-            if res_segment and res_segment["succes"]:
-                dimensionnement_total[v_type_str] = res_segment["n_camions"]
-                tous_les_postes_finaux.extend(res_segment["postes"])
-                st.write(f"✅ **{v_type_str}** : {res_segment['n_camions']} véhicules.")
-                status.update(label=f"✅ {v_type_str} terminé", state="complete")
-            else:
-                st.error(f"❌ Échec pour {v_type_str}")
-                status.update(label=f"❌ Erreur {v_type_str}", state="error")
+        donnees_controle.append({
+            "Type de Contenant": contenant,
+            "Flux Théoriques": theo,
+            "Flux Réalisés": reel,
+            "Statut": status
+        })
+        total_theorique += theo
+        total_reel += reel
 
-    # Synthèse finale
-    if tous_les_postes_finaux:
-        st.write("---")
-        st.subheader("🏁 Résumé du dimensionnement")
-        cols = st.columns(len(dimensionnement_total))
-        for i, (name, count) in enumerate(dimensionnement_total.items()):
-            cols[i].metric(name, f"{count} véhicules")
-        return tous_les_postes_finaux
+    # Affichage dans Streamlit
+    df_controle = pd.DataFrame(donnees_controle)
     
-    return []
+    # Ajout d'une ligne de total pour la visibilité globale
+    st.table(df_controle)
+    
+    if total_theorique == total_reel:
+        st.success(f"Cohérence parfaite : {total_reel}/{total_theorique} missions effectuées.")
+    else:
+        diff = total_theorique - total_reel
+        st.error(f"Attention : {diff} missions n'ont pas été planifiées !")
