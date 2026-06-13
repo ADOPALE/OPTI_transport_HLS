@@ -340,7 +340,7 @@ elif selected == "Synthèse transport":
         st.stop()
 
     # Avertissement fenêtres tendues (incohérences de données)
-    nb_tendues = res["metriques"]["nb_missions_non_traitees"]
+    nb_tendues = res.get("metriques", {}).get("nb_missions_non_traitees", 0)
     if nb_tendues:
         st.warning(f"⚠️ {nb_tendues} flux ont une fenêtre horaire incohérente ou trop courte "
                    f"dans le fichier source (livraison avant mise à dispo, ou durée > fenêtre). "
