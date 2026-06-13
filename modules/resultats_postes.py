@@ -42,24 +42,25 @@ def _fmt(m):
 def afficher_recap_jours(resultats_par_jour):
     lignes = []
     for jour, res in resultats_par_jour.items():
-        m = res["metriques"]
+        m = res.get("metriques", {})
         ligne = {
             "Jour": jour,
-            "Missions": m["nb_missions"],
-            "Postes": m["nb_postes"],
-            "🚚 Véhicules": m["nb_vehicules_total"],
-            "Pic simultané": m["pic_vehicules_simultanes"],
-            "Chargé/roulage": f"{m['taux_charge_global']}%",
-            "À vide (min)": int(m["temps_vide_min"]),
-            "⚠️ Fenêtres tendues": m["nb_missions_non_traitees"],
+            "Missions": m.get("nb_missions", 0),
+            "Postes": m.get("nb_postes", 0),
+            "🚚 Véhicules": m.get("nb_vehicules_total", 0),
+            "Pic simultané": m.get("pic_vehicules_simultanes", "—"),
+            "Chargé/roulage": f"{m.get('taux_charge_global', 0)}%",
+            "À vide (min)": int(m.get("temps_vide_min", 0)),
+            "⚠️ Fenêtres tendues": m.get("nb_missions_non_traitees", 0),
         }
-        for vt, n in m["nb_vehicules_par_type"].items():
+        for vt, n in m.get("nb_vehicules_par_type", {}).items():
             ligne[f"Véh. {vt}"] = n
         lignes.append(ligne)
     df = pd.DataFrame(lignes).fillna(0)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    total_tendues = sum(r["metriques"]["nb_missions_non_traitees"] for r in resultats_par_jour.values())
+    total_tendues = sum(r.get("metriques", {}).get("nb_missions_non_traitees", 0)
+                        for r in resultats_par_jour.values())
     if total_tendues:
         st.caption("⚠️ Les « fenêtres tendues » sont des flux dont la fenêtre horaire du fichier "
                    "est incohérente (livraison avant mise à disposition) ou trop courte pour la durée "
