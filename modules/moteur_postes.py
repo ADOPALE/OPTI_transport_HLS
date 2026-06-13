@@ -140,6 +140,7 @@ class Mission:
     etapes: list = field(default_factory=list)   # chronologie relative pour l'affichage
     nb_contenants: int = 0
     libelle: str = ""
+    fenetre_tendue: bool = False   # fenêtre relâchée car incohérente / trop courte
 
     def __repr__(self):
         return (f"Mission({self.id} | {self.v_type} | {self.site_debut}->{self.site_fin} "
@@ -174,6 +175,7 @@ class Poste:
     missions: list = field(default_factory=list)
     etapes: list = field(default_factory=list)
     id_vehicule: str = ""      # affecté à l'étape de comptage flotte
+    shift: int = 0             # index du créneau (0 = matin, 1 = après-midi, ...)
 
     # --- métriques calculées ---
     @property
@@ -187,7 +189,7 @@ class Poste:
         return sum(e.duree for e in self.etapes if e.type in ("APPROCHE_VIDE", "RETOUR_VIDE", "NETTOYAGE"))
 
     def temps_attente(self):
-        return sum(e.duree for e in self.etapes if e.type == "ATTENTE")
+        return sum(e.duree for e in self.etapes if e.type in ("ATTENTE", "DISPONIBLE"))
 
     def taux_charge_roulage(self):
         roul = self.temps_charge() + self.temps_vide()
@@ -364,8 +366,11 @@ def consolider_missions(df_jour, df_vehicules, df_contenants, df_sites,
                          to_min(params.get("rh", {}).get("h_prise_min"), 360))
         h_dead = to_min(flux.get("Heure max de livraison à la destination"),
                         to_min(params.get("rh", {}).get("h_fin_max"), 1260))
+        h_fin_max = to_min(params.get("rh", {}).get("h_fin_max"), 1260)
         if h_dead <= h_dispo:
-            h_dead = h_dispo + 120
+            # Fenêtre incohérente (deadline avant dispo) = erreur de saisie :
+            # on rend le flux totalement flexible, il sera signalé.
+            h_dead = h_fin_max
 
         # Missions pleines
         nb_pleins = qte // capa_utile
@@ -502,95 +507,86 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice,
 
 
 # =====================================================================
-# 5. CHAÎNAGE + CONSTRUCTION DES POSTES  (cœur de la refonte)
+# 5. CRÉNEAUX (SHIFTS) + LISSAGE DE CHARGE
 # =====================================================================
 
-def construire_postes(missions, depot, matrice, params, t_nettoyage=15.0):
+def calculer_shifts(params):
     """
-    Construit les postes par CHAÎNAGE glouton, en privilégiant les liaisons
-    sans trajet à vide (successeur dont le site de départ == position courante).
-
-    Un poste = une vacation chauffeur sur un véhicule, bornée par l'amplitude RH.
-    On traite chaque type de véhicule séparément (un poste = un seul type).
+    Découpe la journée en créneaux de poste de durée exacte = amplitude RH.
+    Avec amplitude=450 et plage 06h–21h (900 min) -> 2 créneaux qui pavent la
+    journée : matin [06h00–13h30] et après-midi [13h30–21h00].
+    Le nombre de créneaux par véhicule (relève) = nb de créneaux qui tiennent
+    dans la plage horaire, tant que la somme des amplitudes <= plage.
     """
     rh = params.get("rh", {})
-    amplitude_max = float(rh.get("temps_productif_max") or rh.get("amplitude_totale", 450))
-    pause_duree = float(rh.get("pause", 30))
-    t_prise = float(rh.get("temps_fixes_prise", 20))
-    t_fin = float(rh.get("temps_fixes_fin", 15))
-    h_prise_min = to_min(rh.get("h_prise_min"), 360)
-    h_fin_max = to_min(rh.get("h_fin_max"), 1260)
-    pause_seuil = amplitude_max / 2  # pause après la moitié de l'amplitude
+    duree = float(rh.get("amplitude_totale", 450))
+    h0 = to_min(rh.get("h_prise_min"), 360)
+    h1 = to_min(rh.get("h_fin_max"), 1260)
+    n = max(1, int((h1 - h0) // duree))   # nb de postes empilables sur un véhicule
+    shifts = [(h0 + k * duree, h0 + (k + 1) * duree) for k in range(n)]
+    return shifts, duree
 
-    postes = []
-    par_type = {}
+
+def _shifts_feasibles(m, shifts, matrice, depot):
+    approche = duree_trajet(matrice, depot, m.site_debut)
+    feasibles = []
+    for k, (s, e) in enumerate(shifts):
+        debut = max(m.h_dispo, s + approche)
+        if debut + m.duree <= min(m.h_deadline, e):
+            feasibles.append(k)
+    return feasibles
+
+
+def assigner_shifts(missions, shifts, matrice, depot, h_fin_max=1260):
+    """
+    Répartit les missions entre les créneaux pour LISSER la charge (éviter le pic
+    du matin). Une mission n'est exécutable dans un créneau que si sa fenêtre le
+    permet. Les fenêtres incohérentes / trop courtes sont relâchées (et signalées
+    via mission.fenetre_tendue) plutôt que perdues.
+
+    Équilibrage en deux temps :
+      1. missions contraintes (1 seul créneau) d'abord,
+      2. missions flexibles vers le créneau le moins chargé.
+
+    Retourne {idx_shift: [missions]}.
+    """
+    charge = [0.0] * len(shifts)
+    assign = {k: [] for k in range(len(shifts))}
+
+    infos = []
     for m in missions:
-        par_type.setdefault(m.v_type, []).append(m)
+        feas = _shifts_feasibles(m, shifts, matrice, depot)
+        if not feas:
+            # fenêtre impossible -> relâchement total + signalement
+            m.h_deadline = h_fin_max
+            m.fenetre_tendue = True
+            feas = _shifts_feasibles(m, shifts, matrice, depot)
+            if not feas:
+                # encore impossible (dispo trop tardive) -> dernier créneau possible
+                feas = [max(range(len(shifts)),
+                            key=lambda k: 1 if shifts[k][0] <= m.h_dispo else 0)]
+        infos.append((m, feas))
 
-    for v_type, liste in par_type.items():
-        restants = sorted(liste, key=lambda m: (m.h_dispo, m.h_deadline))
-        cpt_poste = 0
+    infos.sort(key=lambda x: len(x[1]))   # plus contraint d'abord
+    for m, feas in infos:
+        k = min(feas, key=lambda kk: charge[kk])
+        assign[k].append(m)
+        charge[k] += m.duree
+    return assign
 
-        while restants:
-            cpt_poste += 1
-            seed = restants.pop(0)
-            poste = Poste(id=f"{v_type}_{cpt_poste:02d}", v_type=v_type, depot=depot)
 
-            # --- Démarrage : approche dépôt -> 1er site, prise de poste ---
-            approche = duree_trajet(matrice, depot, seed.site_debut)
-            # On démarre au plus tard pour coller à h_dispo (réduit l'attente)
-            depart_depot = max(h_prise_min + t_prise, seed.h_dispo - approche)
-            poste.h_debut = depart_depot - t_prise
-            poste.etapes.append(Etape("PRISE", poste.h_debut, depart_depot,
-                                      "Préparation / check véhicule"))
-            poste.position = depot
-            poste.t_curr = depart_depot
-            _placer_mission(poste, seed, matrice, t_nettoyage, pause_seuil, pause_duree)
-
-            # --- Extension : chaîner tant que c'est faisable ---
-            while True:
-                cand, info = _meilleur_successeur(
-                    poste, restants, matrice, depot, amplitude_max, h_fin_max,
-                    t_fin, t_nettoyage, pause_seuil, pause_duree)
-                if cand is None:
-                    break
-                restants.remove(cand)
-                _placer_mission(poste, cand, matrice, t_nettoyage, pause_seuil, pause_duree,
-                                pre=info)
-
-            # --- Clôture : retour dépôt à vide si nécessaire + fin de poste ---
-            if poste.position != depot:
-                ret = duree_trajet(matrice, poste.position, depot)
-                if ret > 0.1:
-                    poste.etapes.append(Etape("RETOUR_VIDE", poste.t_curr, poste.t_curr + ret,
-                                              f"Retour dépôt {poste.position} → {depot}"))
-                    poste.t_curr += ret
-                    poste.position = depot
-            poste.etapes.append(Etape("FIN", poste.t_curr, poste.t_curr + t_fin,
-                                      "Nettoyage / clôture"))
-            poste.t_curr += t_fin
-            poste.h_fin = poste.t_curr
-            postes.append(poste)
-
-    return postes
-
+# =====================================================================
+# 6. CONSTRUCTION DES POSTES PAR CRÉNEAU
+#    (chaînage à vide minimal, pause au dépôt, durée exacte)
+# =====================================================================
 
 def _besoin_nettoyage(poste, mission):
-    """Un véhicule SALE qui enchaîne sur du PROPRE doit être nettoyé."""
     return (poste.missions and poste.missions[-1].propre_sale == "SALE"
             and mission.propre_sale == "PROPRE")
 
 
-def _placer_mission(poste, mission, matrice, t_nettoyage, pause_seuil, pause_duree, pre=None):
-    """Insère une mission dans le poste : approche à vide + (nettoyage) + mission."""
-    # Pause obligatoire si on dépasse le seuil et qu'elle n'est pas faite
-    if not poste.pause_faite and (poste.t_curr - poste.h_debut) >= pause_seuil:
-        poste.etapes.append(Etape("PAUSE", poste.t_curr, poste.t_curr + pause_duree,
-                                  "Pause obligatoire"))
-        poste.t_curr += pause_duree
-        poste.pause_faite = True
-
-    # Nettoyage sale -> propre : détour par le dépôt
+def _placer_mission(poste, mission, matrice, t_nettoyage=15.0):
+    """Insère : (nettoyage si sale→propre) + approche à vide + attente + mission."""
     if _besoin_nettoyage(poste, mission):
         if poste.position != poste.depot:
             d = duree_trajet(matrice, poste.position, poste.depot)
@@ -602,7 +598,6 @@ def _placer_mission(poste, mission, matrice, t_nettoyage, pause_seuil, pause_dur
                                   "Nettoyage véhicule (sale → propre)"))
         poste.t_curr += t_nettoyage
 
-    # Approche à vide vers le site de départ de la mission
     approche = duree_trajet(matrice, poste.position, mission.site_debut)
     if approche > 0.1:
         poste.etapes.append(Etape("APPROCHE_VIDE", poste.t_curr, poste.t_curr + approche,
@@ -610,13 +605,11 @@ def _placer_mission(poste, mission, matrice, t_nettoyage, pause_seuil, pause_dur
         poste.t_curr += approche
         poste.position = mission.site_debut
 
-    # Attente si on arrive avant la mise à disposition
     if poste.t_curr < mission.h_dispo:
         poste.etapes.append(Etape("ATTENTE", poste.t_curr, mission.h_dispo,
                                   f"Attente dispo @ {mission.site_debut}"))
         poste.t_curr = mission.h_dispo
 
-    # La mission elle-même
     poste.etapes.append(Etape("MISSION", poste.t_curr, poste.t_curr + mission.duree,
                               f"{mission.site_debut} → {mission.site_fin} "
                               f"({mission.nb_contenants} {mission.libelle})", mission=mission))
@@ -625,110 +618,274 @@ def _placer_mission(poste, mission, matrice, t_nettoyage, pause_seuil, pause_dur
     poste.missions.append(mission)
 
 
-def _cout_insertion(poste, mission, matrice, t_nettoyage, pause_seuil, pause_duree):
-    """
-    Simule l'insertion et renvoie (faisable_finish, cout_vide, attente, t_fin_mission).
-    cout_vide = temps à vide (approche + éventuel détour nettoyage). On le minimise.
-    """
-    t = poste.t_curr
-    pos = poste.position
-    cout_vide = 0.0
+def _placer_pause(poste, depot, matrice, pause_duree):
+    """Pause IMPÉRATIVEMENT au dépôt. Retour à vide d'abord si nécessaire."""
+    if poste.position != depot:
+        d = duree_trajet(matrice, poste.position, depot)
+        if d > 0.1:
+            poste.etapes.append(Etape("RETOUR_VIDE", poste.t_curr, poste.t_curr + d,
+                                      f"Retour dépôt pour pause {poste.position} → {depot}"))
+            poste.t_curr += d
+            poste.position = depot
+    poste.etapes.append(Etape("PAUSE", poste.t_curr, poste.t_curr + pause_duree,
+                              "Pause obligatoire (au dépôt)"))
+    poste.t_curr += pause_duree
+    poste.pause_faite = True
 
-    if not poste.pause_faite and (t - poste.h_debut) >= pause_seuil:
-        t += pause_duree
+
+def _cout_successeur(poste, mission, matrice, t_nettoyage):
+    """Simule l'insertion -> (t_fin_mission, cout_vide, attente)."""
+    t, pos, vide = poste.t_curr, poste.position, 0.0
     if _besoin_nettoyage(poste, mission):
         if pos != poste.depot:
-            d = duree_trajet(matrice, pos, poste.depot)
-            t += d; cout_vide += d; pos = poste.depot
-        t += t_nettoyage; cout_vide += t_nettoyage
+            d = duree_trajet(matrice, pos, poste.depot); t += d; vide += d; pos = poste.depot
+        t += t_nettoyage; vide += t_nettoyage
     approche = duree_trajet(matrice, pos, mission.site_debut)
-    t += approche; cout_vide += approche
+    t += approche; vide += approche
     attente = max(0.0, mission.h_dispo - t)
     t = max(t, mission.h_dispo)
-    t_fin_mission = t + mission.duree
-    return t_fin_mission, cout_vide, attente
+    return t + mission.duree, vide, attente
 
 
-def _meilleur_successeur(poste, restants, matrice, depot, amplitude_max, h_fin_max,
-                         t_fin, t_nettoyage, pause_seuil, pause_duree):
+def _meilleur_successeur_shift(poste, restants, matrice, depot, s_end,
+                               t_fin, pause_duree, vers_depot=False, t_nettoyage=15.0):
     """
-    Choisit la prochaine mission à chaîner :
-      - faisable : finit avant sa deadline, et le poste (retour dépôt + clôture inclus)
-        reste sous l'amplitude max et avant h_fin_max
-      - critère : minimiser le temps à vide, puis l'attente, puis la deadline
+    Meilleure mission à chaîner dans le créneau courant :
+      - finit avant sa deadline,
+      - le poste peut encore se clôturer dans le créneau (retour dépôt +
+        pause restante + fin <= fin du créneau),
+      - critère : minimiser le temps à vide, puis l'attente, puis la deadline.
+    Si vers_depot=True : on ne retient que les missions qui FINISSENT au dépôt
+    (pour enchaîner naturellement vers la pause sans trajet à vide).
     """
-    best, best_key, best_info = None, None, None
+    pause_restante = 0.0 if poste.pause_faite else pause_duree
+    best, best_key = None, None
     for m in restants:
         if m.v_type != poste.v_type:
             continue
-        t_fin_mission, cout_vide, attente = _cout_insertion(
-            poste, m, matrice, t_nettoyage, pause_seuil, pause_duree)
+        if vers_depot and m.site_fin != depot:
+            continue
+        t_fin_mission, cout_vide, attente = _cout_successeur(poste, m, matrice, t_nettoyage)
         if t_fin_mission > m.h_deadline:
             continue
-        # le poste doit pouvoir se clôturer (retour dépôt à vide + fin)
         retour = duree_trajet(matrice, m.site_fin, depot)
-        fin_poste = t_fin_mission + retour + t_fin
-        if (fin_poste - poste.h_debut) > amplitude_max or fin_poste > h_fin_max:
+        if t_fin_mission + retour + pause_restante + t_fin > s_end:
             continue
         key = (round(cout_vide, 1), round(attente, 1), m.h_deadline)
         if best_key is None or key < best_key:
-            best_key, best, best_info = key, m, {"cout_vide": cout_vide}
-    return best, best_info
+            best_key, best = key, m
+    return best
 
 
-# =====================================================================
-# 6. COMPTAGE FLOTTE : postes simultanés -> véhicules physiques
-# =====================================================================
-
-def affecter_vehicules_physiques(postes):
+def construire_postes_creneau(missions, shift, idx_shift, v_type, depot, matrice,
+                              params, t_nettoyage=15.0):
     """
-    Un véhicule physique peut enchaîner plusieurs postes non chevauchants (relève).
-    Coloration d'intervalles gloutonne par type -> nombre minimal de véhicules.
+    Construit les postes (lanes) d'un créneau. Chaque poste :
+      - dure EXACTEMENT la durée du créneau (padding inactif au dépôt),
+      - prend sa pause obligatoire au dépôt,
+      - chaîne les missions pour minimiser le roulage à vide.
+    """
+    s_start, s_end = shift
+    rh = params.get("rh", {})
+    duree_poste = s_end - s_start
+    t_prise = float(rh.get("temps_fixes_prise", 20))
+    t_fin = float(rh.get("temps_fixes_fin", 15))
+    pause_duree = float(rh.get("pause", 30))
+    # seuil : on vise une pause au milieu de la partie travaillée
+    pause_seuil = s_start + t_prise + (duree_poste - t_prise - t_fin) / 2
+
+    postes = []
+    restants = sorted(missions, key=lambda m: (m.h_dispo, m.h_deadline))
+    num = 0
+
+    while restants:
+        num += 1
+        p = Poste(id=f"{v_type}_S{idx_shift + 1}_{num:02d}", v_type=v_type, depot=depot)
+        p.shift = idx_shift
+        p.h_debut = s_start
+        p.position = depot
+        p.t_curr = s_start
+        p.pause_faite = False
+        p.etapes.append(Etape("PRISE", s_start, s_start + t_prise, "Prise de poste"))
+        p.t_curr = s_start + t_prise
+
+        # --- Remplissage ---
+        while True:
+            pause_due = (not p.pause_faite) and (p.t_curr >= pause_seuil)
+            if pause_due:
+                # Privilégier la fin de chaîne qui aboutit au dépôt (HSJ)
+                # plutôt qu'un trajet à vide pour aller faire la pause.
+                if p.position == depot:
+                    _placer_pause(p, depot, matrice, pause_duree)
+                    continue
+                cand = _meilleur_successeur_shift(p, restants, matrice, depot, s_end,
+                                                  t_fin, pause_duree, vers_depot=True,
+                                                  t_nettoyage=t_nettoyage)
+                if cand is not None:
+                    restants.remove(cand)
+                    _placer_mission(p, cand, matrice, t_nettoyage)  # finit au dépôt
+                    _placer_pause(p, depot, matrice, pause_duree)
+                    continue
+                # sinon : retour à vide au dépôt puis pause
+                _placer_pause(p, depot, matrice, pause_duree)
+                continue
+
+            cand = _meilleur_successeur_shift(p, restants, matrice, depot, s_end,
+                                              t_fin, pause_duree, t_nettoyage=t_nettoyage)
+            if cand is None:
+                if not p.missions:
+                    # Poste encore vide et aucun successeur plaçable dans le
+                    # créneau (mission tendue) : on amorce de force la plus
+                    # urgente pour garantir la progression (restants diminue).
+                    seed = restants.pop(0)
+                    _placer_mission(p, seed, matrice, t_nettoyage)
+                    continue
+                break
+            restants.remove(cand)
+            _placer_mission(p, cand, matrice, t_nettoyage)
+
+        _cloturer_poste(p, depot, matrice, s_end, t_fin, pause_duree)
+        postes.append(p)
+
+    return postes
+
+
+def _cloturer_poste(poste, depot, matrice, s_end, t_fin, pause_duree):
+    """Retour dépôt + pause si non prise + inactivité jusqu'à la fin exacte du créneau."""
+    if poste.position != depot:
+        d = duree_trajet(matrice, poste.position, depot)
+        if d > 0.1:
+            poste.etapes.append(Etape("RETOUR_VIDE", poste.t_curr, poste.t_curr + d,
+                                      f"Retour dépôt {poste.position} → {depot}"))
+            poste.t_curr += d
+            poste.position = depot
+
+    # Pause due mais non encore prise (poste peu chargé) -> au dépôt
+    if not poste.pause_faite:
+        poste.etapes.append(Etape("PAUSE", poste.t_curr, poste.t_curr + pause_duree,
+                                  "Pause obligatoire (au dépôt)"))
+        poste.t_curr += pause_duree
+        poste.pause_faite = True
+
+    # Inactivité jusqu'à fin de créneau - t_fin (poste = durée EXACTE)
+    fin_inactif = s_end - t_fin
+    if poste.t_curr < fin_inactif:
+        poste.etapes.append(Etape("DISPONIBLE", poste.t_curr, fin_inactif,
+                                  "Disponible au dépôt"))
+        poste.t_curr = fin_inactif
+
+    poste.etapes.append(Etape("FIN", fin_inactif, s_end, "Nettoyage / clôture"))
+    poste.t_curr = s_end
+    poste.h_fin = s_end       # durée du poste = durée paramétrée, exactement
+
+
+# =====================================================================
+# 7. COMPTAGE FLOTTE : relève (2 chauffeurs / véhicule) + pic simultané
+# =====================================================================
+
+def affecter_vehicules_physiques(postes, shifts):
+    """
+    Un véhicule physique enchaîne plusieurs créneaux (relève chauffeurs) tant
+    que la somme des amplitudes tient dans la plage horaire. On apparie le
+    poste du créneau k avec un poste du créneau k+1 sur le même véhicule.
+
+    Nb de véhicules d'un type = max sur les créneaux du nb de postes de ce
+    créneau (= pic simultané). C'est ce pic que le lissage cherche à réduire.
     """
     from collections import defaultdict
-    par_type = defaultdict(list)
+    par_type = defaultdict(lambda: defaultdict(list))
     for p in postes:
-        par_type[p.v_type].append(p)
+        par_type[p.v_type][p.shift].append(p)
 
     nb_vehicules = {}
-    for v_type, liste in par_type.items():
-        liste.sort(key=lambda p: p.h_debut)
-        fins_vehicules = []  # (h_fin, id_vehicule)
-        for p in liste:
-            dispo = None
-            for k, (hf, vid) in enumerate(fins_vehicules):
-                if hf <= p.h_debut:
-                    dispo = k
-                    break
-            if dispo is None:
-                vid = f"{v_type}_VEH{len(fins_vehicules) + 1}"
-                fins_vehicules.append((p.h_fin, vid))
-                p.id_vehicule = vid
-            else:
-                p.id_vehicule = fins_vehicules[dispo][1]
-                fins_vehicules[dispo] = (p.h_fin, p.id_vehicule)
-        nb_vehicules[v_type] = len(fins_vehicules)
+    for v_type, par_shift in par_type.items():
+        n_creneaux = len(shifts)
+        pic = max((len(par_shift.get(k, [])) for k in range(n_creneaux)), default=0)
+        # apparier verticalement : véhicule v <- poste #v de chaque créneau
+        for k in range(n_creneaux):
+            postes_k = sorted(par_shift.get(k, []), key=lambda p: p.h_debut)
+            for v, p in enumerate(postes_k):
+                p.id_vehicule = f"{v_type}_VEH{v + 1}"
+        nb_vehicules[v_type] = pic
     return nb_vehicules
 
 
+def courbe_concurrence(postes, pas=15):
+    """Nb de postes simultanés par tranche de temps (preuve du lissage)."""
+    if not postes:
+        return [], []
+    h_min = min(p.h_debut for p in postes)
+    h_max = max(p.h_fin for p in postes)
+    bins = list(range(int(h_min), int(h_max) + 1, pas))
+    conc = []
+    for b in bins:
+        conc.append(sum(1 for p in postes if p.h_debut <= b < p.h_fin))
+    return bins, conc
+
+
 # =====================================================================
-# 7. POINT D'ENTRÉE
+# 8. POINT D'ENTRÉE
 # =====================================================================
+
+def _capacite_productive(params):
+    rh = params.get("rh", {})
+    duree = float(rh.get("amplitude_totale", 450))
+    return max(60.0, duree - float(rh.get("temps_fixes_prise", 20))
+               - float(rh.get("temps_fixes_fin", 15)) - float(rh.get("pause", 30)))
+
+
+def _estim_lanes(missions_shift, cap_prod):
+    """Estimation rapide du nb de postes : charge / capacité productive."""
+    charge = sum(m.duree for m in missions_shift)
+    return math.ceil(charge / cap_prod) if charge > 0 else 0
+
+
+def _rebalancer_lanes(assign, shifts, v_type, depot, matrice, params):
+    """
+    Affine le lissage à partir d'une estimation analytique du nombre de postes
+    par créneau (charge / capacité productive) — sans reconstruire les postes.
+    Déplace des missions flexibles du créneau le plus chargé vers le moins
+    chargé tant que cela réduit le pic estimé.
+    """
+    if len(shifts) < 2:
+        return assign
+    cap_prod = _capacite_productive(params)
+    for _ in range(50):
+        lanes = [_estim_lanes(assign.get(k, []), cap_prod) for k in range(len(shifts))]
+        k_max = max(range(len(shifts)), key=lambda k: lanes[k])
+        k_min = min(range(len(shifts)), key=lambda k: lanes[k])
+        if lanes[k_max] - lanes[k_min] <= 1:
+            break
+        deplacee = None
+        for m in sorted(assign[k_max], key=lambda x: -x.duree):
+            if k_min in _shifts_feasibles(m, shifts, matrice, depot):
+                deplacee = m
+                break
+        if deplacee is None:
+            break
+        assign[k_max].remove(deplacee)
+        assign[k_min].append(deplacee)
+        new_lanes = [_estim_lanes(assign.get(k, []), cap_prod) for k in range(len(shifts))]
+        if max(new_lanes) >= max(lanes):     # pas d'amélioration -> annuler
+            assign[k_min].remove(deplacee)
+            assign[k_max].append(deplacee)
+            break
+    return assign
+
 
 def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
                           matrice_duree, params_logistique, nom_jour="Lundi",
                           autoriser_tournees=True):
     """
-    Pipeline complet : flux du jour -> postes chauffeurs chaînés + flotte.
+    Pipeline complet : flux du jour -> postes lissés sur la journée + flotte.
 
-    df_jour : flux du jour (sortie de preparer_flux_complets_du_jour),
-              colonnes 'Point de départ', 'Point de destination',
-              'Nature de contenant', 'Quantite_du_jour',
-              'Heure de mise à disposition min départ',
-              'Heure max de livraison à la destination',
-              'Type (propre/sale)' (ou 'Sale / propre').
+    Contraintes intégrées :
+      - pause obligatoire au dépôt (HSJ),
+      - chaque poste dure EXACTEMENT l'amplitude paramétrée,
+      - relève possible (2 chauffeurs / véhicule) si somme des amplitudes <= plage,
+      - lissage de la charge entre créneaux pour minimiser le pic de véhicules.
 
-    Retourne dict : postes, nb_vehicules, nb_postes, missions, metriques.
+    Retourne dict : postes, nb_vehicules, missions, metriques, concurrence...
     """
     matrice = nettoyer_matrice(matrice_duree)
 
@@ -741,17 +898,36 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     vehicules_autorises = params_logistique.get("vehicules_selectionnes",
                                                 df_vehicules["Types"].tolist())
     df_v_actifs = df_vehicules[df_vehicules["Types"].isin(vehicules_autorises)].copy()
-
-    depot = str(df_v_actifs["Stationnement initial"].iloc[0]).strip().upper() if not df_v_actifs.empty else "HSJ"
+    depot = (str(df_v_actifs["Stationnement initial"].iloc[0]).strip().upper()
+             if not df_v_actifs.empty else "HSJ")
 
     # 1-3 : missions
     missions = consolider_missions(df_jour, df_vehicules, df_contenants, ds, matrice,
                                    params_logistique, col_lib, col_quai, df_v_actifs,
                                    autoriser_tournees=autoriser_tournees)
-    # 4 : postes chaînés
-    postes = construire_postes(missions, depot, matrice, params_logistique)
-    # 5 : flotte
-    nb_vehicules = affecter_vehicules_physiques(postes)
+
+    # 4 : créneaux + lissage + postes (par type de véhicule)
+    shifts, duree_poste = calculer_shifts(params_logistique)
+    h_fin_max = to_min(params_logistique.get("rh", {}).get("h_fin_max"), 1260)
+    postes = []
+    par_type = {}
+    for m in missions:
+        par_type.setdefault(m.v_type, []).append(m)
+
+    for v_type, liste in par_type.items():
+        assign = assigner_shifts(liste, shifts, matrice, depot, h_fin_max)
+        assign = _rebalancer_lanes(assign, shifts, v_type, depot, matrice, params_logistique)
+        for k, (s_start, s_end) in enumerate(shifts):
+            postes.extend(construire_postes_creneau(
+                assign.get(k, []), (s_start, s_end), k, v_type, depot,
+                matrice, params_logistique))
+
+    non_traitees = [m for m in missions if m.fenetre_tendue]
+
+    # 5 : flotte (relève) + pic
+    nb_vehicules = affecter_vehicules_physiques(postes, shifts)
+    bins, conc = courbe_concurrence(postes)
+    pic_simultane = max(conc) if conc else 0
 
     # métriques
     t_charge = sum(p.temps_charge() for p in postes)
@@ -759,13 +935,17 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     t_attente = sum(p.temps_attente() for p in postes)
     metriques = {
         "nb_missions": len(missions),
+        "nb_missions_non_traitees": len(non_traitees),
         "nb_postes": len(postes),
         "nb_vehicules_total": sum(nb_vehicules.values()),
         "nb_vehicules_par_type": nb_vehicules,
+        "pic_vehicules_simultanes": pic_simultane,
         "temps_charge_min": round(t_charge, 0),
         "temps_vide_min": round(t_vide, 0),
-        "temps_attente_min": round(t_attente, 0),
+        "temps_inactif_min": round(t_attente, 0),
         "taux_charge_global": round(t_charge / (t_charge + t_vide) * 100, 1) if (t_charge + t_vide) else 0,
     }
-    return {"postes": postes, "missions": missions, "nb_vehicules": nb_vehicules,
-            "metriques": metriques, "jour": nom_jour, "depot": depot}
+    return {"postes": postes, "missions": missions, "non_traitees": non_traitees,
+            "nb_vehicules": nb_vehicules, "metriques": metriques,
+            "concurrence": {"bins": bins, "valeurs": conc},
+            "jour": nom_jour, "depot": depot, "shifts": shifts}
