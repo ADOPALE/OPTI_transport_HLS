@@ -339,13 +339,24 @@ elif selected == "Synthèse transport":
         st.info("Aucun poste pour ce jour.")
         st.stop()
 
+    # Avertissement fenêtres tendues (incohérences de données)
+    nb_tendues = res["metriques"]["nb_missions_non_traitees"]
+    if nb_tendues:
+        st.warning(f"⚠️ {nb_tendues} flux ont une fenêtre horaire incohérente ou trop courte "
+                   f"dans le fichier source (livraison avant mise à dispo, ou durée > fenêtre). "
+                   f"Ils sont planifiés malgré tout, mais à vérifier dans l'Excel.")
+
+    # Courbe de concurrence = preuve du lissage (pas de pic matinal)
+    st.markdown("#### 📉 Lissage de la charge")
+    rp.afficher_courbe_concurrence(res)
+
     # Filtre par type de véhicule
     types_dispo = sorted({p.v_type for p in postes})
     type_filtre = st.selectbox("Filtrer par type de véhicule", ["Tous"] + types_dispo, key="filtre_type_postes")
     postes_affiches = postes if type_filtre == "Tous" else [p for p in postes if p.v_type == type_filtre]
 
-    # Gantt
-    st.markdown(f"#### 📅 Planning complet — {jour_sel}")
+    # Gantt groupé par véhicule (montre la relève)
+    st.markdown(f"#### 📅 Planning par véhicule — {jour_sel}")
     rp.afficher_gantt_postes(postes_affiches, titre=f"Planning {jour_sel}")
 
     # Onglets détail
