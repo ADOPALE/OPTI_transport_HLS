@@ -1,218 +1,174 @@
 """
-resultats_postes.py — Affichage des résultats du moteur de chaînage (V2)
-=========================================================================
+resultats_postes.py — Affichage Streamlit des résultats du moteur transport
+===========================================================================
 
-Rend les objets `Poste` / `Etape` produits par `moteur_postes.optimiser_postes_jour` :
-  - récapitulatif hebdomadaire (avec pic de véhicules simultanés + fenêtres tendues)
-  - courbe de concurrence (preuve du lissage : pas de pic matinal)
-  - Gantt des postes groupés par véhicule (montre la relève matin / après-midi)
-  - détail tabulaire par poste
-  - détail des passages par site
+Fonctions d'affichage pour l'onglet « Synthèse transport » :
+  - afficher_recap_jours(resultats)       : tableau hebdo flotte/postes
+  - afficher_jour(res)                     : détail d'un jour (KPI, Gantt, tables)
+  - afficher_non_servis(resultats)         : flux non servis + contrainte bloquante
 """
 
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    _PLOTLY = True
+except Exception:
+    _PLOTLY = False
 
-COULEURS = {
-    "MISSION":       ("Chargé",         "#1f77b4"),
-    "APPROCHE_VIDE": ("Trajet à vide",  "#ff7f0e"),
-    "RETOUR_VIDE":   ("Retour à vide",  "#ff7f0e"),
-    "ATTENTE":       ("Attente",        "#aec7e8"),
-    "DISPONIBLE":    ("Dispo au dépôt", "#d9d9d9"),
-    "PAUSE":         ("Pause (dépôt)",  "#d62728"),
-    "NETTOYAGE":     ("Nettoyage",      "#17becf"),
-    "PRISE":         ("Prise de poste", "#9467bd"),
-    "FIN":           ("Clôture",        "#8c564b"),
+# couleurs par type d'étape
+_COULEURS = {
+    "MISSION": "#2E86C1", "APPROCHE_VIDE": "#E67E22", "RETOUR_VIDE": "#D35400",
+    "MARGE": "#95A5A6", "NETTOYAGE": "#16A085", "PAUSE": "#C0392B",
+    "ATTENTE": "#AEB6BF", "DISPONIBLE": "#D5DBDB", "PRISE": "#7D3C98", "FIN": "#5D4037",
+}
+_LIBELLE = {
+    "MISSION": "Mission (chargé)", "APPROCHE_VIDE": "Approche à vide",
+    "RETOUR_VIDE": "Retour à vide", "MARGE": "Marge inter-job",
+    "NETTOYAGE": "Désinfection", "PAUSE": "Pause", "ATTENTE": "Attente",
+    "DISPONIBLE": "Disponible", "PRISE": "Prise de poste", "FIN": "Clôture",
 }
 
 
-def _fmt(m):
+def _hhmm(m):
     try:
-        return f"{int(m // 60):02d}h{int(m % 60):02d}"
+        return f"{int(m // 60):02d}:{int(round(m % 60)):02d}"
     except Exception:
-        return "--:--"
+        return ""
 
 
-# ---------------------------------------------------------------------
-# 1. Récapitulatif hebdomadaire
-# ---------------------------------------------------------------------
+def afficher_recap_jours(resultats):
+    """Tableau de synthèse hebdomadaire + alerte de validité."""
+    total_ns = sum(len(r.get("non_servis", [])) for r in resultats.values())
+    if total_ns == 0:
+        st.success("✅ Solution **valide** : tous les flux du périmètre sont planifiés.")
+    else:
+        st.error(f"❌ Solution **non valide** : {total_ns} flux non servi(s). "
+                 f"Voir la section « Flux non servis » (contrainte bloquante détaillée).")
 
-def afficher_recap_jours(resultats_par_jour):
     lignes = []
-    for jour, res in resultats_par_jour.items():
-        m = res.get("metriques", {})
-        ligne = {
-            "Jour": jour,
-            "Missions": m.get("nb_missions", 0),
-            "Postes": m.get("nb_postes", 0),
-            "🚚 Véhicules": m.get("nb_vehicules_total", 0),
-            "Pic simultané": m.get("pic_vehicules_simultanes", "—"),
-            "Chargé/roulage": f"{m.get('taux_charge_global', 0)}%",
-            "À vide (min)": int(m.get("temps_vide_min", 0)),
-            "⚠️ Fenêtres tendues": m.get("nb_missions_non_traitees", 0),
-        }
-        for vt, n in m.get("nb_vehicules_par_type", {}).items():
-            ligne[f"Véh. {vt}"] = n
-        lignes.append(ligne)
-    df = pd.DataFrame(lignes).fillna(0)
+    for jour, r in resultats.items():
+        m = r["metriques"]
+        lignes.append({
+            "Jour": jour, "Flux servis": m["nb_missions"], "Postes": m["nb_postes"],
+            "Véhicules": m["nb_vehicules_total"], "Pic simultané": m["pic_vehicules_simultanes"],
+            "Non servis": m["nb_flux_non_servis"],
+            "Km à vide %": m["taux_km_vide"], "Occupation %": m["occupation_moyenne"],
+        })
+    df = pd.DataFrame(lignes)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    total_tendues = sum(r.get("metriques", {}).get("nb_missions_non_traitees", 0)
-                        for r in resultats_par_jour.values())
-    if total_tendues:
-        st.caption("⚠️ Les « fenêtres tendues » sont des flux dont la fenêtre horaire du fichier "
-                   "est incohérente (livraison avant mise à disposition) ou trop courte pour la durée "
-                   "de la mission. Ils sont planifiés malgré tout, mais à vérifier dans l'Excel source.")
+    # flotte par type (max hebdo)
+    types = sorted({t for r in resultats.values() for t in r["nb_vehicules"].keys()})
+    if types:
+        data = {"Type": types}
+        for jour, r in resultats.items():
+            data[jour] = [r["nb_vehicules"].get(t, 0) for t in types]
+        data["Maxi semaine"] = [max(r["nb_vehicules"].get(t, 0) for r in resultats.values())
+                                for t in types]
+        st.markdown("**Flotte par type de véhicule** (à dimensionner = maxi hebdomadaire)")
+        st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
 
 
-# ---------------------------------------------------------------------
-# 2. Courbe de concurrence (preuve du lissage)
-# ---------------------------------------------------------------------
+def afficher_jour(res):
+    """Détail d'un jour : KPI, Gantt des postes, courbe de concurrence, quais."""
+    m = res["metriques"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Véhicules", m["nb_vehicules_total"])
+    c2.metric("Postes", m["nb_postes"])
+    c3.metric("Km à vide", f"{m['taux_km_vide']} %")
+    c4.metric("Occupation moy.", f"{m['occupation_moyenne']} %")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Flux servis", m["nb_missions"])
+    c2.metric("Flux non servis", m["nb_flux_non_servis"])
+    c3.metric("Pic à quai", m["pic_quais"])
+    c4.metric("Calcul", f"{m['temps_calcul_s']} s")
 
-def afficher_courbe_concurrence(res):
+    if _PLOTLY:
+        _gantt(res)
+        _courbe_concurrence(res)
+    else:
+        st.info("Installez plotly pour les graphiques (Gantt, concurrence).")
+
+    # quais
+    quais = res.get("quais", {})
+    if quais:
+        with st.expander("🏗️ Pic de véhicules à quai par site"):
+            dfq = pd.DataFrame(sorted(quais.items(), key=lambda x: -x[1]),
+                               columns=["Site", "Pic simultané"])
+            st.dataframe(dfq, use_container_width=True, hide_index=True)
+
+
+def _gantt(res):
+    lignes = []
+    for p in sorted(res["postes"], key=lambda p: (p.v_type, p.id_vehicule, p.h_debut)):
+        for e in p.etapes:
+            if e.duree <= 0:
+                continue
+            lignes.append({
+                "Véhicule": f"{p.id_vehicule}", "Poste": p.id,
+                "Début": e.h_debut, "Fin": e.h_fin, "Durée": e.duree,
+                "Étape": _LIBELLE.get(e.type, e.type), "type": e.type,
+                "Détail": e.detail,
+            })
+    if not lignes:
+        return
+    df = pd.DataFrame(lignes)
+    fig = go.Figure()
+    vehicules = list(dict.fromkeys(df["Véhicule"]))
+    ypos = {v: i for i, v in enumerate(vehicules)}
+    for _, r in df.iterrows():
+        fig.add_trace(go.Bar(
+            x=[r["Durée"]], y=[ypos[r["Véhicule"]]], base=[r["Début"]], orientation="h",
+            marker=dict(color=_COULEURS.get(r["type"], "#888")), showlegend=False,
+            hovertemplate=f"{r['Véhicule']} — {r['Étape']}<br>"
+                          f"{_hhmm(r['Début'])}→{_hhmm(r['Fin'])}<br>{r['Détail']}<extra></extra>",
+        ))
+    fig.update_layout(
+        title="Planning des postes (un véhicule par ligne ; relève = 2 postes)",
+        barmode="stack", height=max(300, 28 * len(vehicules) + 120),
+        xaxis=dict(title="Heure", tickmode="array",
+                   tickvals=list(range(360, 1320, 60)),
+                   ticktext=[_hhmm(t) for t in range(360, 1320, 60)], range=[330, 1290]),
+        yaxis=dict(tickmode="array", tickvals=list(ypos.values()),
+                   ticktext=list(ypos.keys()), autorange="reversed"),
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    # légende
+    leg = " &nbsp; ".join(f"<span style='color:{_COULEURS[k]}'>■</span> {_LIBELLE[k]}"
+                          for k in ["MISSION", "APPROCHE_VIDE", "RETOUR_VIDE", "MARGE",
+                                    "NETTOYAGE", "PAUSE", "ATTENTE"])
+    st.markdown(leg, unsafe_allow_html=True)
+
+
+def _courbe_concurrence(res):
     conc = res.get("concurrence", {})
-    bins, valeurs = conc.get("bins", []), conc.get("valeurs", [])
+    bins, vals = conc.get("bins", []), conc.get("valeurs", [])
     if not bins:
         return
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=bins, y=valeurs, mode="lines", fill="tozeroy",
-        line=dict(color="#00558E", width=2), name="Véhicules actifs",
-        hovertemplate="%{customdata}<br>%{y} véhicule(s)<extra></extra>",
-        customdata=[_fmt(b) for b in bins],
-    ))
-    pic = max(valeurs) if valeurs else 0
-    fig.add_hline(y=pic, line_dash="dash", line_color="#d62728",
-                  annotation_text=f"Pic = {pic}", annotation_position="top left")
-    fig.update_layout(
-        title="Véhicules simultanés au cours de la journée (lissage)",
-        height=280,
-        xaxis=dict(title="Heure", tickvals=list(range(360, 1321, 120)),
-                   ticktext=[f"{h // 60}h" for h in range(360, 1321, 120)]),
-        yaxis=dict(title="Véhicules actifs", rangemode="tozero"),
-        margin=dict(l=10, r=10, t=50, b=30), showlegend=False,
-    )
+    fig = go.Figure(go.Scatter(x=[_hhmm(b) for b in bins], y=vals, fill="tozeroy",
+                               mode="lines", line=dict(color="#2E86C1")))
+    fig.update_layout(title="Postes simultanés au fil de la journée (= besoin instantané en véhicules)",
+                      height=240, margin=dict(l=10, r=10, t=40, b=10),
+                      xaxis_title="Heure", yaxis_title="Postes simultanés")
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("Une courbe plate = charge bien lissée sur la journée (pas de pic matinal). "
-               "Le nombre de véhicules dimensionné correspond à ce pic, par type.")
 
 
-# ---------------------------------------------------------------------
-# 3. Gantt des postes (groupés par véhicule -> montre la relève)
-# ---------------------------------------------------------------------
-
-def afficher_gantt_postes(postes, titre="Planning", grouper_par_vehicule=True):
-    if not postes:
-        st.info("Aucun poste à afficher.")
+def afficher_non_servis(resultats):
+    """Liste détaillée des flux non servis avec la contrainte bloquante."""
+    lignes = []
+    for jour, r in resultats.items():
+        for ns in r.get("non_servis", []):
+            lignes.append({
+                "Jour": jour, "Flux": ns.get("flux_id"), "Origine": ns.get("origine"),
+                "Destination": ns.get("destination"), "Contenant": ns.get("contenant"),
+                "Pourquoi": ns.get("raison"), "Contrainte bloquante": ns.get("contrainte"),
+            })
+    if not lignes:
+        st.success("✅ Aucun flux non servi.")
         return
-
-    if grouper_par_vehicule:
-        cle = lambda p: (p.v_type, p.id_vehicule, p.shift, p.h_debut)
-        etiquette = lambda p: p.id_vehicule or p.id
-    else:
-        cle = lambda p: (p.v_type, p.id, p.h_debut)
-        etiquette = lambda p: p.id
-
-    postes = sorted(postes, key=cle)
-    fig = go.Figure()
-    deja = set()
-    for p in postes:
-        y = etiquette(p)
-        for e in p.etapes:
-            duree = e.h_fin - e.h_debut
-            if duree <= 0:
-                continue
-            label, couleur = COULEURS.get(e.type, (e.type, "#7f7f7f"))
-            montrer = label not in deja
-            deja.add(label)
-            fig.add_trace(go.Bar(
-                base=[e.h_debut], x=[duree], y=[y], orientation="h",
-                marker=dict(color=couleur, line=dict(width=0)),
-                name=label, legendgroup=label, showlegend=montrer,
-                hovertemplate=(f"<b>{p.id}</b> ({'matin' if p.shift == 0 else 'après-midi'})"
-                               f" — {label}<br>{_fmt(e.h_debut)} → {_fmt(e.h_fin)} "
-                               f"({duree:.0f} min)<br>{e.detail}<extra></extra>"),
-            ))
-
-    n = len({etiquette(p) for p in postes})
-    fig.update_layout(
-        title=titre, barmode="stack", height=260 + n * 30,
-        xaxis=dict(title="Heure", range=[340, 1280],
-                   tickvals=list(range(360, 1261, 60)),
-                   ticktext=[f"{h // 60}h" for h in range(360, 1261, 60)],
-                   gridcolor="lightgray"),
-        yaxis=dict(autorange="reversed", title="Véhicule"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=10, r=10, t=70, b=40),
-        hoverlabel=dict(bgcolor="black", font_size=12),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    if grouper_par_vehicule:
-        st.caption("Chaque ligne = un véhicule physique. Deux postes sur la même ligne "
-                   "(matin + après-midi) = relève de chauffeurs.")
-
-
-# ---------------------------------------------------------------------
-# 4. Détail par poste
-# ---------------------------------------------------------------------
-
-def afficher_detail_postes(postes):
-    for p in sorted(postes, key=lambda p: (p.id_vehicule, p.shift)):
-        creneau = "matin" if p.shift == 0 else ("après-midi" if p.shift == 1 else f"créneau {p.shift + 1}")
-        with st.expander(
-            f"🚛 {p.id_vehicule or p.id}  ·  {creneau}  |  {_fmt(p.h_debut)} → {_fmt(p.h_fin)}  "
-            f"|  {len(p.missions)} mission(s)  |  chargé/roulage {p.taux_charge_roulage() * 100:.0f}%",
-            expanded=False,
-        ):
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("⏱ Chargé", f"{p.temps_charge():.0f} min")
-            c2.metric("⬜ À vide", f"{p.temps_vide():.0f} min")
-            c3.metric("⏳ Inactif", f"{p.temps_attente():.0f} min")
-            c4.metric("📐 Durée poste", f"{p.amplitude:.0f} min")
-
-            lignes = []
-            for e in p.etapes:
-                label = COULEURS.get(e.type, (e.type, ""))[0]
-                lignes.append({
-                    "Début": _fmt(e.h_debut), "Fin": _fmt(e.h_fin),
-                    "Durée": f"{e.h_fin - e.h_debut:.0f} min",
-                    "Type": label, "Détail": e.detail,
-                })
-            st.dataframe(pd.DataFrame(lignes), use_container_width=True, hide_index=True)
-
-
-# ---------------------------------------------------------------------
-# 5. Détail par site
-# ---------------------------------------------------------------------
-
-def afficher_detail_sites(postes):
-    passages = []
-    for p in postes:
-        for e in p.etapes:
-            if e.type != "MISSION" or e.mission is None:
-                continue
-            ancre = e.h_debut
-            arrivee = None
-            for et in e.mission.etapes:
-                if et["action"] == "MISE_A_QUAI":
-                    arrivee = ancre + et["t_debut"]
-                elif et["action"] in ("CHARGEMENT", "DECHARGEMENT"):
-                    sens = "PRISE" if et["action"] == "CHARGEMENT" else "DÉPOSE"
-                    passages.append({
-                        "site": et["site"], "Véhicule": p.id_vehicule or p.id,
-                        "Arrivée quai": _fmt(arrivee) if arrivee else "—",
-                        "Début": _fmt(ancre + et["t_debut"]),
-                        "Fin": _fmt(ancre + et["t_fin"]),
-                        "Opération": sens, "Détail": et["label"],
-                        "_sort": ancre + et["t_debut"],
-                    })
-    if not passages:
-        st.info("Aucun passage à afficher.")
-        return
-    sites = sorted({pa["site"] for pa in passages})
-    site_sel = st.selectbox("Sélectionner un site", sites, key="site_postes")
-    sous = sorted([pa for pa in passages if pa["site"] == site_sel], key=lambda x: x["_sort"])
-    df = pd.DataFrame(sous).drop(columns=["site", "_sort"])
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.error(f"❌ {len(lignes)} flux non servi(s) — à corriger pour une solution valide :")
+    st.dataframe(pd.DataFrame(lignes), use_container_width=True, hide_index=True)

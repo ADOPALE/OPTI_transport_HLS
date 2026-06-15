@@ -25,14 +25,15 @@ from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_
 from modules.sim_engine import (
     traitement_flux_recurrents, 
     ordonnancer_flotte_optimale,
-    preparer_flux_complets_du_jour,
     tunnel_consolidation_flux
 )
 from modules.sequencage_engine import trouver_meilleure_configuration_journee, afficher_controle_coherence
 import modules.Resultats_simul_flux as res_flux
 
 # --- NOUVEAU MOTEUR DE CHAÎNAGE & POSTES (refonte étapes 3-4) ---
+from modules.prep_transport import preparer_flux_complets_du_jour
 from modules.moteur_postes import optimiser_postes_jour
+from modules import export_excel
 import modules.resultats_postes as rp
 
 # --------- FONCTIONS UI ------------
@@ -244,38 +245,31 @@ elif selected == "Synthèse transport":
     if 'data' not in st.session_state:
         st.error("⚠️ Importez les données d'abord (onglet 'Importer Données').")
         st.stop()
-    if 'df_sequence_type' not in st.session_state:
-        st.warning("⚠️ Générez d'abord la 'Séquence Type' (onglet 'Simul tournées').")
-        st.stop()
     if 'params_logistique' not in st.session_state:
         st.warning("⚠️ Validez les paramètres logistiques (onglet 'Véhicules et paramètres').")
         st.stop()
 
     # ── Données ───────────────────────────────────────────────────────
-    df_recurrent  = st.session_state['df_sequence_type']
-    df_specifique = st.session_state.get('df_flux_specifique', pd.DataFrame())
+    df_flux_brut  = st.session_state['data']['m_flux']
     df_vehicules  = st.session_state['data']['param_vehicules']
     df_contenants = st.session_state['data']['param_contenants']
     df_sites      = st.session_state['data']['param_sites']
-    matrice_duree = st.session_state['data']['matrice_duree']   # DataFrame brut
+    matrice_duree = st.session_state['data']['matrice_duree']
+    matrice_dist  = st.session_state['data'].get('matrice_distance',
+                                                 st.session_state['data'].get('matrice_dist'))
     params_log    = st.session_state.get('params_logistique', {})
 
-    # ── Paramétrage de la simulation ─────────────────────────────────
+    # ── Paramétrage ───────────────────────────────────────────────────
     st.subheader("1️⃣ Paramétrage de la simulation")
     tous_jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
     col_j, col_o, col_b = st.columns([3, 2, 1])
     with col_j:
-        jours_selectionnes = st.multiselect(
-            "Jours à simuler", options=tous_jours, default=["Lundi"],
-            help="Sélectionnez un ou plusieurs jours."
-        )
+        jours_selectionnes = st.multiselect("Jours à simuler", options=tous_jours,
+                                            default=["Lundi"])
     with col_o:
-        autoriser_tournees = st.toggle(
-            "Tournées multi-arrêts",
-            value=True,
-            help="Regroupe les reliquats en tournées de distribution (1 origine → "
-                 "plusieurs livraisons) ou de ramassage (plusieurs collectes → 1 destination)."
-        )
+        autoriser_tournees = st.toggle("Tournées multi-arrêts", value=True,
+            help="Regroupe les reliquats en tournées de distribution / ramassage.")
+        budget_s = st.slider("Budget de calcul / jour (s)", 10, 300, 60, 10)
     with col_b:
         st.markdown("<br>", unsafe_allow_html=True)
         lancer = st.button("🚀 Lancer", type="primary", use_container_width=True)
@@ -285,31 +279,23 @@ elif selected == "Synthèse transport":
         if not jours_selectionnes:
             st.warning("⚠️ Sélectionnez au moins un jour.")
             st.stop()
+        resultats = {}
+        barre = st.progress(0.0, text="Initialisation…")
+        n = len(jours_selectionnes)
         try:
-            resultats = {}
-            with st.status(f"Optimisation ({len(jours_selectionnes)} jour(s))...", expanded=True) as status:
-                for jour in jours_selectionnes:
-                    st.write(f"🔄 **{jour}** — préparation des flux...")
-                    df_jour = preparer_flux_complets_du_jour(df_recurrent, df_specifique, jour)
-
-                    st.write(f"  ↳ 🧠 Chaînage & construction des postes...")
-                    res = optimiser_postes_jour(
-                        df_jour, df_vehicules, df_contenants, df_sites,
-                        matrice_duree, params_log, nom_jour=str(jour),
-                        autoriser_tournees=autoriser_tournees,
-                    )
-                    resultats[jour] = res
-                    m = res["metriques"]
-                    st.write(
-                        f"  ✅ **{jour}** : {m['nb_postes']} poste(s), "
-                        f"{m['nb_vehicules_total']} véhicule(s), "
-                        f"chargé/roulage {m['taux_charge_global']}%"
-                    )
-                status.update(label="✅ Optimisation terminée !", state="complete")
-
+            for k, jour in enumerate(jours_selectionnes):
+                def _cb(frac, msg, _k=k):
+                    barre.progress(min(1.0, (_k + frac) / n), text=f"{jour} — {msg}")
+                df_jour = preparer_flux_complets_du_jour(df_flux_brut, jour)
+                res = optimiser_postes_jour(
+                    df_jour, df_vehicules, df_contenants, df_sites,
+                    matrice_duree, matrice_dist, params_log, nom_jour=str(jour),
+                    autoriser_tournees=autoriser_tournees, budget_s=budget_s,
+                    progress_cb=_cb)
+                resultats[jour] = res
+            barre.progress(1.0, text="✅ Terminé")
             st.session_state['postes_resultats'] = resultats
             st.session_state['postes_jours'] = jours_selectionnes
-
         except Exception as e:
             st.error(f"Erreur lors de l'optimisation : {e}")
             st.exception(e)
@@ -317,52 +303,29 @@ elif selected == "Synthèse transport":
     # ── Résultats ─────────────────────────────────────────────────────
     if 'postes_resultats' not in st.session_state:
         st.stop()
-
     resultats = st.session_state['postes_resultats']
 
     st.divider()
     st.subheader("2️⃣ Récapitulatif hebdomadaire")
     rp.afficher_recap_jours(resultats)
 
+    # ── Export Excel ──────────────────────────────────────────────────
+    try:
+        buf = export_excel.construire_excel(resultats, params_log)
+        st.download_button("📥 Télécharger le rapport Excel (10 onglets)",
+                           data=buf.getvalue(),
+                           file_name="dimensionnement_transport.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
+    except Exception as e:
+        st.warning(f"Export Excel indisponible : {e}")
+
     st.divider()
     st.subheader("3️⃣ Détail opérationnel par jour")
-
     jours_dispo = st.session_state.get('postes_jours', list(resultats.keys()))
-    if not jours_dispo:
-        st.stop()
-
     jour_sel = st.selectbox("Choisir un jour à détailler", jours_dispo)
-    res = resultats[jour_sel]
-    postes = res["postes"]
+    rp.afficher_jour(resultats[jour_sel])
 
-    if not postes:
-        st.info("Aucun poste pour ce jour.")
-        st.stop()
-
-    # Avertissement fenêtres tendues (incohérences de données)
-    nb_tendues = res.get("metriques", {}).get("nb_missions_non_traitees", 0)
-    if nb_tendues:
-        st.warning(f"⚠️ {nb_tendues} flux ont une fenêtre horaire incohérente ou trop courte "
-                   f"dans le fichier source (livraison avant mise à dispo, ou durée > fenêtre). "
-                   f"Ils sont planifiés malgré tout, mais à vérifier dans l'Excel.")
-
-    # Courbe de concurrence = preuve du lissage (pas de pic matinal)
-    st.markdown("#### 📉 Lissage de la charge")
-    rp.afficher_courbe_concurrence(res)
-
-    # Filtre par type de véhicule
-    types_dispo = sorted({p.v_type for p in postes})
-    type_filtre = st.selectbox("Filtrer par type de véhicule", ["Tous"] + types_dispo, key="filtre_type_postes")
-    postes_affiches = postes if type_filtre == "Tous" else [p for p in postes if p.v_type == type_filtre]
-
-    # Gantt groupé par véhicule (montre la relève)
-    st.markdown(f"#### 📅 Planning par véhicule — {jour_sel}")
-    rp.afficher_gantt_postes(postes_affiches, titre=f"Planning {jour_sel}")
-
-    # Onglets détail
     st.divider()
-    tab_postes, tab_sites = st.tabs(["🔍 Détail par poste", "🏥 Détail par site"])
-    with tab_postes:
-        rp.afficher_detail_postes(postes_affiches)
-    with tab_sites:
-        rp.afficher_detail_sites(postes_affiches)
+    st.subheader("4️⃣ Flux non servis")
+    rp.afficher_non_servis(resultats)
