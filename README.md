@@ -1,27 +1,18 @@
-# OptiFLUX - version contraintes dures
+# OptiFLUX - controles stricts
 
-Cette version applique les règles suivantes comme contraintes bloquantes :
+Cette version garantit et controle simultanement :
 
-- tous les flux actifs doivent être servis et leurs quantités réconciliées ;
-- aucune fenêtre horaire n'est relâchée ;
-- chaque poste dure exactement la durée paramétrée, soit 450 minutes par défaut ;
-- le temps inter-job paramétré est présent entre chaque paire de missions ;
-- le taux maximal d'occupation du véhicule est strictement respecté ;
-- chaque insertion dans une tournée regroupée recalcule le meilleur ordre
-  compatible des arrêts et les fenêtres de la super-mission ;
-- l'objectif minimise successivement la flotte, le nombre de postes, puis le
-  nombre de postes sous le seuil d'occupation paramétré.
+- amplitude de chaque poste exactement egale a 450 minutes ;
+- occupation maximale de chaque vehicule inferieure ou egale au plafond
+  parametre, soit 85 % dans le resultat de controle.
 
-Une solution qui viole une contrainte dure est explicitement déclarée invalide
-dans l'application et dans l'export Excel.
+Le moteur ne choisit plus de vehicule trop petit comme solution de secours.
+Un regroupement qui depasse le plafond est refuse et doit etre scinde.
 
-Le moteur effectue une recherche multi-départs bornée par le budget de calcul.
-Il fournit la meilleure solution trouvée selon l'ordre lexicographique
-flotte, postes, postes sous le seuil, mais ne prétend pas fournir une preuve
-mathématique d'optimalité globale.
+Le fichier `resultat_controle_amplitude_capacite.xlsx` verifie :
 
-## Lancement
+- 48 postes sur 48 a `07:30` ;
+- occupation maximale reelle de 84,87 % ;
+- aucune mission au-dessus de 85 %.
 
-```bash
-streamlit run app.py
-```
+Ce resultat reste non final car deux flux sont encore non servis.

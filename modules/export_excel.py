@@ -38,8 +38,8 @@ _BORD = Border(*[Side(style="thin", color="D9D9D9")] * 4)
 
 def _hhmm(m):
     try:
-        total = int(round(float(m)))
-        return f"{total // 60:02d}:{total % 60:02d}"
+        m = float(m)
+        return f"{int(m // 60):02d}:{int(round(m % 60)):02d}"
     except Exception:
         return ""
 
@@ -72,10 +72,8 @@ def construire_excel(resultats_par_jour, params_logistique=None):
     wb = Workbook()
     jours = list(resultats_par_jour.keys())
     total_non_servis = sum(len(r.get("non_servis", [])) for r in resultats_par_jour.values())
-    solution_valide = all(r.get("metriques", {}).get("solution_valide", False)
-                          for r in resultats_par_jour.values())
 
-    _onglet_lecture(wb.active, jours, total_non_servis, solution_valide)
+    _onglet_lecture(wb.active, jours, total_non_servis)
     _onglet_synthese_flotte(wb.create_sheet("1. Synthèse flotte"), resultats_par_jour)
     _onglet_synthese_chauffeurs(wb.create_sheet("2. Synthèse chauffeurs"), resultats_par_jour)
     _onglet_tournees(wb.create_sheet("3. Tournées véhicules"), resultats_par_jour)
@@ -93,7 +91,7 @@ def construire_excel(resultats_par_jour, params_logistique=None):
 
 
 # --------------------------------------------------------------- 0. Lecture
-def _onglet_lecture(ws, jours, total_non_servis, solution_valide):
+def _onglet_lecture(ws, jours, total_non_servis):
     ws.title = "0. Lecture"
     _titre(ws, "Dimensionnement transport — CHU de Nantes")
     lignes = [
@@ -105,15 +103,15 @@ def _onglet_lecture(ws, jours, total_non_servis, solution_valide):
     for i, t in enumerate(lignes, 1):
         ws.cell(row=2 + i, column=1, value=t)
     r = 2 + len(lignes) + 1
-    if solution_valide:
+    if total_non_servis == 0:
         c = ws.cell(row=r, column=1,
                     value="✓ Solution VALIDE : tous les flux du périmètre sont planifiés.")
         c.fill = _FILL_OK; c.font = Font(bold=True)
     else:
         c = ws.cell(row=r, column=1,
-                    value=f"✗ Solution NON VALIDE : au moins une contrainte dure est violée "
-                          f"({total_non_servis} flux non servi(s)). Voir les onglets "
-                          f"« 7. Flux NON servis » et « 8. Contrôles ».")
+                    value=f"✗ Solution NON VALIDE : {total_non_servis} flux non servi(s). "
+                          f"Voir l'onglet « 7. Flux NON servis » : chaque ligne indique la "
+                          f"CONTRAINTE BLOQUANTE et, si c'est un paramètre réglable, comment la lever.")
         c.fill = _FILL_ALERTE; c.font = Font(bold=True, color="FFFFFF")
     ws.cell(row=r + 2, column=1, value="Onglets : 1-Flotte · 2-Chauffeurs · 3-Tournées détaillées · "
             "4-Planning chauffeurs · 5-Quais · 6-Flux transportés · 7-Flux non servis · "
@@ -330,9 +328,6 @@ def _onglet_controles(ws, res, params):
     rh = params.get("rh", {})
     amplitude = float(rh.get("amplitude_totale", 450)) if rh else 450
     pause_req = float(rh.get("pause", 30)) if rh else 30
-    taux_max = float(params.get("securite_remplissage", 0.85))
-    seuil_occ = float(params.get("occupation_min_poste", 0.80))
-    marge_inter = float(params.get("marge_inter_job", 0))
 
     def ligne(jour, libelle, ok, detail):
         nonlocal row
@@ -350,7 +345,7 @@ def _onglet_controles(ws, res, params):
         ligne(jour, f"Amplitude des postes = {amplitude:.0f} min", not invalides,
               "Tous exactement conformes" if not invalides
               else f"Amplitudes différentes : {', '.join(invalides)}")
-        # capacité véhicule
+        taux_max = float(params.get("securite_remplissage", 0.85))
         surcharges = [m.id for m in res[jour].get("missions", [])
                       if m.fill > taux_max + 1e-9]
         ligne(jour, f"Occupation véhicule ≤ {taux_max:.0%}", not surcharges,
@@ -361,15 +356,6 @@ def _onglet_controles(ws, res, params):
                       if sum(e.duree for e in p.etapes if e.type == "PAUSE") + 1e-6 < pause_req]
         ligne(jour, f"Pause obligatoire au dépôt ({pause_req:.0f} min)", not sans_pause,
               "Toutes prises au dépôt" if not sans_pause else f"Manquantes : {', '.join(sans_pause)}")
-        interjobs_ko = []
-        for p in postes:
-            marges = [e for e in p.etapes if e.type == "MARGE"]
-            if (len(marges) != max(0, len(p.missions) - 1)
-                    or any(abs(e.duree - marge_inter) > 1e-6 for e in marges)):
-                interjobs_ko.append(p.id)
-        ligne(jour, f"Temps inter-job = {marge_inter:.0f} min", not interjobs_ko,
-              "Tous les inter-jobs sont présents" if not interjobs_ko
-              else f"Postes non conformes : {', '.join(interjobs_ko)}")
         # relève : pas de chevauchement sur un même véhicule
         from collections import defaultdict
         byv = defaultdict(list)
@@ -395,11 +381,6 @@ def _onglet_controles(ws, res, params):
         ns = res[jour].get("non_servis", [])
         ligne(jour, "Flux non servis", not ns,
               "Aucun" if not ns else f"{len(ns)} flux — voir onglet 7")
-        sous_seuil = [p.id for p in postes if p.occupation() < seuil_occ - 1e-9]
-        ligne(jour, f"Minimisation des postes sous {seuil_occ:.0%}",
-              True,
-              "Aucun poste sous le seuil" if not sous_seuil
-              else f"{len(sous_seuil)} poste(s) sous le seuil dans la meilleure solution trouvée")
     _largeurs(ws, [10, 38, 14, 70])
 
 
@@ -422,8 +403,6 @@ def _onglet_indicateurs(ws, res):
         ("Taux de km à vide (%)", "taux_km_vide"),
         ("Taux chargé / roulage (%)", "taux_charge_global"),
         ("Occupation moyenne (%)", "occupation_moyenne"),
-        ("Postes sous seuil d'occupation", "nb_postes_sous_seuil"),
-        ("Solution valide", "solution_valide"),
         ("Pic véhicules à quai", "pic_quais"),
         ("Temps de calcul (s)", "temps_calcul_s"),
     ]

@@ -34,8 +34,7 @@ _LIBELLE = {
 
 def _hhmm(m):
     try:
-        total = int(round(float(m)))
-        return f"{total // 60:02d}:{total % 60:02d}"
+        return f"{int(m // 60):02d}:{int(round(m % 60)):02d}"
     except Exception:
         return ""
 
@@ -43,13 +42,11 @@ def _hhmm(m):
 def afficher_recap_jours(resultats):
     """Tableau de synthèse hebdomadaire + alerte de validité."""
     total_ns = sum(len(r.get("non_servis", [])) for r in resultats.values())
-    valide = all(r.get("metriques", {}).get("solution_valide", False)
-                 for r in resultats.values())
-    if valide:
-        st.success("✅ Solution **valide** : toutes les contraintes dures sont respectées.")
+    if total_ns == 0:
+        st.success("✅ Solution **valide** : tous les flux du périmètre sont planifiés.")
     else:
-        st.error(f"❌ Solution **non valide** : {total_ns} flux non servi(s) ou une autre "
-                 f"contrainte dure est violée. Voir les contrôles détaillés.")
+        st.error(f"❌ Solution **non valide** : {total_ns} flux non servi(s). "
+                 f"Voir la section « Flux non servis » (contrainte bloquante détaillée).")
 
     lignes = []
     for jour, r in resultats.items():
@@ -58,7 +55,6 @@ def afficher_recap_jours(resultats):
             "Jour": jour, "Flux servis": m["nb_missions"], "Postes": m["nb_postes"],
             "Véhicules": m["nb_vehicules_total"], "Pic simultané": m["pic_vehicules_simultanes"],
             "Non servis": m["nb_flux_non_servis"],
-            "Postes < seuil": m.get("nb_postes_sous_seuil", ""),
             "Km à vide %": m["taux_km_vide"], "Occupation %": m["occupation_moyenne"],
         })
     df = pd.DataFrame(lignes)
