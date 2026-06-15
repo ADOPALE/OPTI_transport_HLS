@@ -417,4 +417,4 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
     return {
         'tournes': df_tournees,
         'non_servis': df_non_servis,
-        'flotte_nb': suivi_
+        'flotte_nb': suivi_}
