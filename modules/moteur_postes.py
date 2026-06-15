@@ -324,8 +324,7 @@ def choisir_vehicule_groupe(sites, contenants, surface_load, count_load,
     if sous_seuil:
         # le mieux rempli = plus petit plancher adéquat
         return max(sous_seuil, key=lambda vt: surface_load / floor[vt])
-    # Le taux maximal paramétré est une contrainte dure. Si aucun véhicule ne
-    # tient sous ce plafond, le groupe doit être scindé ou déclaré infaisable.
+    # Le taux maximal paramétré est une contrainte stricte, pas une préférence.
     return None
 
 
@@ -603,7 +602,6 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
     for (orig, dest, cont, ps), grp in par_od.items():
         s_u = surf_cont[cont]
         v0 = choisir_vehicule_groupe([orig, dest], [cont], s_u, 1, v_types, caps, acces, floor, taux)
-        cap_surface = taux * floor[v0] if v0 else taux * max(floor.values())
         grp.sort(key=lambda r: (r["h_dispo"], r["h_dead"]))
         cur = None
 
@@ -619,7 +617,10 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
                 continue
             new_hd, new_hf = max(cur["hd"], r["h_dispo"]), min(cur["hf"], r["h_dead"])
             de = _duree_est([orig, dest], cur["q"] + r["qte"], matrice)
-            if ((cur["q"] + r["qte"]) * s_u <= cap_surface + 1e-9
+            v_new = choisir_vehicule_groupe(
+                [orig, dest], [cont], (cur["q"] + r["qte"]) * s_u,
+                cur["q"] + r["qte"], v_types, caps, acces, floor, taux)
+            if (v_new is not None
                     and new_hd < new_hf and de <= (new_hf - new_hd) + 1e-6):
                 cur["q"] += r["qte"]; cur["hd"], cur["hf"] = new_hd, new_hf
                 cur["comp"].append((r["flux_id"], orig, dest, cont, r["qte"]))
@@ -659,24 +660,20 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
                 cand = grp[j]
                 new_sites = sites | {cand["dest"]}
                 ordre = [orig] + [r["dest"] for r in tour + [cand]]
-                v_cand = choisir_vehicule_groupe(
+                v_new = choisir_vehicule_groupe(
                     list(new_sites), [cont], (q + cand["qte"]) * s_u,
                     q + cand["qte"], v_types, caps, acces, floor, taux)
-                if (v_cand is not None
+                if (v_new is not None
                         and _tournee_faisable(tour + [cand], ordre, q + cand["qte"],
                                               matrice, duree_max_tournee)):
-                    tour.append(cand); q += cand["qte"]; sites = new_sites
+                    tour.append(cand); q += cand["qte"]; sites = new_sites; v = v_new
                 j += 1
             for r in tour:
                 grp.remove(r)
             if len(tour) >= 2:
+                cpt += 1
                 vfin = choisir_vehicule_groupe(list(sites), [cont], q * s_u, q,
                                                v_types, caps, acces, floor, taux)
-                if vfin is None:
-                    encore.extend(tour)
-                    i = 0
-                    continue
-                cpt += 1
                 livr = [(r["dest"], r["qte"]) for r in tour]
                 comp = [c for r in tour for c in r["comp"]]
                 missions.append(construire_mission_tournee(
@@ -706,24 +703,20 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
                 cand = grp[j]
                 new_sites = sites | {cand["orig"]}
                 ordre = [r["orig"] for r in tour + [cand]] + [dest]
-                v_cand = choisir_vehicule_groupe(
+                v_new = choisir_vehicule_groupe(
                     list(new_sites), [cont], (q + cand["qte"]) * s_u,
                     q + cand["qte"], v_types, caps, acces, floor, taux)
-                if (v_cand is not None
+                if (v_new is not None
                         and _tournee_faisable(tour + [cand], ordre, q + cand["qte"],
                                               matrice, duree_max_tournee)):
-                    tour.append(cand); q += cand["qte"]; sites = new_sites
+                    tour.append(cand); q += cand["qte"]; sites = new_sites; v = v_new
                 j += 1
             for r in tour:
                 grp.remove(r)
             if len(tour) >= 2:
+                cpt += 1
                 vfin = choisir_vehicule_groupe(list(sites), [cont], q * s_u, q,
                                                v_types, caps, acces, floor, taux)
-                if vfin is None:
-                    solitaires.extend(tour)
-                    i = 0
-                    continue
-                cpt += 1
                 coll = [(r["orig"], r["qte"]) for r in tour]
                 comp = [c for r in tour for c in r["comp"]]
                 missions.append(construire_mission_tournee(
@@ -761,34 +754,35 @@ def calculer_shifts(params):
     return [(h0 + k * duree, h0 + (k + 1) * duree) for k in range(n)], duree
 
 
-def _shifts_feasibles(m, shifts, matrice, depot):
+def _shifts_feasibles(m, shifts, matrice, depot, t_prise=20.0):
     approche = duree_trajet(matrice, depot, m.site_debut)
     feas = []
     for k, (s, e) in enumerate(shifts):
-        debut = max(m.h_dispo, s + approche)
+        debut = max(m.h_dispo, s + t_prise + approche)
         if debut + m.duree <= min(m.h_deadline, e):
             feas.append(k)
     return feas
 
 
-def marquer_fenetres_tendues(missions, shifts, matrice, depot, h_fin_max):
-    """Détection DÉTERMINISTE (une seule fois) des missions qui ne tiennent dans
-    aucun créneau : on relâche leur deadline pour pouvoir les planiifer et on les
-    marque comme tendues (elles seront listées en flux non servis - option b)."""
+def marquer_fenetres_tendues(missions, shifts, matrice, depot, h_fin_max, t_prise=20.0):
+    """Détecte uniquement les missions impossibles même au premier départ autorisé."""
+    premier_depart = shifts[0][0] if shifts else 0.0
     for m in missions:
-        if not _shifts_feasibles(m, shifts, matrice, depot):
+        approche = duree_trajet(matrice, depot, m.site_debut)
+        debut_plus_tot = max(m.h_dispo, premier_depart + t_prise + approche)
+        if debut_plus_tot + m.duree > m.h_deadline + 1e-6:
             m.h_deadline = h_fin_max
             m.fenetre_tendue = True
 
 
-def assigner_shifts(missions, shifts, matrice, depot, h_fin_max, rng=None):
+def assigner_shifts(missions, shifts, matrice, depot, h_fin_max, rng=None, t_prise=20.0):
     """Répartit les missions entre créneaux pour lisser la charge. rng != None ->
     ordre aléatoire (multi-start). Ne mute PAS les missions (déjà préparées)."""
     charge = [0.0] * len(shifts)
     assign = {k: [] for k in range(len(shifts))}
     infos = []
     for m in missions:
-        feas = _shifts_feasibles(m, shifts, matrice, depot) or [0]
+        feas = _shifts_feasibles(m, shifts, matrice, depot, t_prise) or [0]
         infos.append((m, feas))
     if rng is not None:
         rng.shuffle(infos)
@@ -873,6 +867,21 @@ def _placer_pause(poste, depot, matrice, matrice_dist, pause_duree):
     poste.pause_faite = True
 
 
+def _placer_pause_si_absorbable(poste, mission, matrice, matrice_dist, pause_duree,
+                                marge_inter):
+    """Utilise une attente au dépôt pour prendre la pause sans retarder la mission."""
+    if poste.pause_faite or poste.position != poste.depot:
+        return False
+    t_arrivee = poste.t_curr
+    if poste.missions:
+        t_arrivee += marge_inter
+    t_arrivee += duree_trajet(matrice, poste.position, mission.site_debut)
+    if mission.h_dispo - t_arrivee + 1e-6 < pause_duree:
+        return False
+    _placer_pause(poste, poste.depot, matrice, matrice_dist, pause_duree)
+    return True
+
+
 def _cout_successeur(poste, mission, matrice, marge_inter, t_nettoyage):
     t, pos, vide = poste.t_curr, poste.position, 0.0
     if poste.missions and marge_inter > 0:
@@ -889,8 +898,13 @@ def _cout_successeur(poste, mission, matrice, marge_inter, t_nettoyage):
 
 
 def _meilleur_successeur(poste, restants, matrice, depot, s_end, t_fin, pause_duree,
-                         marge_inter, vers_depot=False, t_nettoyage=15.0, rng=None, jitter=0.0):
-    pause_restante = 0.0 if poste.pause_faite else pause_duree
+                         marge_inter, vers_depot=False, t_nettoyage=15.0, rng=None, jitter=0.0,
+                         seuil_critique=30.0, seuil_urgent=90.0, attente_courte=10.0):
+    """Choisit le meilleur enchaînement : urgence, faible attente, puis distance.
+
+    L'urgence est mesurée par la marge restante après exécution prévisionnelle.
+    La distance à vide ne départage que des missions de priorité comparable.
+    """
     best, best_key = None, None
     for m in restants:
         if m.v_type != poste.v_type:
@@ -900,11 +914,20 @@ def _meilleur_successeur(poste, restants, matrice, depot, s_end, t_fin, pause_du
         t_fin_m, vide, attente = _cout_successeur(poste, m, matrice, marge_inter, t_nettoyage)
         if t_fin_m > m.h_deadline:
             continue
+        pause_absorbable = (not poste.pause_faite and poste.position == depot
+                            and attente + 1e-6 >= pause_duree)
+        pause_restante = 0.0 if poste.pause_faite or pause_absorbable else pause_duree
+        attente_effective = max(0.0, attente - (pause_duree if pause_absorbable else 0.0))
         retour = duree_trajet(matrice, m.site_fin, depot)
         if t_fin_m + retour + pause_restante + t_fin > s_end:
             continue
         bruit = (rng.random() * jitter) if (rng is not None and jitter) else 0.0
-        key = (round(vide + bruit, 2), round(attente, 1), m.h_deadline)
+        marge_deadline = max(0.0, m.h_deadline - t_fin_m)
+        classe_urgence = (0 if marge_deadline <= seuil_critique
+                          else 1 if marge_deadline <= seuil_urgent else 2)
+        classe_attente = 0 if attente_effective <= attente_courte else 1
+        key = (classe_urgence, classe_attente, round(attente_effective, 1),
+               round(marge_deadline, 1), round(vide + bruit, 2), m.h_deadline)
         if best_key is None or key < best_key:
             best_key, best = key, m
     return best
@@ -919,11 +942,15 @@ def construire_postes_creneau(missions, shift, idx_shift, v_type, depot, matrice
     t_fin = float(rh.get("temps_fixes_fin", 15))
     pause_duree = float(rh.get("pause", 30))
     marge_inter = float(params.get("marge_inter_job", 0))
+    seuil_critique = float(params.get("seuil_urgence_critique", 30))
+    seuil_urgent = float(params.get("seuil_urgence", 90))
+    attente_courte = float(params.get("attente_courte_max", 10))
     jitter = 6.0 if rng is not None else 0.0
     pause_seuil = s_start + t_prise + (duree_poste - t_prise - t_fin) / 2
 
     postes = []
-    restants = sorted(missions, key=lambda m: (m.h_dispo, m.h_deadline))
+    restants = sorted(missions, key=lambda m: (
+        m.h_deadline - m.h_dispo - m.duree, m.h_deadline, m.h_dispo))
     num = num0
     while restants:
         num += 1
@@ -935,36 +962,50 @@ def construire_postes_creneau(missions, shift, idx_shift, v_type, depot, matrice
         p.t_curr = s_start + t_prise
 
         while True:
+            if not restants:
+                break
             if (not p.pause_faite) and p.t_curr >= pause_seuil:
                 if p.position == depot:
                     _placer_pause(p, depot, matrice, matrice_dist, pause_duree); continue
                 cand = _meilleur_successeur(p, restants, matrice, depot, s_end, t_fin, pause_duree,
-                                            marge_inter, vers_depot=True, rng=rng, jitter=jitter)
+                                            marge_inter, vers_depot=True, rng=rng, jitter=jitter,
+                                            seuil_critique=seuil_critique,
+                                            seuil_urgent=seuil_urgent,
+                                            attente_courte=attente_courte)
                 if cand is not None:
                     restants.remove(cand)
+                    _placer_pause_si_absorbable(
+                        p, cand, matrice, matrice_dist, pause_duree, marge_inter)
                     _placer_mission(p, cand, matrice, matrice_dist, marge_inter)
                     _placer_pause(p, depot, matrice, matrice_dist, pause_duree); continue
                 _placer_pause(p, depot, matrice, matrice_dist, pause_duree); continue
             cand = _meilleur_successeur(p, restants, matrice, depot, s_end, t_fin, pause_duree,
-                                        marge_inter, rng=rng, jitter=jitter)
+                                        marge_inter, rng=rng, jitter=jitter,
+                                        seuil_critique=seuil_critique,
+                                        seuil_urgent=seuil_urgent,
+                                        attente_courte=attente_courte)
             if cand is None:
                 if not p.missions:
                     seed = restants.pop(0)
+                    _placer_pause_si_absorbable(
+                        p, seed, matrice, matrice_dist, pause_duree, marge_inter)
                     _placer_mission(p, seed, matrice, matrice_dist, marge_inter)
                     continue
                 break
             restants.remove(cand)
+            _placer_pause_si_absorbable(
+                p, cand, matrice, matrice_dist, pause_duree, marge_inter)
             _placer_mission(p, cand, matrice, matrice_dist, marge_inter)
 
-        _cloturer_poste(p, depot, matrice, matrice_dist, t_fin, pause_duree,
-                        target_end=s_start + duree_poste)
-        postes.append(p)
+        if p.missions:
+            _cloturer_poste(p, depot, matrice, matrice_dist, t_fin, pause_duree,
+                            target_end=s_start + duree_poste)
+            postes.append(p)
     return postes
 
 
-def _cloturer_poste(poste, depot, matrice, matrice_dist, t_fin, pause_duree,
-                    target_end=None):
-    """Retour dépôt, pause et clôture à l'heure exacte de fin du poste."""
+def _cloturer_poste(poste, depot, matrice, matrice_dist, t_fin, pause_duree, target_end=None):
+    """Retour dépôt, pause et fin ; complète le poste jusqu'à l'amplitude contractuelle."""
     if poste.position != depot:
         d = duree_trajet(matrice, poste.position, depot)
         if d > 0.1:
@@ -978,10 +1019,13 @@ def _cloturer_poste(poste, depot, matrice, matrice_dist, t_fin, pause_duree,
         poste.etapes.append(Etape("PAUSE", poste.t_curr, poste.t_curr + pause_duree,
                                   "Pause obligatoire (au dépôt)", site_debut=depot, site_fin=depot))
         poste.t_curr += pause_duree; poste.pause_faite = True
-    if target_end is not None and poste.t_curr + t_fin < target_end - 1e-6:
-        poste.etapes.append(Etape("DISPONIBLE", poste.t_curr, target_end - t_fin,
-                                  "Disponible au dépôt", site_debut=depot, site_fin=depot))
-        poste.t_curr = target_end - t_fin
+    if target_end is not None:
+        disponible = target_end - poste.t_curr - t_fin
+        if disponible > 1e-6:
+            poste.etapes.append(Etape("DISPONIBLE", poste.t_curr, poste.t_curr + disponible,
+                                      "Temps disponible au dépôt",
+                                      site_debut=depot, site_fin=depot))
+            poste.t_curr += disponible
     poste.etapes.append(Etape("FIN", poste.t_curr, poste.t_curr + t_fin, "Clôture / fin de poste",
                               site_debut=depot, site_fin=depot))
     poste.t_curr += t_fin
@@ -1168,6 +1212,8 @@ def _reconstruire_poste(poste, missions, depot, matrice, matrice_dist, params, s
     for m in missions:
         if (not p.pause_faite) and p.t_curr >= pause_seuil:
             _placer_pause(p, depot, matrice, matrice_dist, pause_duree)
+        _placer_pause_si_absorbable(
+            p, m, matrice, matrice_dist, pause_duree, marge_inter)
         _placer_mission(p, m, matrice, matrice_dist, marge_inter)
     _cloturer_poste(p, depot, matrice, matrice_dist, t_fin, pause_duree,
                     target_end=s_start + amplitude)
@@ -1225,6 +1271,36 @@ def _missions_ok(poste, missions):
     return True
 
 
+def reparer_postes_invalides(postes, depot, matrice, matrice_dist, params):
+    """Scinde un poste que la reconstruction ne peut plus rendre faisable."""
+    amplitude = float(params.get("rh", {}).get("amplitude_totale", 450))
+    repares = []
+    for p in postes:
+        test = _reconstruire_poste(p, list(p.missions), depot, matrice, matrice_dist, params)
+        if test.amplitude <= amplitude + 1e-6 and _missions_ok(test, p.missions):
+            repares.append(test)
+            continue
+        groupes = []
+        courant = []
+        for mission in p.missions:
+            candidat = courant + [mission]
+            tmp = _reconstruire_poste(p, candidat, depot, matrice, matrice_dist, params)
+            if courant and (tmp.amplitude > amplitude + 1e-6 or not _missions_ok(tmp, candidat)):
+                groupes.append(courant)
+                courant = [mission]
+            else:
+                courant = candidat
+        if courant:
+            groupes.append(courant)
+        for i, groupe in enumerate(groupes, 1):
+            bloc = Poste(id=f"{p.id}_R{i:02d}", v_type=p.v_type, depot=depot)
+            bloc.shift = p.shift
+            bloc.h_debut = p.h_debut
+            repares.append(_reconstruire_poste(
+                bloc, groupe, depot, matrice, matrice_dist, params, start=p.h_debut))
+    return repares
+
+
 def retemporiser(postes, depot, matrice, matrice_dist, params, pas=15):
     """Re-temporisation : replace chaque poste dans la journée à l'heure qui
     MINIMISE la concurrence (donc la flotte), tout en respectant les deadlines.
@@ -1268,14 +1344,14 @@ def retemporiser(postes, depot, matrice, matrice_dist, params, pas=15):
 
 
 def _score_solution(postes, nb_vehicules):
-    """Clé lexicographique : (flotte, nb_postes, -homogénéité).
-    Homogénéité = -variance des taux d'occupation (plus c'est homogène, mieux)."""
+    """Minimise flotte, postes, attente réelle, puis dispersion d'occupation."""
     flotte = sum(nb_vehicules.values())
     nb_postes = len(postes)
     occ = [p.occupation() for p in postes] or [0]
     moy = sum(occ) / len(occ)
     var = sum((o - moy) ** 2 for o in occ) / len(occ)
-    return (flotte, nb_postes, var)
+    attente = sum(sum(e.duree for e in p.etapes if e.type == "ATTENTE") for p in postes)
+    return (flotte, nb_postes, round(attente, 1), var)
 
 
 # =====================================================================
@@ -1378,8 +1454,9 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
 
     shifts, _ = calculer_shifts(params_logistique)
     h_fin_max = to_min(params_logistique.get("rh", {}).get("h_fin_max"), 1260)
+    t_prise = float(params_logistique.get("rh", {}).get("temps_fixes_prise", 20))
     # détection déterministe des fenêtres tendues (une seule fois)
-    marquer_fenetres_tendues(missions, shifts, matrice, depot, h_fin_max)
+    marquer_fenetres_tendues(missions, shifts, matrice, depot, h_fin_max, t_prise)
     par_type = {}
     for m in missions:
         par_type.setdefault(m.v_type, []).append(m)
@@ -1397,7 +1474,8 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
         _prog(0.15 + 0.7 * start / n_starts, f"Construction & optimisation (essai {start + 1}/{n_starts})…")
         postes = []
         for v_type, liste in par_type.items():
-            assign = assigner_shifts(liste, shifts, matrice, depot, h_fin_max, rng=rng)
+            assign = assigner_shifts(
+                liste, shifts, matrice, depot, h_fin_max, rng=rng, t_prise=t_prise)
             for k, sh in enumerate(shifts):
                 postes.extend(construire_postes_creneau(
                     assign.get(k, []), sh, k, v_type, depot, matrice, mdist,
@@ -1406,6 +1484,8 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
         budget_ls = deadline if n_starts == 1 else (t0 + budget * (start + 1) / n_starts)
         postes = recherche_locale(postes, depot, matrice, mdist, params_logistique,
                                   min(budget_ls, deadline))
+        postes = reparer_postes_invalides(
+            postes, depot, matrice, mdist, params_logistique)
         # placement horaire + relève co-optimisés (minimise la flotte)
         nb_veh = planifier_flotte(postes, depot, matrice, mdist, params_logistique)
         score = _score_solution(postes, nb_veh)
@@ -1431,6 +1511,7 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
 
     t_charge = sum(p.temps_charge() for p in postes)
     t_vide = sum(p.temps_vide() for p in postes)
+    t_attente = sum(sum(e.duree for e in p.etapes if e.type == "ATTENTE") for p in postes)
     km_plein = sum(e.distance for p in postes for e in p.etapes if e.type == "MISSION")
     km_vide = sum(e.distance for p in postes for e in p.etapes
                   if e.type in ("APPROCHE_VIDE", "RETOUR_VIDE"))
@@ -1444,6 +1525,7 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
         "nb_flux_non_servis": len(non_servis),
         "temps_charge_min": round(t_charge),
         "temps_vide_min": round(t_vide),
+        "temps_attente_min": round(t_attente),
         "km_plein": round(km_plein, 1),
         "km_vide": round(km_vide, 1),
         "km_total": round(km_plein + km_vide, 1),
