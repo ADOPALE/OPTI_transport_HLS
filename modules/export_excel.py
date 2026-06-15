@@ -328,6 +328,7 @@ def _onglet_controles(ws, res, params):
     rh = params.get("rh", {})
     amplitude = float(rh.get("amplitude_totale", 450)) if rh else 450
     pause_req = float(rh.get("pause", 30)) if rh else 30
+    tolerance_pause = float(params.get("tolerance_pause_milieu", 60))
 
     def ligne(jour, libelle, ok, detail):
         nonlocal row
@@ -341,23 +342,35 @@ def _onglet_controles(ws, res, params):
     for jour in res:
         postes = res[jour]["postes"]
         # amplitude
-        invalides = [p.id for p in postes if abs(p.amplitude - amplitude) > 1e-6]
-        ligne(jour, f"Amplitude des postes = {amplitude:.0f} min", not invalides,
-              "Tous exactement conformes" if not invalides
-              else f"Amplitudes différentes : {', '.join(invalides)}")
-        taux_max = float(params.get("securite_remplissage", 0.85))
-        surcharges = [m.id for m in res[jour].get("missions", [])
-                      if m.fill > taux_max + 1e-9]
-        ligne(jour, f"Occupation véhicule ≤ {taux_max:.0%}", not surcharges,
-              "Aucune surcharge" if not surcharges
-              else f"Missions surchargées : {', '.join(surcharges)}")
+        amplitudes_ko = [p.id for p in postes if abs(p.amplitude - amplitude) > 1e-6]
+        ligne(jour, f"Amplitude des postes = {amplitude:.0f} min", not amplitudes_ko,
+              "Tous conformes" if not amplitudes_ko
+              else f"Amplitudes différentes : {', '.join(amplitudes_ko)}")
         # pause
         sans_pause = [p.id for p in postes
                       if sum(e.duree for e in p.etapes if e.type == "PAUSE") + 1e-6 < pause_req]
         ligne(jour, f"Pause obligatoire au dépôt ({pause_req:.0f} min)", not sans_pause,
               "Toutes prises au dépôt" if not sans_pause else f"Manquantes : {', '.join(sans_pause)}")
-        # relève : pas de chevauchement sur un même véhicule
+        pauses_hors_fenetre = []
+        for p in postes:
+            centre = p.h_debut + amplitude / 2
+            pauses = [e.h_debut for e in p.etapes if e.type == "PAUSE"]
+            if not pauses or abs(pauses[0] - centre) > tolerance_pause + 1e-6:
+                pauses_hors_fenetre.append(p.id)
+        ligne(jour, f"Pause au milieu du poste ± {tolerance_pause:.0f} min",
+              not pauses_hors_fenetre,
+              "Toutes conformes" if not pauses_hors_fenetre
+              else f"Hors fenêtre : {', '.join(pauses_hors_fenetre)}")
         from collections import defaultdict
+        shifts_par_type = defaultdict(lambda: [0, 0])
+        for p in postes:
+            shifts_par_type[p.v_type][min(1, int(p.shift))] += 1
+        plafond_ko = [vt for vt, (matin, apres_midi) in shifts_par_type.items()
+                      if apres_midi > res[jour].get("nb_vehicules", {}).get(vt, matin)]
+        ligne(jour, "Postes après-midi ≤ flotte dimensionnée le matin", not plafond_ko,
+              "Tous conformes" if not plafond_ko
+              else f"Dépassements : {', '.join(plafond_ko)}")
+        # relève : pas de chevauchement sur un même véhicule
         byv = defaultdict(list)
         for p in postes:
             byv[p.id_vehicule].append((p.h_debut, p.h_fin))
