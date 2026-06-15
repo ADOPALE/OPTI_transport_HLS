@@ -21,6 +21,10 @@ def afficher_parametres_logistique():
         v_seuil_rel = p.get("seuil_rupture_reliquat", 80)
         v_marge_inter = p.get("marge_inter_job", 5)
         v_alea = int(p.get("alea_circulation", 0.15) * 100)
+        v_urgence_critique = int(p.get("seuil_urgence_critique", 30))
+        v_urgence = int(p.get("seuil_urgence", 90))
+        v_attente_courte = int(p.get("attente_courte_max", 10))
+        v_tolerance_pause = int(p.get("tolerance_pause_milieu", 60))
         # Récupération de la durée max d'un SJ (défaut à 50% de l'amplitude si absent)
         v_duree_max_sj = p.get("duree_max_superjob", int(v_duree / 2))
         config_existe = True
@@ -35,6 +39,10 @@ def afficher_parametres_logistique():
         v_seuil_rel = 80
         v_marge_inter = 5
         v_alea = 15
+        v_urgence_critique = 30
+        v_urgence = 90
+        v_attente_courte = 10
+        v_tolerance_pause = 60
         v_duree_max_sj = 225 # 450 / 2
         config_existe = False
 
@@ -97,6 +105,21 @@ def afficher_parametres_logistique():
                 help="Majoration forfaitaire du temps de trajet (ex: +15% pour les bouchons)."
             )
 
+        st.subheader("Priorisation de l'ordonnancement")
+        c_urg1, c_urg2, c_urg3 = st.columns(3)
+        with c_urg1:
+            urgence_critique = st.number_input(
+                "Marge critique restante (min)", min_value=0, value=v_urgence_critique, step=5)
+        with c_urg2:
+            urgence = st.number_input(
+                "Marge urgente restante (min)", min_value=1, value=v_urgence, step=5)
+        with c_urg3:
+            attente_courte = st.number_input(
+                "Attente courte maximale (min)", min_value=0, value=v_attente_courte, step=5)
+        tolerance_pause = st.number_input(
+            "Tolérance autour du milieu de poste pour la pause (min)",
+            min_value=0, value=v_tolerance_pause, step=5)
+
         st.divider()
 
         st.subheader("4. Gestion des Reliquats")
@@ -134,6 +157,10 @@ def afficher_parametres_logistique():
                 "marge_inter_job": marge_inter,
                 "duree_max_superjob": duree_max_sj, # Sauvegarde du paramètre
                 "alea_circulation": alea_circul / 100,
+                "seuil_urgence_critique": urgence_critique,
+                "seuil_urgence": max(urgence, urgence_critique),
+                "attente_courte_max": attente_courte,
+                "tolerance_pause_milieu": tolerance_pause,
                 "optimiser_reliquats_tournees": opt_reliquats,
                 "seuil_rupture_reliquat": seuil_reliquat,
                 "statut": "CONFIGURÉ"
