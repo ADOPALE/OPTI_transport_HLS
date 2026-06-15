@@ -1,3 +1,10 @@
+Le problème vient du fait que la fonction `preparer_flux_complets_du_jour(df_flux_brut, jour)` appelée à la ligne 289 de votre `app.py` filtre et transforme les colonnes du fichier de paramétrage brut.
+
+Si l'on analyse l'export de votre fichier de paramétrage (`OptiFLUX_Parametres_20260615_AVEC_BIO_SC1.xlsx - M flux.csv`), la colonne contenant le point de départ s'appelle en réalité **`Site Expéditeur`** (ou `Site Destinataire` pour la destination), tandis que le moteur cherche la clé standardisée **`Origine`**. De plus, le dictionnaire retourné par le moteur doit être structuré de manière à ce que les fonctions d'affichage de l'interface (`rp.afficher_recap_jours`) puissent y accéder directement sans générer de conflits de clés.
+
+Voici le code corrigé, robuste et tolérant aux variations de casse/nommage pour votre fichier **`modules/moteur_postes.py`** :
+
+```python
 import pandas as pd
 import datetime as dt
 import math
@@ -348,4 +355,80 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                         p['temps_courant'] += t_app
                         
                     p['etapes'].append({
-                        'Début': min_to_str(p['temps_courant']), 'Fin':
+                        'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + t_mis + 10),
+                        'Durée (min)': t_mis + 10, 'Étape': 'Mission (chargé)', 'Site départ': f['origine'], 'Site arrivée': f['destination'],
+                        'Fonction support': f['fonction_support'], 'Flux concernés': str(f['id']), 'Contenants': f['contenant']
+                    })
+                    p['temps_courant'] += (t_mis + 10)
+                    p['position'] = f['destination']
+                    p['corridor_actuel'] = f['fonction_support']
+                    
+                    flux_restants_am.remove(f)
+                else:
+                    echec_am_SLA = True
+                    break
+                    
+            if echec_am_SLA:
+                if n_am < n_matin:
+                    n_am += 1
+                else:
+                    # Règle absolue : Le plafond de l'après-midi correspond à la flotte du matin
+                    flux_non_servis.extend(flux_restants_am)
+                    break
+            else:
+                for p in tentative_postes_am:
+                    if not p['pause_prise']:
+                        p['etapes'].append({
+                            'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
+                            'Durée (min)': 20, 'Étape': 'Pause', 'Site départ': p['position'], 'Site arrivée': p['position'], 'Fonction support': 'RH'
+                        })
+                        p['temps_courant'] += 20
+                    if p['temps_courant'] < 1275:
+                        p['etapes'].append({
+                            'Début': min_to_str(p['temps_courant']), 'Fin': '21:15', 'Durée (min)': 1275 - p['temps_courant'],
+                            'Étape': 'Clôture poste', 'Site départ': p['position'], 'Site arrivée': 'HSJ', 'Fonction support': 'RH'
+                        })
+                postes_am_retenus = tentative_postes_am
+                solution_am_valide = True
+                
+        postes_finaux.extend(postes_am_retenus)
+
+    # 3. Génération des DataFrames finaux
+    flat_etapes = []
+    for p in postes_finaux:
+        for e in p['etapes']:
+            flat_etapes.append({
+                'Jour': nom_jour,
+                'Véhicule': p['veh_id'],
+                'Poste': p['id'],
+                'Type véh.': p['type_veh'],
+                'Début': e['Début'],
+                'Fin': e['Fin'],
+                'Durée (min)': e['Durée (min)'],
+                'Étape': e['Étape'],
+                'Site départ': e['Site départ'],
+                'Site arrivée': e['Site arrivée'],
+                'Fonction support': e['Fonction support'],
+                'Contenants': e.get('Contenants', ''),
+                'Flux concernés': e.get('Flux concernés', '')
+            })
+            
+    df_tournees = pd.DataFrame(flat_etapes) if flat_etapes else pd.DataFrame(columns=['Jour', 'Véhicule', 'Poste', 'Type véh.', 'Début', 'Fin', 'Durée (min)', 'Étape', 'Site départ', 'Site arrivée', 'Fonction support', 'Contenants', 'Flux concernés'])
+    df_non_servis = pd.DataFrame(flux_non_servis) if flux_non_servis else pd.DataFrame(columns=['id', 'origine', 'destination', 'quantite'])
+    
+    if not df_non_servis.empty:
+        df_non_servis['Pourquoi ce flux nest pas planifie'] = "Plafond capacitaire atteint l'après-midi"
+        df_non_servis['CONTRAINTE BLOQUANTE'] = "Augmenter le nombre d'ouvertures de postes le matin"
+
+    if progress_cb:
+        try: progress_cb(1.0, f"Journée {nom_jour} calculée avec succès.")
+        except: pass
+
+    # Structure de sortie retournée pour l'intégration à l'interface globale
+    return {
+        'tournes': df_tournees,
+        'non_servis': df_non_servis,
+        'flotte_nb': suivi_flotte_max
+    }
+
+```
