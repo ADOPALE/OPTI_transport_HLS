@@ -1336,22 +1336,94 @@ def construire_effectif_minimal_type_robuste(missions, shifts, v_type, depot, ma
     return None, None, impossibles
 
 
+def secourir_flux_de_releve(postes, impossibles, shifts, depot, matrice, matrice_dist,
+                            params):
+    """Décale exceptionnellement un poste matin creux pour absorber un flux de relève.
+
+    La boucle ne traite que les missions infaisables dans les deux shifts fixes mais
+    faisables dans un poste matin décalé. Elle ne crée aucun poste supplémentaire et
+    conserve assez de postes matin terminés à 13h30 pour assurer toutes les relèves.
+    """
+    if not postes or not impossibles:
+        return postes, impossibles
+    amplitude = float(params.get("rh", {}).get("amplitude_totale", 450))
+    starts = params.get(
+        "decalages_secours_matin", [420, 450, 480, 510, 540])  # 07h00 à 09h00
+    starts = sorted({to_min(s) for s in starts if to_min(s) > shifts[0][0]})
+    seuil_occ = float(params.get("occupation_max_poste_decalable", 0.75))
+    postes = list(postes)
+    restants = list(impossibles)
+
+    for mission in list(restants):
+        options = []
+        secours_faisable = False
+        for start in starts:
+            shift_decale = (start, start + amplitude)
+            # Garde : ce secours est réservé aux vrais blocages de relève.
+            singleton = _initialiser_poste_fixe(
+                mission.v_type, depot, shift_decale, 0, 1, params)
+            if _construire_poste_fixe_depuis_ordre(
+                    singleton, [mission], shift_decale, depot, matrice, matrice_dist,
+                    params) is None:
+                continue
+            secours_faisable = True
+
+            matin = [p for p in postes if p.v_type == mission.v_type and p.shift == 0]
+            apres_midi = [p for p in postes if p.v_type == mission.v_type and p.shift == 1]
+            for source in sorted(matin, key=lambda p: (p.occupation(), len(p.missions))):
+                if source.occupation() > seuil_occ:
+                    continue
+                for pos in range(len(source.missions) + 1):
+                    ordre = source.missions[:pos] + [mission] + source.missions[pos:]
+                    rebuilt = _construire_poste_fixe_depuis_ordre(
+                        source, ordre, shift_decale, depot, matrice, matrice_dist, params)
+                    if rebuilt is None:
+                        continue
+                    # Chaque poste AM doit pouvoir reprendre un véhicule libéré avant 13h30.
+                    matin_libres = sum(
+                        1 for p in matin
+                        if p is not source and p.h_fin <= shifts[1][0] + 1e-6)
+                    if rebuilt.h_fin <= shifts[1][0] + 1e-6:
+                        matin_libres += 1
+                    if matin_libres < len(apres_midi):
+                        continue
+                    delta = _cout_operationnel(rebuilt) - _cout_operationnel(source)
+                    options.append((
+                        round(delta, 2), round(source.occupation(), 3), start,
+                        source, rebuilt))
+        if options:
+            _, _, _, source, rebuilt = min(options, key=lambda x: x[:3])
+            postes[postes.index(source)] = rebuilt
+            restants.remove(mission)
+        elif secours_faisable:
+            mission.secours_releve_teste = True
+    return postes, restants
+
+
 def affecter_vehicules_shifts_fixes(postes):
-    """Apparie le poste matin et le poste après-midi de même rang."""
+    """Apparie les postes AM aux véhicules réellement libérés par les postes matin."""
     from collections import defaultdict
     par_type_shift = defaultdict(lambda: defaultdict(list))
     for p in postes:
         par_type_shift[p.v_type][p.shift].append(p)
     nb = {}
     for vt, shifts_type in par_type_shift.items():
-        matin = sorted(shifts_type.get(0, []), key=lambda p: p.id)
-        apres_midi = sorted(shifts_type.get(1, []), key=lambda p: p.id)
-        effectif = max(len(matin), len(apres_midi))
-        nb[vt] = effectif
+        matin = sorted(shifts_type.get(0, []), key=lambda p: (p.h_debut, p.id))
+        apres_midi = sorted(shifts_type.get(1, []), key=lambda p: (p.h_debut, p.id))
         for i, p in enumerate(matin):
             p.id_vehicule = f"{vt}_VEH{i + 1:02d}"
-        for i, p in enumerate(apres_midi):
-            p.id_vehicule = f"{vt}_VEH{i + 1:02d}"
+        disponibles = list(matin)
+        effectif = len(matin)
+        for p in apres_midi:
+            compatibles = [m for m in disponibles if m.h_fin <= p.h_debut + 1e-6]
+            if compatibles:
+                source = max(compatibles, key=lambda m: m.h_fin)
+                p.id_vehicule = source.id_vehicule
+                disponibles.remove(source)
+            else:
+                effectif += 1
+                p.id_vehicule = f"{vt}_VEH{effectif:02d}"
+        nb[vt] = effectif
     return nb
 
 
@@ -1888,7 +1960,7 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     # --- multi-start ---
     budget = float(budget_s)
     deadline = t0 + budget
-    meilleure, meilleur_score, meilleur_nbveh = None, None, None
+    meilleure, meilleur_score, meilleur_nbveh, meilleure_non_servis = None, None, None, None
     n_starts = max(1, int(n_starts))
 
     for start in range(n_starts):
@@ -1897,6 +1969,7 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
         rng = random.Random(1234 + start) if start > 0 else None
         _prog(0.15 + 0.7 * start / n_starts, f"Construction & optimisation (essai {start + 1}/{n_starts})…")
         postes = []
+        non_servis_start = list(non_servis)
         construction_ok = True
         for v_type, liste in par_type.items():
             construits, _n, impossibles = construire_effectif_minimal_type_robuste(
@@ -1904,25 +1977,33 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
             if construits is None:
                 construction_ok = False
                 break
+            construits, impossibles = secourir_flux_de_releve(
+                construits, impossibles, shifts, depot, matrice, mdist, params_logistique)
             postes.extend(construits)
-            if start == 0:
-                for m in impossibles:
-                    for (fid, o, d, c, q) in m.composantes:
-                        non_servis.append({
-                            "flux_id": fid, "origine": o, "destination": d,
-                            "contenant": c,
-                            "raison": "Mission incompatible avec les deux postes fixes",
-                            "contrainte": "Fenêtre horaire / durée / pause à vérifier",
-                        })
+            for m in impossibles:
+                secours_teste = getattr(m, "secours_releve_teste", False)
+                for (fid, o, d, c, q) in m.composantes:
+                    non_servis_start.append({
+                        "flux_id": fid, "origine": o, "destination": d,
+                        "contenant": c,
+                        "raison": ("Secours relève testé, sans poste matin compatible"
+                                   if secours_teste
+                                   else "Mission incompatible avec les postes testés"),
+                        "contrainte": ("Aucun poste décalable sans conflit de véhicule"
+                                       if secours_teste
+                                       else "Fenêtre horaire / durée / pause à vérifier"),
+                    })
         if not construction_ok:
             continue
         nb_veh = affecter_vehicules_shifts_fixes(postes)
-        score = _score_solution(postes, nb_veh)
+        score = (len(non_servis_start),) + _score_solution(postes, nb_veh)
         if meilleur_score is None or score < meilleur_score:
             meilleure, meilleur_score, meilleur_nbveh = postes, score, nb_veh
+            meilleure_non_servis = non_servis_start
 
     postes = meilleure or []
     nb_vehicules = meilleur_nbveh or {}
+    non_servis = meilleure_non_servis if meilleure_non_servis is not None else non_servis
     _prog(0.92, "Calcul des indicateurs…")
 
     bins, conc = courbe_concurrence(postes)
@@ -1939,11 +2020,14 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     missions_servies = {m.id for p in postes for m in p.missions}
     postes_matin = sum(p.shift == 0 for p in postes)
     postes_apres_midi = sum(p.shift == 1 for p in postes)
+    postes_decales = sum(p.shift == 0 and abs(p.h_debut - shifts[0][0]) > 1e-6
+                         for p in postes)
     metriques = {
         "nb_missions": len(missions_servies),
         "nb_postes": len(postes),
         "nb_postes_matin": postes_matin,
         "nb_postes_apres_midi": postes_apres_midi,
+        "nb_postes_matin_decales": postes_decales,
         "nb_vehicules_total": sum(nb_vehicules.values()),
         "nb_vehicules_par_type": nb_vehicules,
         "pic_vehicules_simultanes": pic,
