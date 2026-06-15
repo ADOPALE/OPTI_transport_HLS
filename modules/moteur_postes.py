@@ -38,6 +38,7 @@ from __future__ import annotations
 import math
 import random
 import time as _time
+import itertools
 from dataclasses import dataclass, field
 from datetime import time, datetime, timedelta
 
@@ -272,9 +273,13 @@ class Poste:
         return sum(e.duree for e in self.etapes if e.type == "MARGE")
 
     def occupation(self):
-        """Taux d'occupation utile = (chargé + roulage à vide) / amplitude."""
+        """Temps opérationnel / durée exacte du poste."""
         a = self.amplitude
-        return (self.temps_charge() + self.temps_vide()) / a if a > 0 else 0.0
+        operationnel = sum(
+            e.duree for e in self.etapes
+            if e.type in ("MISSION", "APPROCHE_VIDE", "RETOUR_VIDE", "MARGE", "NETTOYAGE")
+        )
+        return operationnel / a if a > 0 else 0.0
 
     def taux_charge_roulage(self):
         roul = self.temps_charge() + self.temps_vide()
@@ -301,7 +306,8 @@ def affecter_vehicule_capacitaire(orig, dest, cont, v_types, caps, acces):
 
 
 def choisir_vehicule_groupe(sites, contenants, surface_load, count_load,
-                            v_types, caps, acces, floor, taux):
+                            v_types, caps, acces, floor, taux,
+                            poids_load=0.0, poids_max=None):
     """
     Pour un groupe (reliquat / tournée) : véhicule compatible avec TOUS les sites
     et TOUS les contenants, le MIEUX REMPLI possible (taux de surface au sol le
@@ -314,6 +320,10 @@ def choisir_vehicule_groupe(sites, contenants, surface_load, count_load,
             continue
         if any(caps.get(vt, {}).get(c, 0) <= 0 for c in contenants):
             continue
+        if len(set(contenants)) == 1 and count_load > caps.get(vt, {}).get(contenants[0], 0):
+            continue
+        if poids_max is not None and poids_load > poids_max.get(vt, 0.0) + 1e-9:
+            continue
         compatibles.append(vt)
     if not compatibles:
         return None
@@ -322,12 +332,83 @@ def choisir_vehicule_groupe(sites, contenants, surface_load, count_load,
     if sous_seuil:
         # le mieux rempli = plus petit plancher adéquat
         return max(sous_seuil, key=lambda vt: surface_load / floor[vt])
-    # sinon : le plus petit qui tient physiquement la charge
-    tiennent = [vt for vt in compatibles if surface_load <= floor[vt] + 1e-9]
-    if tiennent:
-        return max(tiennent, key=lambda vt: surface_load / floor[vt])
-    # dernier recours : le plus capacitaire
-    return max(compatibles, key=lambda vt: floor[vt])
+    # Le taux maximal paramétré est une contrainte dure.
+    return None
+
+
+def _meilleur_ordre_sites(depart, sites, arrivee, matrice, max_exact=8):
+    """Ordre de visite le plus court. Exact localement, puis insertion dynamique."""
+    sites = list(dict.fromkeys(sites))
+    if not sites:
+        return [], duree_trajet(matrice, depart, arrivee)
+
+    def longueur(ordre):
+        chemin = [depart] + list(ordre) + [arrivee]
+        return sum(duree_trajet(matrice, chemin[i], chemin[i + 1])
+                   for i in range(len(chemin) - 1))
+
+    if len(sites) <= max_exact:
+        ordre = min(itertools.permutations(sites), key=longueur)
+        return list(ordre), longueur(ordre)
+
+    ordre = []
+    for site in sites:
+        candidats = [ordre[:i] + [site] + ordre[i:] for i in range(len(ordre) + 1)]
+        ordre = min(candidats, key=longueur)
+    return ordre, longueur(ordre)
+
+
+def _ordonner_groupe(tour, sens, matrice, df_vehicules, df_sites, col_quai, col_lib,
+                     v_type, duree_max):
+    """
+    Recalcule la route après chaque insertion et calibre la fenêtre de départ
+    permettant de respecter chaque sous-mission.
+    """
+    if not tour or not v_type:
+        return None
+    t_quai, t_sans, t_avec = _params_manut(df_vehicules, v_type)
+
+    if sens == "DISTRIB":
+        commun = tour[0]["orig"]
+        ordre_sites, _ = _meilleur_ordre_sites(
+            commun, [r["dest"] for r in tour], tour[0]["dest"], matrice)
+        rang = {s: i for i, s in enumerate(ordre_sites)}
+        ordonnes = sorted(tour, key=lambda r: rang[r["dest"]])
+        t = t_quai + sum(r["qte"] for r in ordonnes) * (
+            t_avec if _a_quai(df_sites, col_quai, col_lib, commun) else t_sans)
+        pos = commun
+        fins = {}
+        for r in ordonnes:
+            t += duree_trajet(matrice, pos, r["dest"]) + t_quai
+            t += r["qte"] * (t_avec if _a_quai(df_sites, col_quai, col_lib, r["dest"]) else t_sans)
+            fins[id(r)] = t
+            pos = r["dest"]
+        earliest = max(r["h_dispo"] for r in ordonnes)
+        latest = min(r["h_dead"] - fins[id(r)] for r in ordonnes)
+    else:
+        commun = tour[0]["dest"]
+        ordre_sites, _ = _meilleur_ordre_sites(
+            tour[0]["orig"], [r["orig"] for r in tour], commun, matrice)
+        rang = {s: i for i, s in enumerate(ordre_sites)}
+        ordonnes = sorted(tour, key=lambda r: rang[r["orig"]])
+        t = 0.0
+        pos = ordonnes[0]["orig"]
+        earliest = 0.0
+        for r in ordonnes:
+            if r["orig"] != pos:
+                t += duree_trajet(matrice, pos, r["orig"])
+            t += t_quai
+            t += r["qte"] * (t_avec if _a_quai(df_sites, col_quai, col_lib, r["orig"]) else t_sans)
+            earliest = max(earliest, r["h_dispo"] - t)
+            pos = r["orig"]
+        t += duree_trajet(matrice, pos, commun) + t_quai
+        t += sum(r["qte"] for r in ordonnes) * (
+            t_avec if _a_quai(df_sites, col_quai, col_lib, commun) else t_sans)
+        latest = min(r["h_dead"] - t for r in ordonnes)
+
+    if t > duree_max + 1e-9 or latest < earliest - 1e-9:
+        return None
+    return ordonnes, max(0.0, earliest), latest + t, t
 
 
 # =====================================================================
@@ -461,7 +542,10 @@ def consolider_missions(df_jour, df_vehicules, df_contenants, df_sites, matrice,
         ps = str(flux.get("Type (propre/sale)", flux.get("Sale / propre", "Propre"))).strip().upper()
         fsupport = str(flux.get("Fonction Support associée", "")).strip()
         try:
-            qte = int(float(flux.get("Quantite_du_jour", 0)))
+            qte_brute = float(flux.get("Quantite_du_jour", 0))
+            # Tout flux positif est obligatoire : une quantité fractionnaire
+            # représente au minimum un contenant / passage à transporter.
+            qte = int(math.ceil(qte_brute - 1e-9))
         except (ValueError, TypeError):
             qte = 0
         if qte <= 0:
@@ -528,8 +612,14 @@ def consolider_missions(df_jour, df_vehicules, df_contenants, df_sites, matrice,
                 s_u, poids_cont[cont], floor_cap))
         reste = qte % capa_utile
         if reste > 0:
+            mixte = str(flux.get("Transport mixte possible (OUI / NON)", "OUI")).strip().upper()
+            exclusions = str(flux.get("Règles d'exclusions si transport mixte", "")).strip().upper()
+            tournee_imposee = str(
+                flux.get("Nom de la tournée mutualisée le cas échéant", "")).strip()
             reliquats.append(dict(flux_id=idx, orig=orig, dest=dest, cont=cont, ps=ps, qte=reste,
-                                  fsupport=fsupport, h_dispo=h_dispo, h_dead=h_dead))
+                                  fsupport=fsupport, h_dispo=h_dispo, h_dead=h_dead,
+                                  mixte=mixte, exclusions=exclusions,
+                                  tournee_imposee=tournee_imposee))
 
     # --- reliquats ---
     if not autoriser_tournees:
@@ -599,9 +689,10 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
     #    ET avec des fenêtres horaires COMPATIBLES (sinon on scinde)
     par_od = defaultdict(list)
     for r in reliquats:
-        par_od[(r["orig"], r["dest"], r["cont"], r["ps"])].append(r)
+        iso = r["flux_id"] if r.get("mixte") == "NON" else ""
+        par_od[(r["orig"], r["dest"], r["cont"], r["ps"], iso)].append(r)
     restants = []
-    for (orig, dest, cont, ps), grp in par_od.items():
+    for (orig, dest, cont, ps, _iso), grp in par_od.items():
         s_u = surf_cont[cont]
         v0 = choisir_vehicule_groupe([orig, dest], [cont], s_u, 1, v_types, caps, acces, floor, taux)
         cap_surface = taux * floor[v0] if v0 else taux * max(floor.values())
@@ -612,7 +703,10 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
             if c:
                 restants.append(dict(orig=orig, dest=dest, cont=cont, ps=ps, qte=c["q"],
                                      h_dispo=c["hd"], h_dead=c["hf"], comp=c["comp"],
-                                     fsupport=grp[0]["fsupport"]))
+                                     fsupport=grp[0]["fsupport"],
+                                     mixte=grp[0].get("mixte", "OUI"),
+                                     exclusions=grp[0].get("exclusions", ""),
+                                     tournee_imposee=grp[0].get("tournee_imposee", "")))
         for r in grp:
             if cur is None:
                 cur = dict(q=r["qte"], hd=r["h_dispo"], hf=r["h_dead"],
@@ -637,17 +731,20 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
         v = choisir_vehicule_groupe([r["orig"], r["dest"]], [r["cont"]], r["qte"] * s_u, r["qte"],
                                     v_types, caps, acces, floor, taux)
         comp = r.get("comp") or [(r.get("flux_id"), r["orig"], r["dest"], r["cont"], r["qte"])]
-        missions.append(construire_mission_mono(
+        mission = construire_mission_mono(
             f"M{cpt}", v, r["ps"], r["orig"], r["dest"], r["qte"], r["cont"], r["cont"],
             r.get("fsupport", ""), comp[0][0], r["h_dispo"], r["h_dead"], matrice, matrice_dist,
-            df_vehicules, df_sites, col_quai, col_lib, s_u, poids_cont[r["cont"]], floor[v]))
+            df_vehicules, df_sites, col_quai, col_lib, s_u, poids_cont[r["cont"]], floor[v])
+        mission.composantes = comp
+        missions.append(mission)
 
     # 2) DISTRIBUTION : même origine + même contenant + même ps
     par_orig = defaultdict(list)
     for r in restants:
-        par_orig[(r["orig"], r["cont"], r["ps"])].append(r)
+        iso = r["comp"][0][0] if r.get("mixte") == "NON" else ""
+        par_orig[(r["orig"], r["cont"], r["ps"], iso)].append(r)
     encore = []
-    for (orig, cont, ps), grp in par_orig.items():
+    for (orig, cont, ps, _iso), grp in par_orig.items():
         s_u = surf_cont[cont]
         grp.sort(key=lambda r: -r["qte"])
         i = 0
@@ -660,11 +757,16 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
             while j < len(grp):
                 cand = grp[j]
                 new_sites = sites | {cand["dest"]}
-                ordre = [orig] + [r["dest"] for r in tour + [cand]]
-                if ((q + cand["qte"]) * s_u <= cap_s + 1e-9
-                        and _tournee_faisable(tour + [cand], ordre, q + cand["qte"],
-                                              matrice, duree_max_tournee)):
-                    tour.append(cand); q += cand["qte"]; sites = new_sites
+                q_cand = q + cand["qte"]
+                v_cand = choisir_vehicule_groupe(
+                    list(new_sites), [cont], q_cand * s_u, q_cand,
+                    v_types, caps, acces, floor, taux)
+                route_cand = _ordonner_groupe(
+                    tour + [cand], "DISTRIB", matrice, df_vehicules, df_sites,
+                    col_quai, col_lib, v_cand, duree_max_tournee)
+                if v_cand is not None and route_cand is not None:
+                    tour.append(cand); q = q_cand; sites = new_sites
+                    v = v_cand
                 j += 1
             for r in tour:
                 grp.remove(r)
@@ -672,11 +774,19 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
                 cpt += 1
                 vfin = choisir_vehicule_groupe(list(sites), [cont], q * s_u, q,
                                                v_types, caps, acces, floor, taux)
-                livr = [(r["dest"], r["qte"]) for r in tour]
-                comp = [c for r in tour for c in r["comp"]]
+                route = _ordonner_groupe(
+                    tour, "DISTRIB", matrice, df_vehicules, df_sites,
+                    col_quai, col_lib, vfin, duree_max_tournee)
+                if route is None:
+                    encore.extend(tour)
+                    i = 0
+                    continue
+                tour_ord, h_debut, h_fin, _ = route
+                livr = [(r["dest"], r["qte"]) for r in tour_ord]
+                comp = [c for r in tour_ord for c in r["comp"]]
                 missions.append(construire_mission_tournee(
-                    f"M{cpt}", vfin, ps, [(orig, q)], livr, cont, cont, tour[0]["fsupport"],
-                    comp, max(r["h_dispo"] for r in tour), min(r["h_dead"] for r in tour),
+                    f"M{cpt}", vfin, ps, [(orig, q)], livr, cont, cont, tour_ord[0]["fsupport"],
+                    comp, h_debut, h_fin,
                     matrice, matrice_dist, df_vehicules, df_sites, col_quai, col_lib, "DISTRIB",
                     s_u, poids_cont[cont], floor[vfin]))
             else:
@@ -686,9 +796,10 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
     # 3) RAMASSAGE : même destination + même contenant + même ps
     par_dest = defaultdict(list)
     for r in encore:
-        par_dest[(r["dest"], r["cont"], r["ps"])].append(r)
+        iso = r["comp"][0][0] if r.get("mixte") == "NON" else ""
+        par_dest[(r["dest"], r["cont"], r["ps"], iso)].append(r)
     solitaires = []
-    for (dest, cont, ps), grp in par_dest.items():
+    for (dest, cont, ps, _iso), grp in par_dest.items():
         s_u = surf_cont[cont]
         grp.sort(key=lambda r: -r["qte"])
         i = 0
@@ -701,11 +812,16 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
             while j < len(grp):
                 cand = grp[j]
                 new_sites = sites | {cand["orig"]}
-                ordre = [r["orig"] for r in tour + [cand]] + [dest]
-                if ((q + cand["qte"]) * s_u <= cap_s + 1e-9
-                        and _tournee_faisable(tour + [cand], ordre, q + cand["qte"],
-                                              matrice, duree_max_tournee)):
-                    tour.append(cand); q += cand["qte"]; sites = new_sites
+                q_cand = q + cand["qte"]
+                v_cand = choisir_vehicule_groupe(
+                    list(new_sites), [cont], q_cand * s_u, q_cand,
+                    v_types, caps, acces, floor, taux)
+                route_cand = _ordonner_groupe(
+                    tour + [cand], "RAMASSE", matrice, df_vehicules, df_sites,
+                    col_quai, col_lib, v_cand, duree_max_tournee)
+                if v_cand is not None and route_cand is not None:
+                    tour.append(cand); q = q_cand; sites = new_sites
+                    v = v_cand
                 j += 1
             for r in tour:
                 grp.remove(r)
@@ -713,11 +829,19 @@ def _consolider_reliquats(reliquats, missions, cpt, matrice, matrice_dist,
                 cpt += 1
                 vfin = choisir_vehicule_groupe(list(sites), [cont], q * s_u, q,
                                                v_types, caps, acces, floor, taux)
-                coll = [(r["orig"], r["qte"]) for r in tour]
-                comp = [c for r in tour for c in r["comp"]]
+                route = _ordonner_groupe(
+                    tour, "RAMASSE", matrice, df_vehicules, df_sites,
+                    col_quai, col_lib, vfin, duree_max_tournee)
+                if route is None:
+                    solitaires.extend(tour)
+                    i = 0
+                    continue
+                tour_ord, h_debut, h_fin, _ = route
+                coll = [(r["orig"], r["qte"]) for r in tour_ord]
+                comp = [c for r in tour_ord for c in r["comp"]]
                 missions.append(construire_mission_tournee(
-                    f"M{cpt}", vfin, ps, coll, [(dest, q)], cont, cont, tour[0]["fsupport"],
-                    comp, max(r["h_dispo"] for r in tour), min(r["h_dead"] for r in tour),
+                    f"M{cpt}", vfin, ps, coll, [(dest, q)], cont, cont, tour_ord[0]["fsupport"],
+                    comp, h_debut, h_fin,
                     matrice, matrice_dist, df_vehicules, df_sites, col_quai, col_lib, "RAMASSE",
                     s_u, poids_cont[cont], floor[vfin]))
             else:
@@ -902,56 +1026,52 @@ def _meilleur_successeur(poste, restants, matrice, depot, s_end, t_fin, pause_du
 def construire_postes_creneau(missions, shift, idx_shift, v_type, depot, matrice, matrice_dist,
                               params, num0=0, rng=None):
     s_start, s_end = shift
-    rh = params.get("rh", {})
-    duree_poste = s_end - s_start
-    t_prise = float(rh.get("temps_fixes_prise", 20))
-    t_fin = float(rh.get("temps_fixes_fin", 15))
-    pause_duree = float(rh.get("pause", 30))
-    marge_inter = float(params.get("marge_inter_job", 0))
-    jitter = 6.0 if rng is not None else 0.0
-    pause_seuil = s_start + t_prise + (duree_poste - t_prise - t_fin) / 2
-
+    amplitude = s_end - s_start
     postes = []
-    restants = sorted(missions, key=lambda m: (m.h_dispo, m.h_deadline))
-    num = num0
-    while restants:
-        num += 1
-        p = Poste(id=f"{v_type}_S{idx_shift + 1}_{num:02d}", v_type=v_type, depot=depot)
-        p.shift = idx_shift; p.h_debut = s_start; p.position = depot; p.t_curr = s_start
-        p.pause_faite = False
-        p.etapes.append(Etape("PRISE", s_start, s_start + t_prise, "Prise de poste",
-                              site_debut=depot, site_fin=depot))
-        p.t_curr = s_start + t_prise
+    ordre = list(missions)
+    if rng is not None:
+        rng.shuffle(ordre)
+    ordre.sort(key=lambda m: (m.h_deadline - m.h_dispo, m.h_deadline, -m.duree))
 
-        while True:
-            if (not p.pause_faite) and p.t_curr >= pause_seuil:
-                if p.position == depot:
-                    _placer_pause(p, depot, matrice, matrice_dist, pause_duree); continue
-                cand = _meilleur_successeur(p, restants, matrice, depot, s_end, t_fin, pause_duree,
-                                            marge_inter, vers_depot=True, rng=rng, jitter=jitter)
-                if cand is not None:
-                    restants.remove(cand)
-                    _placer_mission(p, cand, matrice, matrice_dist, marge_inter)
-                    _placer_pause(p, depot, matrice, matrice_dist, pause_duree); continue
-                _placer_pause(p, depot, matrice, matrice_dist, pause_duree); continue
-            cand = _meilleur_successeur(p, restants, matrice, depot, s_end, t_fin, pause_duree,
-                                        marge_inter, rng=rng, jitter=jitter)
-            if cand is None:
-                if not p.missions:
-                    seed = restants.pop(0)
-                    _placer_mission(p, seed, matrice, matrice_dist, marge_inter)
-                    continue
-                break
-            restants.remove(cand)
-            _placer_mission(p, cand, matrice, matrice_dist, marge_inter)
+    def nouveau_poste(numero):
+        p = Poste(id=f"{v_type}_S{idx_shift + 1}_{numero:02d}",
+                  v_type=v_type, depot=depot, h_debut=s_start, shift=idx_shift)
+        return p
 
-        _cloturer_poste(p, depot, matrice, matrice_dist, t_fin, pause_duree)
-        postes.append(p)
+    for mission in ordre:
+        meilleur = None
+        for p in postes:
+            for pos in range(len(p.missions) + 1):
+                sequence = p.missions[:pos] + [mission] + p.missions[pos:]
+                cand = _reconstruire_poste(
+                    p, sequence, depot, matrice, matrice_dist, params, start=s_start)
+                if (cand.h_fin <= s_end + 1e-6
+                        and abs(cand.amplitude - amplitude) <= 1e-6
+                        and _missions_ok(cand, sequence)):
+                    # Remplir d'abord les postes existants et limiter les attentes.
+                    key = (-cand.occupation(), cand.temps_attente(), pos)
+                    if meilleur is None or key < meilleur[0]:
+                        meilleur = (key, p, cand)
+        if meilleur is not None:
+            _, cible, cand = meilleur
+            cible.etapes = cand.etapes
+            cible.missions = cand.missions
+            cible.h_debut = cand.h_debut
+            cible.h_fin = cand.h_fin
+            cible.position = cand.position
+            cible.pause_faite = cand.pause_faite
+            continue
+
+        p = nouveau_poste(num0 + len(postes) + 1)
+        cand = _reconstruire_poste(
+            p, [mission], depot, matrice, matrice_dist, params, start=s_start)
+        postes.append(cand)
     return postes
 
 
-def _cloturer_poste(poste, depot, matrice, matrice_dist, t_fin, pause_duree):
-    """Retour dépôt + pause si non prise + fin. PAS de bourrage : durée <= amplitude."""
+def _cloturer_poste(poste, depot, matrice, matrice_dist, t_fin, pause_duree,
+                    cible_fin=None):
+    """Retour dépôt + pause + temps disponible pour une durée de poste exacte."""
     if poste.position != depot:
         d = duree_trajet(matrice, poste.position, depot)
         if d > 0.1:
@@ -965,6 +1085,14 @@ def _cloturer_poste(poste, depot, matrice, matrice_dist, t_fin, pause_duree):
         poste.etapes.append(Etape("PAUSE", poste.t_curr, poste.t_curr + pause_duree,
                                   "Pause obligatoire (au dépôt)", site_debut=depot, site_fin=depot))
         poste.t_curr += pause_duree; poste.pause_faite = True
+    if cible_fin is not None:
+        debut_fin = cible_fin - t_fin
+        if poste.t_curr < debut_fin - 1e-6:
+            poste.etapes.append(Etape(
+                "DISPONIBLE", poste.t_curr, debut_fin,
+                "Temps disponible jusqu'à la clôture du poste",
+                site_debut=depot, site_fin=depot))
+            poste.t_curr = debut_fin
     poste.etapes.append(Etape("FIN", poste.t_curr, poste.t_curr + t_fin, "Clôture / fin de poste",
                               site_debut=depot, site_fin=depot))
     poste.t_curr += t_fin
@@ -983,7 +1111,7 @@ def affecter_vehicules_physiques(postes, params):
 def _apparier_simple(postes, params):
     rh = params.get("rh", {})
     plage = to_min(rh.get("h_fin_max"), 1260) - to_min(rh.get("h_prise_min"), 360)
-    releve = float(params.get("temps_releve", rh.get("temps_releve", 15)))
+    releve = float(params.get("temps_releve", rh.get("temps_releve", 0)))
     from collections import defaultdict
     par_type = defaultdict(list)
     for p in postes:
@@ -1011,9 +1139,17 @@ def _apparier_simple(postes, params):
 def _feas_starts(p, depot, matrice, matrice_dist, params, h0, h1, amplitude, pas=15):
     miss = list(p.missions)
     feas = []
-    for s in range(int(h0), int(h1), pas):
+    starts_releve = [int(h0)]
+    if h0 + amplitude <= h1 + 1e-6:
+        starts_releve.append(int(h0 + amplitude))
+    starts = starts_releve + [
+        s for s in range(int(h0), int(h1 - amplitude) + 1, pas)
+        if s not in starts_releve
+    ]
+    for s in starts:
         tmp = _reconstruire_poste(p, miss, depot, matrice, matrice_dist, params, start=s)
-        if tmp.amplitude <= amplitude + 1e-6 and _missions_ok(tmp, miss):
+        if (abs(tmp.amplitude - amplitude) <= 1e-6
+                and tmp.h_fin <= h1 + 1e-6 and _missions_ok(tmp, miss)):
             feas.append((s, tmp))
     if not feas:
         feas = [(p.h_debut, _reconstruire_poste(p, miss, depot, matrice, matrice_dist, params))]
@@ -1027,7 +1163,7 @@ def _match_fleet(timing, params):
     from collections import defaultdict
     rh = params.get("rh", {})
     plage = to_min(rh.get("h_fin_max"), 1260) - to_min(rh.get("h_prise_min"), 360)
-    releve = float(params.get("temps_releve", rh.get("temps_releve", 15)))
+    releve = float(params.get("temps_releve", rh.get("temps_releve", 0)))
     par_type = defaultdict(list)
     for p, tmp in timing:
         par_type[p.v_type].append((p, tmp))
@@ -1066,7 +1202,7 @@ def planifier_flotte(postes, depot, matrice, matrice_dist, params, pas=15):
     h0 = int(to_min(rh.get("h_prise_min"), 360))
     h1 = int(to_min(rh.get("h_fin_max"), 1260))
     amplitude = float(rh.get("amplitude_totale", 450))
-    releve = float(params.get("temps_releve", rh.get("temps_releve", 15)))
+    releve = float(params.get("temps_releve", rh.get("temps_releve", 0)))
 
     par_type = defaultdict(list)
     for p in postes:
@@ -1152,7 +1288,8 @@ def _reconstruire_poste(poste, missions, depot, matrice, matrice_dist, params, s
         if (not p.pause_faite) and p.t_curr >= pause_seuil:
             _placer_pause(p, depot, matrice, matrice_dist, pause_duree)
         _placer_mission(p, m, matrice, matrice_dist, marge_inter)
-    _cloturer_poste(p, depot, matrice, matrice_dist, t_fin, pause_duree)
+    _cloturer_poste(p, depot, matrice, matrice_dist, t_fin, pause_duree,
+                    cible_fin=s_start + amplitude)
     return p
 
 
@@ -1176,14 +1313,22 @@ def recherche_locale(postes, depot, matrice, matrice_dist, params, deadline_t):
             ok = True
             etat = {c: list(c.missions) for c in cibles}
             for m in source.missions:
-                place = False
+                meilleur = None
                 for c in cibles:
-                    tmp = _reconstruire_poste(c, etat[c] + [m], depot, matrice, matrice_dist, params)
-                    if tmp.amplitude <= amplitude + 1e-6 and _missions_ok(tmp, etat[c] + [m]):
-                        etat[c].append(m); plan[c] = tmp; place = True
-                        break
-                if not place:
+                    for pos in range(len(etat[c]) + 1):
+                        sequence = etat[c][:pos] + [m] + etat[c][pos:]
+                        tmp = _reconstruire_poste(
+                            c, sequence, depot, matrice, matrice_dist, params)
+                        if (abs(tmp.amplitude - amplitude) <= 1e-6
+                                and _missions_ok(tmp, sequence)):
+                            key = (-tmp.occupation(), tmp.temps_attente())
+                            if meilleur is None or key < meilleur[0]:
+                                meilleur = (key, c, sequence, tmp)
+                if meilleur is None:
                     ok = False; break
+                _, c, sequence, tmp = meilleur
+                etat[c] = sequence
+                plan[c] = tmp
             if ok:
                 for c, miss in etat.items():
                     if c in plan or miss != list(c.missions):
@@ -1250,14 +1395,15 @@ def retemporiser(postes, depot, matrice, matrice_dist, params, pas=15):
 
 
 def _score_solution(postes, nb_vehicules):
-    """Clé lexicographique : (flotte, nb_postes, -homogénéité).
-    Homogénéité = -variance des taux d'occupation (plus c'est homogène, mieux)."""
+    """Objectif lexicographique : flotte, postes, postes <80%, déficit, variance."""
     flotte = sum(nb_vehicules.values())
     nb_postes = len(postes)
     occ = [p.occupation() for p in postes] or [0]
     moy = sum(occ) / len(occ)
     var = sum((o - moy) ** 2 for o in occ) / len(occ)
-    return (flotte, nb_postes, var)
+    sous_80 = sum(1 for o in occ if o < 0.80 - 1e-9)
+    deficit = sum(max(0.0, 0.80 - o) for o in occ)
+    return (flotte, nb_postes, sous_80, round(deficit, 6), var)
 
 
 # =====================================================================
@@ -1298,6 +1444,56 @@ def concurrence_quais(postes):
             cur += d; pic = max(pic, cur)
         pics[site] = pic
     return pics
+
+
+def auditer_solution(postes, missions, non_servis, params, nb_flux_attendus=None):
+    """Contrôle indépendant des contraintes du résultat final."""
+    rh = params.get("rh", {})
+    amplitude = float(rh.get("amplitude_totale", 450))
+    taux_max = float(params.get("securite_remplissage", 0.85))
+    taux_min_poste = float(params.get("occupation_min_poste", 0.80))
+    anomalies = []
+
+    for p in postes:
+        if abs(p.amplitude - amplitude) > 1e-6:
+            anomalies.append(f"{p.id}: amplitude {p.amplitude:.1f} min au lieu de {amplitude:.1f}")
+        for e in p.etapes:
+            if e.type == "MISSION" and e.mission and e.h_fin > e.mission.h_deadline + 1e-6:
+                anomalies.append(f"{p.id}/{e.mission.id}: deadline dépassée")
+
+    for m in missions:
+        if m.fill > taux_max + 1e-6:
+            anomalies.append(
+                f"{m.id}: occupation véhicule {m.fill:.1%} > maximum {taux_max:.1%}")
+
+    from collections import defaultdict
+    par_vehicule = defaultdict(list)
+    for p in postes:
+        par_vehicule[p.id_vehicule].append((p.h_debut, p.h_fin, p.id))
+    for vid, periodes in par_vehicule.items():
+        periodes.sort()
+        for i in range(len(periodes) - 1):
+            if periodes[i][1] > periodes[i + 1][0] + 1e-6:
+                anomalies.append(f"{vid}: chevauchement {periodes[i][2]} / {periodes[i + 1][2]}")
+
+    couverts = {c[0] for m in missions for c in m.composantes}
+    non_couverts = {ns.get("flux_id") for ns in non_servis}
+    if nb_flux_attendus is not None:
+        absents = set(range(nb_flux_attendus)) - couverts - non_couverts
+        if absents:
+            anomalies.append(f"{len(absents)} flux absents du résultat")
+
+    occupations = [p.occupation() for p in postes]
+    sous_80 = [o for o in occupations if o < taux_min_poste - 1e-9]
+    return {
+        "valide": not anomalies and not non_servis,
+        "anomalies": anomalies,
+        "nb_anomalies": len(anomalies),
+        "nb_postes_sous_80": len(sous_80),
+        "deficit_occupation_sous_80": round(sum(taux_min_poste - o for o in sous_80), 4),
+        "taux_occupation_max_vehicule": taux_max,
+        "tous_flux_obligatoires_servis": len(non_servis) == 0,
+    }
 
 
 def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
@@ -1417,6 +1613,8 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     km_vide = sum(e.distance for p in postes for e in p.etapes
                   if e.type in ("APPROCHE_VIDE", "RETOUR_VIDE"))
     occ = [p.occupation() for p in postes]
+    audit = auditer_solution(
+        postes, missions, non_servis, params_logistique, nb_flux_attendus=len(df_jour))
     metriques = {
         "nb_missions": len(missions),
         "nb_postes": len(postes),
@@ -1432,6 +1630,8 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
         "taux_km_vide": round(km_vide / (km_plein + km_vide) * 100, 1) if (km_plein + km_vide) else 0,
         "taux_charge_global": round(t_charge / (t_charge + t_vide) * 100, 1) if (t_charge + t_vide) else 0,
         "occupation_moyenne": round(sum(occ) / len(occ) * 100, 1) if occ else 0,
+        "nb_postes_sous_80": audit["nb_postes_sous_80"],
+        "solution_valide": audit["valide"],
         "pic_quais": max(quais.values()) if quais else 0,
         "temps_calcul_s": round(_time.time() - t0, 1),
     }
@@ -1439,4 +1639,4 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     return {"postes": postes, "missions": missions, "non_servis": non_servis,
             "nb_vehicules": nb_vehicules, "metriques": metriques,
             "concurrence": {"bins": bins, "valeurs": conc}, "quais": quais,
-            "jour": nom_jour, "depot": depot, "shifts": shifts}
+            "jour": nom_jour, "depot": depot, "shifts": shifts, "audit": audit}

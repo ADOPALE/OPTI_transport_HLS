@@ -42,11 +42,13 @@ def _hhmm(m):
 def afficher_recap_jours(resultats):
     """Tableau de synthèse hebdomadaire + alerte de validité."""
     total_ns = sum(len(r.get("non_servis", [])) for r in resultats.values())
-    if total_ns == 0:
+    total_anomalies = sum(r.get("audit", {}).get("nb_anomalies", 0)
+                          for r in resultats.values())
+    if total_ns == 0 and total_anomalies == 0:
         st.success("✅ Solution **valide** : tous les flux du périmètre sont planifiés.")
     else:
-        st.error(f"❌ Solution **non valide** : {total_ns} flux non servi(s). "
-                 f"Voir la section « Flux non servis » (contrainte bloquante détaillée).")
+        st.error(f"❌ Solution **non valide** : {total_ns} flux non servi(s), "
+                 f"{total_anomalies} anomalie(s) technique(s).")
 
     lignes = []
     for jour, r in resultats.items():
@@ -55,6 +57,7 @@ def afficher_recap_jours(resultats):
             "Jour": jour, "Flux servis": m["nb_missions"], "Postes": m["nb_postes"],
             "Véhicules": m["nb_vehicules_total"], "Pic simultané": m["pic_vehicules_simultanes"],
             "Non servis": m["nb_flux_non_servis"],
+            "Postes <80 %": m.get("nb_postes_sous_80", 0),
             "Km à vide %": m["taux_km_vide"], "Occupation %": m["occupation_moyenne"],
         })
     df = pd.DataFrame(lignes)
@@ -83,8 +86,14 @@ def afficher_jour(res):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Flux servis", m["nb_missions"])
     c2.metric("Flux non servis", m["nb_flux_non_servis"])
-    c3.metric("Pic à quai", m["pic_quais"])
+    c3.metric("Postes <80 %", m.get("nb_postes_sous_80", 0))
     c4.metric("Calcul", f"{m['temps_calcul_s']} s")
+
+    audit = res.get("audit", {})
+    if audit.get("nb_anomalies", 0):
+        with st.expander("Anomalies techniques bloquantes", expanded=True):
+            for anomalie in audit.get("anomalies", []):
+                st.error(anomalie)
 
     if _PLOTLY:
         _gantt(res)

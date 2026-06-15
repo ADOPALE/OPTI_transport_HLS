@@ -21,14 +21,7 @@ from modules.resultats_bio import (
     afficher_detail_itineraire
 )
 from modules.param_flux import afficher_parametres_logistique
-from modules.Prep_simul_flux import segmenter_flux, choix_Jmax, simuler_lissage_flotte, afficher_graphique_charge_empilee
-from modules.sim_engine import (
-    traitement_flux_recurrents, 
-    ordonnancer_flotte_optimale,
-    tunnel_consolidation_flux
-)
-from modules.sequencage_engine import trouver_meilleure_configuration_journee, afficher_controle_coherence
-import modules.Resultats_simul_flux as res_flux
+from modules.Prep_simul_flux import segmenter_flux, choix_Jmax
 
 # --- NOUVEAU MOTEUR DE CHAÎNAGE & POSTES (refonte étapes 3-4) ---
 from modules.prep_transport import preparer_flux_complets_du_jour
@@ -329,3 +322,13 @@ elif selected == "Synthèse transport":
     st.divider()
     st.subheader("4️⃣ Flux non servis")
     rp.afficher_non_servis(resultats)
+
+elif selected == "Détail tournées":
+    st.title("📋 Détail des tournées de distribution")
+    if 'postes_resultats' not in st.session_state:
+        st.info("Lancez d'abord la simulation depuis « Synthèse transport ».")
+    else:
+        resultats = st.session_state['postes_resultats']
+        jour_sel = st.selectbox("Jour à afficher", list(resultats.keys()),
+                                key="detail_distribution_jour")
+        rp.afficher_jour(resultats[jour_sel])
