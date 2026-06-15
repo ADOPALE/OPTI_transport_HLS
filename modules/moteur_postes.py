@@ -19,21 +19,18 @@ def min_to_str(minutes):
 
 def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_dist, jour="Lundi"):
     """
-    MOTEUR DE SÉQUENÇAGE ET D'ORDONNANCEMENT REFAIT EXPRÈS :
-    - Ouverture stricte à 06:00 (360 min) pour le Matin (S1)
+    Moteur de séquençage et d'ordonnancement conforme :
+    - Ouverture stricte à 06:00 pour le Matin (S1)
     - Pause obligatoire insérée dynamiquement au milieu du poste (+/- 1h)
     - Priorité absolue aux urgences (SLA strict)
-    - Affectation préférentielle par Corridor / Fonction Support (ex: Blanchisserie dédiée)
+    - Affectation préférentielle par Corridor / Fonction Support (camions dédiés)
     - Minimisation des trajets à vide et attentes
-    - Si un créneau explose -> On recommence à zéro avec N+1 postes le matin
+    - Si un créneau explose -> Recommence à zéro avec N+1 postes le matin
     - Après-midi (S2) limité strictement au nombre de postes du matin (N_S1)
     """
     
-    # 1. Extraction et formatage des flux de la journée spécifiée
     flux_list = []
-    # On regarde si on est sur un dataframe filtré ou brut
     for idx, row in df_flux.iterrows():
-        # Extraction des fenêtres horaires
         h_dep_min = str_to_min(row.get('Heure de mise à disposition min départ', '06:00:00'))
         h_liv_max = str_to_min(row.get('Heure max de livraison à la destination', '21:00:00'))
         
@@ -47,12 +44,11 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
             'h_dep_min': h_dep_min,
             'h_liv_max': h_liv_max,
             'urgent': str(row.get('Urgence / flux prioritaire \n(Oui/Non)', row.get('Urgence', 'NON'))).upper() in ['OUI', 'O'],
-            'type_veh_requis': row.get('Type véh.', 'FOURGON') # Ajusté par rapport à la compatibilité contenant
+            'type_veh_requis': row.get('Type véh.', 'FOURGON')
         })
 
-    # Séparation temporelle : Matin (S1 de 06h00 à 13h30) vs Après-midi (S2 de 13h45 à 21h15)
-    # Le critère de coupure est basé sur l'heure de mise à disposition
-    flux_matin = [f for f in flux_list if f['h_dep_min'] < 825]   # 13h45 = 825 min
+    # Séparation temporelle : Matin (S1 avant 13h45) vs Après-midi (S2 après 13h45)
+    flux_matin = [f for f in flux_list if f['h_dep_min'] < 825]
     flux_apres_midi = [f for f in flux_list if f['h_dep_min'] >= 825]
     
     types_vehicules = df_vehicules['Types'].unique() if 'Types' in df_vehicules.columns else df_vehicules.index.unique()
@@ -73,21 +69,20 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
         solution_matin_valide = False
         postes_matin_retenus = []
         
-        while not solution_matin_valide and n_matin <= 50:  # 50 = Sécurité boucle infinie
+        while not solution_matin_valide and n_matin <= 50:
             tentative_postes = []
             for i in range(n_matin):
                 tentative_postes.append({
                     'id': f"{t_veh}_S1_{i+1:02d}",
                     'type_veh': t_veh,
                     'veh_id': f"{t_veh}_VEH{i+1:02d}",
-                    'temps_courant': 360,  # Début strict à 06h00
-                    'position': 'HSJ',    # Dépôt par défaut
+                    'temps_courant': 360,
+                    'position': 'HSJ',
                     'corridor_actuel': None,
                     'pause_prise': False,
                     'etapes': []
                 })
             
-            # Prise de poste réglementaire (20 min administrative)
             for p in tentative_postes:
                 p['etapes'].append({
                     'Début': '06:00', 'Fin': '06:20', 'Durée (min)': 20,
@@ -105,12 +100,11 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                 cible_flux = None
                 
                 for p in tentative_postes:
-                    if p['temps_courant'] >= 810: # 13h30 fin max S1
+                    if p['temps_courant'] >= 810:
                         continue
                         
-                    # RÈGLE DE LA PAUSE : Milieu du poste à 450/2 = 225 min après le début (vers 09h45)
-                    # Fenêtre +/- 60 minutes : Entre 08h45 (525) et 10h45 (645)
-                    if not p['pause_prise'] and p['temps_courant'] >= 540:  # On la déclenche dès 09h00 si libre
+                    # RÈGLE DE LA PAUSE : Déclenchement automatique autour du milieu de poste
+                    if not p['pause_prise'] and p['temps_courant'] >= 540:
                         p['etapes'].append({
                             'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
                             'Durée (min)': 20, 'Étape': 'Pause (dépôt)', 'Site départ': p['position'], 'Site arrivée': 'HSJ',
@@ -122,29 +116,21 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                         continue
 
                     for f in flux_restants:
-                        # Calcul des transits
                         try:
                             t_approche = float(matrice_duree.at[p['position'], f['origine']])
                             t_mission = float(matrice_duree.at[f['origine'], f['destination']])
-                            dist_approche = float(matrice_dist.at[p['position'], f['origine']])
-                            dist_mission = float(matrice_dist.at[f['origine'], f['destination']])
                         except:
-                            t_approche, t_mission, dist_approche, dist_mission = 15, 15, 5, 5
+                            t_approche, t_mission = 15, 15
                             
-                        t_manutention = 10  # Forfait chargement/déchargement
+                        t_manutention = 10
                         heure_livraison = p['temps_courant'] + t_approche + t_mission + t_manutention
                         
-                        # RÈGLE SLA CRITIQUE : Est-ce qu'on dépasse le créneau max demandé ?
                         if heure_livraison > f['h_liv_max']:
-                            continue # Interdit, le camion arriverait en retard !
+                            continue
                             
-                        # CALCUL DES SCORES (HEURISTIQUE MULTI-CRITÈRES)
                         score = 0
-                        # 1. Priorité absolue à l'urgence
                         if f['urgent']: score += 10000
-                        # 2. Corridor identique (camion dédié à une filière : Blanchisserie, PUI...)
                         if p['corridor_actuel'] == f['fonction_support']: score += 2000
-                        # 3. Minimisation du temps à vide (proximité géographique)
                         score -= t_approche * 5
                         
                         if score > meilleur_score:
@@ -155,16 +141,12 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                 if cible_poste and cible_flux:
                     p = cible_poste
                     f = cible_flux
-                    
                     try:
                         t_app = float(matrice_duree.at[p['position'], f['origine']])
                         t_mis = float(matrice_duree.at[f['origine'], f['destination']])
-                        d_app = float(matrice_dist.at[p['position'], f['origine']])
-                        d_mis = float(matrice_dist.at[f['origine'], f['destination']])
                     except:
-                        t_app, t_mis, d_app, d_mis = 15, 15, 5, 5
+                        t_app, t_mis = 15, 15
                         
-                    # Étape Approche à vide
                     if t_app > 0:
                         p['etapes'].append({
                             'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + t_app),
@@ -173,7 +155,6 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                         })
                         p['temps_courant'] += t_app
                     
-                    # Étape Mission chargée
                     p['etapes'].append({
                         'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + t_mis + 10),
                         'Durée (min)': t_mis + 10, 'Étape': 'Mission (chargé)', 'Site départ': f['origine'], 'Site arrivée': f['destination'],
@@ -185,22 +166,19 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                     
                     flux_restants.remove(f)
                 else:
-                    # Plus aucune tâche n'est insérable dans les fenêtres de livraison avec N postes
                     echec_S1_SLA = True
                     break
                     
             if echec_S1_SLA:
-                n_matin += 1 # RÈGLE : On recommence l'univers avec N+1 postes
+                n_matin += 1
             else:
-                # Validation et fermeture des postes de la matinée
                 for p in tentative_postes:
-                    if not p['pause_prise']: # Forçage de sécurité de la pause RH
+                    if not p['pause_prise']:
                         p['etapes'].append({
                             'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
                             'Durée (min)': 20, 'Étape': 'Pause', 'Site départ': p['position'], 'Site arrivée': p['position'], 'Fonction support': 'RH'
                         })
                         p['temps_courant'] += 20
-                    # Clôture poste à 13h30
                     if p['temps_courant'] < 810:
                         p['etapes'].append({
                             'Début': min_to_str(p['temps_courant']), 'Fin': '13:30', 'Durée (min)': 810 - p['temps_courant'],
@@ -213,7 +191,6 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
         postes_finaux.extend(postes_matin_retenus)
         
         # ─── SECTION 2 : VOYAGE DE L'APRÈS-MIDI (DÉBUTE À 13:45) ───
-        # RÈGLE : Ne pourra JAMAIS dépasser le nombre de postes du matin (n_matin)
         n_am = 1
         solution_am_valide = False
         postes_am_retenus = []
@@ -224,8 +201,8 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                 tentative_postes_am.append({
                     'id': f"{t_veh}_S2_{i+1:02d}",
                     'type_veh': t_veh,
-                    'veh_id': f"{t_veh}_VEH{i+1:02d}", # Reprend les mêmes camions physiques
-                    'temps_courant': 825,  # 13h45 début strict
+                    'veh_id': f"{t_veh}_VEH{i+1:02d}",
+                    'temps_courant': 825,
                     'position': 'HSJ',
                     'corridor_actuel': None,
                     'pause_prise': False,
@@ -249,8 +226,129 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_rh, matrice_duree, matrice_d
                 cible_flux = None
                 
                 for p in tentative_postes_am:
-                    if p['temps_courant'] >= 1275: # 21h15 fin max S2
+                    if p['temps_courant'] >= 1275:
                         continue
                         
-                    # Pause après-midi : milieu théorique vers 17h30 (1050 min)
-                    if
+                    if not p['pause_prise'] and p['temps_courant'] >= 1000:
+                        p['etapes'].append({
+                            'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
+                            'Durée (min)': 20, 'Étape': 'Pause (dépôt)', 'Site départ': p['position'], 'Site arrivée': 'HSJ',
+                            'Fonction support': 'RH'
+                        })
+                        p['temps_courant'] += 20
+                        p['position'] = 'HSJ'
+                        p['pause_prise'] = True
+                        continue
+
+                    for f in flux_restants_am:
+                        try:
+                            t_approche = float(matrice_duree.at[p['position'], f['origine']])
+                            t_mission = float(matrice_duree.at[f['origine'], f['destination']])
+                        except:
+                            t_approche, t_mission = 15, 15
+                            
+                        heure_livraison = p['temps_courant'] + t_approche + t_mission + 10
+                        
+                        if heure_livraison > f['h_liv_max']:
+                            continue
+                            
+                        score = 0
+                        if f['urgent']: score += 10000
+                        if p['corridor_actuel'] == f['fonction_support']: score += 2000
+                        score -= t_approche * 5
+                        
+                        if score > meilleur_score:
+                            meilleur_score = score
+                            cible_poste = p
+                            cible_flux = f
+                            
+                if cible_poste and cible_flux:
+                    p = cible_poste
+                    f = cible_flux
+                    try:
+                        t_app = float(matrice_duree.at[p['position'], f['origine']])
+                        t_mis = float(matrice_duree.at[f['origine'], f['destination']])
+                    except:
+                        t_app, t_mis = 15, 15
+                        
+                    if t_app > 0:
+                        p['etapes'].append({
+                            'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + t_app),
+                            'Durée (min)': t_app, 'Étape': 'Approche à vide', 'Site départ': p['position'], 'Site arrivée': f['origine'],
+                            'Fonction support': f['fonction_support']
+                        })
+                        p['temps_courant'] += t_app
+                        
+                    p['etapes'].append({
+                        'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + t_mis + 10),
+                        'Durée (min)': t_mis + 10, 'Étape': 'Mission (chargé)', 'Site départ': f['origine'], 'Site arrivée': f['destination'],
+                        'Fonction support': f['fonction_support'], 'Flux concernés': str(f['id']), 'Contenants': f['contenant']
+                    })
+                    p['temps_courant'] += (t_mis + 10)
+                    p['position'] = f['destination']
+                    p['corridor_actuel'] = f['fonction_support']
+                    
+                    flux_restants_am.remove(f)
+                else:
+                    echec_am_SLA = True
+                    break
+                    
+            if echec_am_SLA:
+                if n_am < n_matin:
+                    n_am += 1
+                else:
+                    flux_non_servis.extend(flux_restants_am)
+                    break
+            else:
+                for p in tentative_postes_am:
+                    if not p['pause_prise']:
+                        p['etapes'].append({
+                            'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
+                            'Durée (min)': 20, 'Étape': 'Pause', 'Site départ': p['position'], 'Site arrivée': p['position'], 'Fonction support': 'RH'
+                        })
+                        p['temps_courant'] += 20
+                    if p['temps_courant'] < 1275:
+                        p['etapes'].append({
+                            'Début': min_to_str(p['temps_courant']), 'Fin': '21:15', 'Durée (min)': 1275 - p['temps_courant'],
+                            'Étape': 'Clôture poste', 'Site départ': p['position'], 'Site arrivée': 'HSJ', 'Fonction support': 'RH'
+                        })
+                postes_am_retenus = tentative_postes_am
+                solution_am_valide = True
+                
+        postes_finaux.extend(postes_am_retenus)
+
+    flat_etapes = []
+    for p in postes_finaux:
+        for e in p['etapes']:
+            flat_etapes.append({
+                'Jour': jour,
+                'Véhicule': p['veh_id'],
+                'Poste': p['id'],
+                'Type véh.': p['type_veh'],
+                'Début': e['Début'],
+                'Fin': e['Fin'],
+                'Durée (min)': e['Durée (min)'],
+                'Étape': e['Étape'],
+                'Site départ': e['Site départ'],
+                'Site arrivée': e['Site arrivée'],
+                'Fonction support': e['Fonction support'],
+                'Contenants': e.get('Contenants', ''),
+                'Flux concernés': e.get('Flux concernés', '')
+            })
+            
+    df_tournees = pd.DataFrame(flat_etapes)
+    df_non_servis = pd.DataFrame(flux_non_servis)
+    
+    if not df_non_servis.empty:
+        df_non_servis['Pourquoi ce flux nest pas planifie'] = "Plafond après-midi atteint"
+        df_non_servis['CONTRAINTE BLOQUANTE'] = "Augmenter la capacité du matin"
+
+    solution_globale = {
+        jour: {
+            'tournes': df_tournees,
+            'non_servis': df_non_servis,
+            'flotte_nb': suivi_flotte_max
+        }
+    }
+    
+    return solution_globale
