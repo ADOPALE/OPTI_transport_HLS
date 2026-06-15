@@ -18,10 +18,10 @@ Pipeline
        - plafond = "durée max d'une tournée" (param)
        - réaffectation au véhicule le mieux rempli compatible
   4. Construction des postes :
-       - solution initiale par PAVAGE (2 créneaux : matin / après-midi)
-       - MULTI-START avec aléa dans l'ordre de construction
-       - RECHERCHE LOCALE : fermer les postes creux, compacter
-       - sélection lexicographique : flotte → nb postes → homogénéité
+       - recherche conjointe du plus petit couple matin / après-midi
+       - insertion des missions dans les postes déjà ouverts en priorité
+       - ouverture de N+1 postes uniquement quand N est infaisable
+       - sélection lexicographique : nb postes → flotte → temps improductif
   5. Comptage flotte par APPARIEMENT (relève 2 chauffeurs / véhicule)
 
 Contraintes intégrées
@@ -1148,6 +1148,194 @@ def construire_effectif_minimal_type(missions, shifts, v_type, depot, matrice, m
     return None, None
 
 
+def _construire_poste_fixe_depuis_ordre(poste, missions, shift, depot, matrice,
+                                         matrice_dist, params):
+    """Reconstruit un poste fixe et valide simultanément fenêtres, pause et fin."""
+    idx_shift = poste.shift
+    p = _initialiser_poste_fixe(
+        poste.v_type, depot, shift, idx_shift, int(poste.id.rsplit("_", 1)[-1]), params)
+    rh = params.get("rh", {})
+    pause_duree = float(rh.get("pause", 30))
+    marge_inter = float(params.get("marge_inter_job", 0))
+    tolerance = float(params.get("tolerance_pause_milieu", 60))
+    s_start, s_end = shift
+    centre = s_start + (s_end - s_start) / 2
+    pause_debut = centre - tolerance
+    pause_fin = centre + tolerance
+
+    for m in missions:
+        t_fin_m, _, _ = _cout_successeur(p, m, matrice, marge_inter, 15.0)
+        retour = duree_trajet(matrice, m.site_fin, depot)
+
+        # Une mission qui empêcherait le retour avant la fin de fenêtre de pause
+        # doit être effectuée après la pause.
+        if not p.pause_faite and t_fin_m + retour > pause_fin + 1e-6:
+            if p.position != depot:
+                d = duree_trajet(matrice, p.position, depot)
+                km = dist_trajet(matrice_dist, p.position, depot)
+                p.etapes.append(Etape(
+                    "RETOUR_VIDE", p.t_curr, p.t_curr + d,
+                    f"Retour dépôt pour pause {p.position} → {depot}",
+                    site_debut=p.position, site_fin=depot, distance=km, a_vide=True))
+                p.t_curr += d
+                p.position = depot
+            if p.t_curr < pause_debut:
+                p.etapes.append(Etape(
+                    "DISPONIBLE", p.t_curr, pause_debut,
+                    "Temps disponible au dépôt avant pause",
+                    site_debut=depot, site_fin=depot))
+                p.t_curr = pause_debut
+            _placer_pause(p, depot, matrice, matrice_dist, pause_duree)
+        else:
+            _absorber_pause_centree_avant_mission(
+                p, m, matrice, matrice_dist, pause_duree, pause_debut)
+
+        _placer_mission(p, m, matrice, matrice_dist, marge_inter)
+        if p.t_curr > m.h_deadline + 1e-6 or p.t_curr > s_end + 1e-6:
+            return None
+
+    _cloturer_poste_pause_centree(p, depot, matrice, matrice_dist, params, shift)
+    pauses = [e.h_debut for e in p.etapes if e.type == "PAUSE"]
+    if (p.amplitude > (s_end - s_start) + 1e-6
+            or not _missions_ok(p, missions)
+            or not pauses
+            or abs(pauses[0] - centre) > tolerance + 1e-6):
+        return None
+    return p
+
+
+def _cout_operationnel(poste):
+    """Temps à minimiser lors d'une insertion, hors disponibilité contractuelle."""
+    types = {"MISSION", "APPROCHE_VIDE", "RETOUR_VIDE", "ATTENTE", "MARGE", "NETTOYAGE"}
+    return sum(e.duree for e in poste.etapes if e.type in types)
+
+
+def _options_insertion(mission, slots, ordres, shifts, depot, matrice, matrice_dist,
+                       params, rng=None):
+    """Toutes les insertions faisables d'une mission, y compris au milieu d'un poste."""
+    options = []
+    premier_vide_par_shift = set()
+    for slot in slots:
+        courant = ordres[slot]
+        if not courant:
+            if slot.shift in premier_vide_par_shift:
+                continue
+            premier_vide_par_shift.add(slot.shift)
+        courant_rebuilt = (_construire_poste_fixe_depuis_ordre(
+            slot, courant, shifts[slot.shift], depot, matrice, matrice_dist, params)
+            if courant else None)
+        cout_avant = _cout_operationnel(courant_rebuilt) if courant_rebuilt else 0.0
+        for pos in range(len(courant) + 1):
+            ordre = courant[:pos] + [mission] + courant[pos:]
+            rebuilt = _construire_poste_fixe_depuis_ordre(
+                slot, ordre, shifts[slot.shift], depot, matrice, matrice_dist, params)
+            if rebuilt is None:
+                continue
+            activation = 0 if courant else 1
+            delta = _cout_operationnel(rebuilt) - cout_avant
+            corridor = sum(
+                0 if a.site_fin == b.site_debut
+                else 1 if (a.fonction_support and a.fonction_support == b.fonction_support)
+                else 2 if {a.site_debut, a.site_fin} & {b.site_debut, b.site_fin}
+                else 4
+                for a, b in zip(ordre, ordre[1:]))
+            bruit = rng.random() * 0.05 if rng is not None else 0.0
+            # L'activation d'un nouveau poste est le dernier recours. Parmi les
+            # postes ouverts, on concentre le travail et réduit attente/vide.
+            key = (activation, round(delta + bruit, 2), corridor,
+                   round(rebuilt.temps_vide(), 1), pos)
+            options.append((key, slot, ordre, rebuilt))
+    options.sort(key=lambda x: x[0])
+    return options
+
+
+def construire_couple_postes_fixes(missions, shifts, v_type, n_matin, n_am, depot,
+                                    matrice, matrice_dist, params, rng=None):
+    """Construit conjointement les deux shifts avec insertion et activation tardive."""
+    slots = []
+    for idx_shift, n in ((0, n_matin), (1, n_am)):
+        slots.extend(_initialiser_poste_fixe(
+            v_type, depot, shifts[idx_shift], idx_shift, i + 1, params)
+            for i in range(n))
+    ordres = {p: [] for p in slots}
+    restants = list(missions)
+
+    while restants:
+        analyses = []
+        for m in restants:
+            opts = _options_insertion(
+                m, slots, ordres, shifts, depot, matrice, matrice_dist, params, rng)
+            if not opts:
+                return None
+            regret = ((opts[1][0][0] - opts[0][0][0]) * 100000
+                      + opts[1][0][1] - opts[0][0][1]) if len(opts) > 1 else 1e9
+            largeur = m.h_deadline - m.h_dispo - m.duree
+            analyses.append((len(opts), -regret, largeur, m.h_deadline, m, opts))
+
+        # Mission la plus contrainte d'abord, puis celle dont le mauvais choix
+        # coûterait le plus cher. Cela évite de sacrifier les flux urgents.
+        _, _, _, _, mission, options = min(analyses, key=lambda x: x[:4])
+        choix = options[0]
+        if rng is not None and len(options) > 1 and options[1][0][:2] == options[0][0][:2]:
+            choix = rng.choice(options[:2])
+        _, slot, ordre, rebuilt = choix
+        ordres[slot] = ordre
+        restants.remove(mission)
+
+    actifs = []
+    for slot in slots:
+        if not ordres[slot]:
+            continue
+        rebuilt = _construire_poste_fixe_depuis_ordre(
+            slot, ordres[slot], shifts[slot.shift], depot, matrice, matrice_dist, params)
+        if rebuilt is None:
+            return None
+        actifs.append(rebuilt)
+    if sum(p.shift == 1 for p in actifs) > sum(p.shift == 0 for p in actifs):
+        return None
+    return actifs
+
+
+def construire_effectif_minimal_type_robuste(missions, shifts, v_type, depot, matrice,
+                                             matrice_dist, params, rng=None):
+    """Recherche lexicographique : moins de postes, puis moins de véhicules."""
+    if not missions:
+        return [], 0
+    faisabilites = {}
+    for m in missions:
+        feas = []
+        for k, shift in enumerate(shifts):
+            slot = _initialiser_poste_fixe(v_type, depot, shift, k, 1, params)
+            if _construire_poste_fixe_depuis_ordre(
+                    slot, [m], shift, depot, matrice, matrice_dist, params) is not None:
+                feas.append(k)
+        faisabilites[id(m)] = feas
+    impossibles = [m for m in missions if not faisabilites[id(m)]]
+    planifiables = [m for m in missions if faisabilites[id(m)]]
+    if not planifiables:
+        return [], 0, impossibles
+
+    cap = _capacite_productive(params)
+    borne_total = max(1, int(math.ceil(sum(m.duree for m in planifiables) / cap)))
+    mini_matin = max(1, int(math.ceil(
+        sum(m.duree for m in planifiables if faisabilites[id(m)] == [0]) / cap)))
+    mini_am = int(math.ceil(
+        sum(m.duree for m in planifiables if faisabilites[id(m)] == [1]) / cap))
+
+    for total in range(borne_total, len(planifiables) + 1):
+        couples = [(nm, total - nm) for nm in range(mini_matin, total + 1)
+                   if mini_am <= total - nm <= nm]
+        # À nombre de postes égal, minimiser la flotte du matin.
+        couples.sort(key=lambda x: (x[0], x[1]))
+        for n_matin, n_am in couples:
+            postes = construire_couple_postes_fixes(
+                planifiables, shifts, v_type, n_matin, n_am, depot,
+                matrice, matrice_dist, params, rng)
+            if postes is not None:
+                return postes, n_matin, impossibles
+    return None, None, impossibles
+
+
 def affecter_vehicules_shifts_fixes(postes):
     """Apparie le poste matin et le poste après-midi de même rang."""
     from collections import defaultdict
@@ -1693,8 +1881,6 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
                          "dans la plage d'exploitation.")
     h_fin_max = to_min(params_logistique.get("rh", {}).get("h_fin_max"), 1260)
     t_prise = float(params_logistique.get("rh", {}).get("temps_fixes_prise", 20))
-    # détection déterministe des fenêtres tendues (une seule fois)
-    marquer_fenetres_tendues(missions, shifts, matrice, depot, h_fin_max, t_prise)
     par_type = {}
     for m in missions:
         par_type.setdefault(m.v_type, []).append(m)
@@ -1713,12 +1899,21 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
         postes = []
         construction_ok = True
         for v_type, liste in par_type.items():
-            construits, _n = construire_effectif_minimal_type(
+            construits, _n, impossibles = construire_effectif_minimal_type_robuste(
                 liste, shifts, v_type, depot, matrice, mdist, params_logistique, rng=rng)
             if construits is None:
                 construction_ok = False
                 break
             postes.extend(construits)
+            if start == 0:
+                for m in impossibles:
+                    for (fid, o, d, c, q) in m.composantes:
+                        non_servis.append({
+                            "flux_id": fid, "origine": o, "destination": d,
+                            "contenant": c,
+                            "raison": "Mission incompatible avec les deux postes fixes",
+                            "contrainte": "Fenêtre horaire / durée / pause à vérifier",
+                        })
         if not construction_ok:
             continue
         nb_veh = affecter_vehicules_shifts_fixes(postes)
@@ -1729,15 +1924,6 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     postes = meilleure or []
     nb_vehicules = meilleur_nbveh or {}
     _prog(0.92, "Calcul des indicateurs…")
-
-    # marquer les missions tendues (fenêtre relâchée) comme non servies (option b)
-    for m in missions:
-        if m.fenetre_tendue:
-            for (fid, o, d, c, q) in m.composantes:
-                non_servis.append({"flux_id": fid, "origine": o, "destination": d,
-                                   "contenant": c,
-                                   "raison": "Fenêtre relâchée pour pouvoir planifier (incohérence horaire)",
-                                   "contrainte": "Heures du flux à vérifier (M flux)"})
 
     bins, conc = courbe_concurrence(postes)
     pic = max(conc) if conc else 0
@@ -1750,10 +1936,11 @@ def optimiser_postes_jour(df_jour, df_vehicules, df_contenants, df_sites,
     km_vide = sum(e.distance for p in postes for e in p.etapes
                   if e.type in ("APPROCHE_VIDE", "RETOUR_VIDE"))
     occ = [p.occupation() for p in postes]
+    missions_servies = {m.id for p in postes for m in p.missions}
     postes_matin = sum(p.shift == 0 for p in postes)
     postes_apres_midi = sum(p.shift == 1 for p in postes)
     metriques = {
-        "nb_missions": len(missions),
+        "nb_missions": len(missions_servies),
         "nb_postes": len(postes),
         "nb_postes_matin": postes_matin,
         "nb_postes_apres_midi": postes_apres_midi,
