@@ -20,6 +20,8 @@ def afficher_parametres_logistique():
         v_opt_rel = p.get("optimiser_reliquats_tournees", True)
         v_seuil_rel = p.get("seuil_rupture_reliquat", 80)
         v_marge_inter = p.get("marge_inter_job", 5)
+        v_releve = p.get("temps_releve", 0)
+        v_occ_min = int(p.get("occupation_min_poste", 0.80) * 100)
         v_alea = int(p.get("alea_circulation", 0.15) * 100)
         # Récupération de la durée max d'un SJ (défaut à 50% de l'amplitude si absent)
         v_duree_max_sj = p.get("duree_max_superjob", int(v_duree / 2))
@@ -34,6 +36,8 @@ def afficher_parametres_logistique():
         v_opt_rel = True
         v_seuil_rel = 80
         v_marge_inter = 5
+        v_releve = 0
+        v_occ_min = 80
         v_alea = 15
         v_duree_max_sj = 225 # 450 / 2
         config_existe = False
@@ -84,6 +88,12 @@ def afficher_parametres_logistique():
                 value=v_marge_inter, 
                 help="Temps de sécurité ajouté entre deux missions consécutives."
             )
+            temps_releve = st.number_input(
+                "Temps de relève entre deux postes sur un même véhicule (min)",
+                value=v_releve,
+                min_value=0,
+                help="Temps minimal entre deux postes successifs affectés au même véhicule."
+            )
             # --- NOUVEAU PARAMÈTRE ---
             duree_max_sj = st.number_input(
                 "Durée max d'une tournée (min)", 
@@ -95,6 +105,12 @@ def afficher_parametres_logistique():
                 "Coefficient d'aléa circulation (%)", 
                 0, 50, v_alea, 
                 help="Majoration forfaitaire du temps de trajet (ex: +15% pour les bouchons)."
+            )
+            occupation_min = st.slider(
+                "Occupation minimale cible d'un poste (%)",
+                min_value=50, max_value=100, value=v_occ_min,
+                help="Après minimisation de la flotte et du nombre de postes, "
+                     "le moteur minimise le nombre de postes sous ce seuil."
             )
 
         st.divider()
@@ -132,6 +148,8 @@ def afficher_parametres_logistique():
                 },
                 "securite_remplissage": taux_remplissage / 100,
                 "marge_inter_job": marge_inter,
+                "temps_releve": temps_releve,
+                "occupation_min_poste": occupation_min / 100,
                 "duree_max_superjob": duree_max_sj, # Sauvegarde du paramètre
                 "alea_circulation": alea_circul / 100,
                 "optimiser_reliquats_tournees": opt_reliquats,

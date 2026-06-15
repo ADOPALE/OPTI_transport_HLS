@@ -291,6 +291,7 @@ elif selected == "Synthèse transport":
                     df_jour, df_vehicules, df_contenants, df_sites,
                     matrice_duree, matrice_dist, params_log, nom_jour=str(jour),
                     autoriser_tournees=autoriser_tournees, budget_s=budget_s,
+                    n_starts=max(8, int(budget_s // 2)),
                     progress_cb=_cb)
                 resultats[jour] = res
             barre.progress(1.0, text="✅ Terminé")
