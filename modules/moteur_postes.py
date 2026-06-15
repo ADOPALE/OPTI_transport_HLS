@@ -3,9 +3,18 @@ import datetime as dt
 import math
 
 def str_to_min(time_str):
-    """Convertit 'HH:MM:SS' ou 'HH:MM' en minutes depuis minuit."""
-    if pd.isna(time_str) or not isinstance(time_str, str):
+    """Convertit 'HH:MM:SS' ou 'HH:MM' en minutes depuis minuit avec gestion des types."""
+    if pd.isna(time_str):
         return 0
+    if isinstance(time_str, (dt.time, dt.datetime)):
+        return time_str.hour * 60 + time_str.minute
+    if isinstance(time_str, (int, float)):
+        # Si c'est un float/int (ex: fraction de jour Excel), conversion en minutes
+        if time_str <= 1.0:
+            time_str = time_str * 24 * 60
+        return int(time_str)
+        
+    time_str = str(time_str).strip()
     parts = list(map(int, time_str.split(':')))
     if len(parts) >= 2:
         return parts[0] * 60 + parts[1]
@@ -19,49 +28,92 @@ def min_to_str(minutes):
 
 def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=None, 
                           matrice_duree=None, matrice_dist=None, params_log=None, 
-                          nom_jour="Lundi", autoriser_tournees=True, budget_s=10, progress_cb=None):
+                          nom_jour="Lundi", autoriser_tournees=True, budget_s=60, progress_cb=None):
     """
-    MOTEUR TRANSPORT CONFORME À LA SIGNATURE COMPLÈTE DE APP.PY (Ligne 290)
-    - Reçoit et gère l'ensemble des arguments nommés (nom_jour, budget_s, progress_cb, etc.)
-    - Ouverture stricte à 06:00 pour le Matin (S1)
-    - Pause obligatoire au dépôt insérée automatiquement
-    - Plafond strict l'après-midi (S2 <= S1)
+    MOTEUR DE PLANIFICATION ET D'ORDONNANCEMENT OPÉRATIONNEL :
+    - Alignement complet avec les colonnes de l'application (Origine/Site Expéditeur, etc.)
+    - Ouverture des postes du matin (S1) à 06h00 strict
+    - Insertion automatique de la pause réglementaire au milieu de la tournée
+    - Priorisation des urgences et corridors géographiques / métiers
+    - Structuration du dictionnaire de sortie attendue par app.py & les modules de résultats
     """
     
-    # Notification de progression si un callback est fourni
     if progress_cb:
-        try:
-            progress_cb(0.1, f"Initialisation de la journée {nom_jour}...")
-        except:
-            pass
+        try: progress_cb(0.1, f"Analyse et alignement des flux du {nom_jour}...")
+        except: pass
 
-    jour = nom_jour
+    # Cartographie dynamique des colonnes pour s'adapter au fichier de paramètres ou au df filtré
+    col_map = {}
+    for c in df_flux.columns:
+        c_clean = str(c).strip().lower()
+        if c_clean in ['origine', 'site expéditeur', 'site expediteur', 'site_exp']:
+            col_map['origine'] = c
+        elif c_clean in ['destination', 'site destinataire', 'site_dest']:
+            col_map['destination'] = c
+        elif c_clean in ['fonction support', 'fonction_support', 'filière', 'filiere']:
+            col_map['fonction_support'] = c
+        elif c_clean in ['contenant', 'nature de contenant', 'type de contenant']:
+            col_map['contenant'] = c
+        elif 'urgence' in c_clean:
+            col_map['urgent'] = c
+        elif 'type véh' in c_clean or 'type veh' in c_clean:
+            col_map['type_veh'] = c
+
     flux_list = []
     
-    # Extraction et formatage des flux
     for idx, row in df_flux.iterrows():
+        # Lecture avec valeurs par défaut si la colonne mappée est absente
+        ori = row[col_map['origine']] if 'origine' in col_map else row.get('Origine', row.get('Site Expéditeur', 'HSJ'))
+        dest = row[col_map['destination']] if 'destination' in col_map else row.get('Destination', row.get('Site Destinataire', 'HSJ'))
+        f_support = row[col_map['fonction_support']] if 'fonction_support' in col_map else row.get('Fonction support', 'GENERAL')
+        cont = row[col_map['contenant']] if 'contenant' in col_map else row.get('Contenant', '')
+        
+        # Identification de la quantité selon le jour ou la valeur générale
+        qte = 1
+        for q_col in [f'Quantité {nom_jour}', f'Quantite {nom_jour}', 'Quantité', 'Quantite', 'Volume']:
+            if q_col in df_flux.columns and not pd.isna(row[q_col]):
+                try:
+                    qte = int(row[q_col])
+                    break
+                except:
+                    pass
+
+        # Gestion des fenêtres horaires de livraison
         h_dep_min = str_to_min(row.get('Heure de mise à disposition min départ', '06:00:00'))
         h_liv_max = str_to_min(row.get('Heure max de livraison à la destination', '21:00:00'))
         
-        flux_list.append({
-            'id': row.get('Flux', idx),
-            'origine': row['Origine'],
-            'destination': row['Destination'],
-            'contenant': row.get('Contenant', row.get('Nature de contenant', '')),
-            'quantite': int(row.get('Quantité', row.get(f'Quantité {jour}', 1))),
-            'fonction_support': row.get('Fonction support', row.get('Fonction Support associée', 'GENERAL')),
-            'h_dep_min': h_dep_min,
-            'h_liv_max': h_liv_max,
-            'urgent': str(row.get('Urgence / flux prioritaire \n(Oui/Non)', row.get('Urgence', 'NON'))).upper() in ['OUI', 'O'],
-            'type_veh_requis': row.get('Type véh.', 'FOURGON')
-        })
+        # Statut d'urgence
+        is_urgent = False
+        if 'urgent' in col_map:
+            is_urgent = str(row[col_map['urgent']]).upper() in ['OUI', 'O', 'TRUE', '1']
+        
+        t_veh_req = row[col_map['type_veh']] if 'type_veh' in col_map else row.get('Type véh.', 'FOURGON')
 
-    # Séparation temporelle Matin (S1) / Après-midi (S2) à 13h45 (825 min)
+        # Seuls les flux ayant un volume/quantité > 0 ce jour-là sont planifiés
+        if qte > 0:
+            flux_list.append({
+                'id': row.get('Flux', f"FLUX_{idx}"),
+                'origine': str(ori).strip(),
+                'destination': str(dest).strip(),
+                'contenant': cont,
+                'quantite': qte,
+                'fonction_support': str(f_support).strip(),
+                'h_dep_min': h_dep_min,
+                'h_liv_max': h_liv_max,
+                'urgent': is_urgent,
+                'type_veh_requis': str(t_veh_req).strip()
+            })
+
+    # Segmenter l'activité : Matin (S1: fenêtres démarrant avant 13h45) / Après-midi (S2)
     flux_matin = [f for f in flux_list if f['h_dep_min'] < 825]
     flux_apres_midi = [f for f in flux_list if f['h_dep_min'] >= 825]
     
-    types_vehicules = df_vehicules['Types'].unique() if 'Types' in df_vehicules.columns else df_vehicules.index.unique()
-    
+    # Résolution de la liste des types de véhicules
+    if isinstance(df_vehicules, pd.DataFrame):
+        types_vehicules = df_vehicules['Types'].unique() if 'Types' in df_vehicules.columns else df_vehicules.index.unique()
+    else:
+        types_vehicules = ['FOURGON', 'HAILLON'] # Fallback de sécurité
+
     postes_finaux = []
     flux_non_servis = []
     suivi_flotte_max = {}
@@ -69,10 +121,8 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
     total_types = len(types_vehicules)
     for idx_t, t_veh in enumerate(types_vehicules):
         if progress_cb:
-            try:
-                progress_cb(0.2 + 0.7 * (idx_t / total_types), f"Traitement des véhicules {t_veh}...")
-            except:
-                pass
+            try: progress_cb(0.2 + 0.7 * (idx_t / total_types), f"Calcul du pavage pour {t_veh}...")
+            except: pass
 
         flux_t_matin = [f for f in flux_matin if f['type_veh_requis'] == t_veh]
         flux_t_am = [f for f in flux_apres_midi if f['type_veh_requis'] == t_veh]
@@ -80,19 +130,19 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
         if not flux_t_matin and not flux_t_am:
             continue
             
-        # ─── SECTION 1 : VOYAGE DU MATIN (DÉBUTE À 06:00) ───
+        # ─── OPTIMISATION DU PIC DU MATIN (S1 : DÉBARRAGE À 06:00 STRICT) ───
         n_matin = 1
         solution_matin_valide = False
         postes_matin_retenus = []
         
-        while not solution_matin_valide and n_matin <= 50:
+        while not solution_matin_valide and n_matin <= 40:
             tentative_postes = []
             for i in range(n_matin):
                 tentative_postes.append({
                     'id': f"{t_veh}_S1_{i+1:02d}",
                     'type_veh': t_veh,
                     'veh_id': f"{t_veh}_VEH{i+1:02d}",
-                    'temps_courant': 360, # 06h00 strict
+                    'temps_courant': 360, # 06:00 du matin
                     'position': 'HSJ',
                     'corridor_actuel': None,
                     'pause_prise': False,
@@ -116,11 +166,11 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                 cible_flux = None
                 
                 for p in tentative_postes:
-                    if p['temps_courant'] >= 810: # 13h30
+                    if p['temps_courant'] >= 810: # 13:30 fin de vacation S1
                         continue
                         
-                    # Pause réglementaire milieu de poste
-                    if not p['pause_prise'] and p['temps_courant'] >= 540:
+                    # Insertion de la pause à mi-parcours (autour de 09h30 - 10h00)
+                    if not p['pause_prise'] and p['temps_courant'] >= 550:
                         p['etapes'].append({
                             'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
                             'Durée (min)': 20, 'Étape': 'Pause (dépôt)', 'Site départ': p['position'], 'Site arrivée': 'HSJ',
@@ -136,22 +186,24 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                             t_approche = float(matrice_duree.at[p['position'], f['origine']])
                             t_mission = float(matrice_duree.at[f['origine'], f['destination']])
                         except:
-                            t_approche, t_mission = 15, 15
+                            t_approche, t_mission = 12, 15 # Forfaits par défaut si index absents
                             
                         t_manutention = 10
                         heure_livraison = p['temps_courant'] + t_approche + t_mission + t_manutention
                         
                         if heure_livraison > f['h_liv_max']:
-                            continue
+                            continue # Le créneau horaire max est dépassé : rejet du planning courant
                             
+                        # Système d'attribution de poids métiers
                         score = 0
-                        if f['urgent']: score += 10000
-                        if p['corridor_actuel'] == f['fonction_support']: score += 2000
-                        score -= t_approche * 5
+                        if f['urgent']: score += 20000 # Priorité absolue aux urgences
+                        if p['corridor_actuel'] == f['fonction_support']: score += 3000 # Synergies de corridors dédiés
+                        score -= t_approche * 4 # Minimisation des kilomètres et transits à vide
                         
                         if score > meilleur_score:
                             meilleur_score = score
                             cible_poste = p
+                            
                             cible_flux = f
                             
                 if cible_poste and cible_flux:
@@ -161,7 +213,7 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                         t_app = float(matrice_duree.at[p['position'], f['origine']])
                         t_mis = float(matrice_duree.at[f['origine'], f['destination']])
                     except:
-                        t_app, t_mis = 15, 15
+                        t_app, t_mis = 12, 15
                         
                     if t_app > 0:
                         p['etapes'].append({
@@ -186,7 +238,7 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                     break
                     
             if echec_S1_SLA:
-                n_matin += 1
+                n_matin += 1 # On incrémente le nombre de postes nécessaires le matin et on recommence
             else:
                 for p in tentative_postes:
                     if not p['pause_prise']:
@@ -206,8 +258,7 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
         suivi_flotte_max[t_veh] = n_matin
         postes_finaux.extend(postes_matin_retenus)
         
-        # ─── SECTION 2 : VOYAGE DE L'APRÈS-MIDI (DÉBUTE À 13:45) ───
-        # Interdiction absolue de dépasser n_matin (Plafond de flotte)
+        # ─── OPTIMISATION DE L'APRÈS-MIDI (S2 : INTERDICTION DE DÉPASSER LE PIC N_MATIN) ───
         n_am = 1
         solution_am_valide = False
         postes_am_retenus = []
@@ -218,8 +269,8 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                 tentative_postes_am.append({
                     'id': f"{t_veh}_S2_{i+1:02d}",
                     'type_veh': t_veh,
-                    'veh_id': f"{t_veh}_VEH{i+1:02d}",
-                    'temps_courant': 825, # 13h45 strict
+                    'veh_id': f"{t_veh}_VEH{i+1:02d}", # Réutilisation de la même flotte
+                    'temps_courant': 825, # 13:45 début S2
                     'position': 'HSJ',
                     'corridor_actuel': None,
                     'pause_prise': False,
@@ -243,10 +294,10 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                 cible_flux = None
                 
                 for p in tentative_postes_am:
-                    if p['temps_courant'] >= 1275: # 21h15
+                    if p['temps_courant'] >= 1275: # 21:15 fin max S2
                         continue
                         
-                    if not p['pause_prise'] and p['temps_courant'] >= 1000:
+                    if not p['pause_prise'] and p['temps_courant'] >= 1010:
                         p['etapes'].append({
                             'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + 20),
                             'Durée (min)': 20, 'Étape': 'Pause (dépôt)', 'Site départ': p['position'], 'Site arrivée': 'HSJ',
@@ -262,7 +313,7 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                             t_approche = float(matrice_duree.at[p['position'], f['origine']])
                             t_mission = float(matrice_duree.at[f['origine'], f['destination']])
                         except:
-                            t_approche, t_mission = 15, 15
+                            t_approche, t_mission = 12, 15
                             
                         heure_livraison = p['temps_courant'] + t_approche + t_mission + 10
                         
@@ -270,9 +321,9 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                             continue
                             
                         score = 0
-                        if f['urgent']: score += 10000
-                        if p['corridor_actuel'] == f['fonction_support']: score += 2000
-                        score -= t_approche * 5
+                        if f['urgent']: score += 20000
+                        if p['corridor_actuel'] == f['fonction_support']: score += 3000
+                        score -= t_approche * 4
                         
                         if score > meilleur_score:
                             meilleur_score = score
@@ -286,7 +337,7 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                         t_app = float(matrice_duree.at[p['position'], f['origine']])
                         t_mis = float(matrice_duree.at[f['origine'], f['destination']])
                     except:
-                        t_app, t_mis = 15, 15
+                        t_app, t_mis = 12, 15
                         
                     if t_app > 0:
                         p['etapes'].append({
@@ -297,10 +348,4 @@ def optimiser_postes_jour(df_flux, df_vehicules, df_contenants=None, df_sites=No
                         p['temps_courant'] += t_app
                         
                     p['etapes'].append({
-                        'Début': min_to_str(p['temps_courant']), 'Fin': min_to_str(p['temps_courant'] + t_mis + 10),
-                        'Durée (min)': t_mis + 10, 'Étape': 'Mission (chargé)', 'Site départ': f['origine'], 'Site arrivée': f['destination'],
-                        'Fonction support': f['fonction_support'], 'Flux concernés': str(f['id']), 'Contenants': f['contenant']
-                    })
-                    p['temps_courant'] += (t_mis + 10)
-                    p['position'] = f['destination']
-                    p
+                        'Début': min_to_str(p['temps_courant']), 'Fin':
