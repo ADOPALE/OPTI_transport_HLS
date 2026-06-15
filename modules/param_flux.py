@@ -75,15 +75,7 @@ def afficher_parametres_logistique():
         st.divider()
 
         st.subheader("3. Optimisation & Aléas")
-        taux_remplissage = st.slider(
-            "Taux maximal autorisé d'occupation du plancher (%)",
-            50, 100, v_remplissage,
-            help="Contrainte dure : aucune tournée ne peut dépasser ce taux."
-        )
-        st.caption(
-            "Les postes durent exactement 7h30. Le moteur recherche en priorité "
-            "une solution sans poste occupé à moins de 80 %."
-        )
+        taux_remplissage = st.slider("Taux de remplissage max cible (%)", 50, 100, v_remplissage)
         
         col_opti_1, col_opti_2 = st.columns(2)
         with col_opti_1:
@@ -140,8 +132,6 @@ def afficher_parametres_logistique():
                 },
                 "securite_remplissage": taux_remplissage / 100,
                 "marge_inter_job": marge_inter,
-                "occupation_min_poste": 0.80,
-                "temps_releve": 0,
                 "duree_max_superjob": duree_max_sj, # Sauvegarde du paramètre
                 "alea_circulation": alea_circul / 100,
                 "optimiser_reliquats_tournees": opt_reliquats,

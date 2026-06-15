@@ -72,10 +72,8 @@ def construire_excel(resultats_par_jour, params_logistique=None):
     wb = Workbook()
     jours = list(resultats_par_jour.keys())
     total_non_servis = sum(len(r.get("non_servis", [])) for r in resultats_par_jour.values())
-    total_anomalies = sum(r.get("audit", {}).get("nb_anomalies", 0)
-                          for r in resultats_par_jour.values())
 
-    _onglet_lecture(wb.active, jours, total_non_servis, total_anomalies)
+    _onglet_lecture(wb.active, jours, total_non_servis)
     _onglet_synthese_flotte(wb.create_sheet("1. Synthèse flotte"), resultats_par_jour)
     _onglet_synthese_chauffeurs(wb.create_sheet("2. Synthèse chauffeurs"), resultats_par_jour)
     _onglet_tournees(wb.create_sheet("3. Tournées véhicules"), resultats_par_jour)
@@ -93,7 +91,7 @@ def construire_excel(resultats_par_jour, params_logistique=None):
 
 
 # --------------------------------------------------------------- 0. Lecture
-def _onglet_lecture(ws, jours, total_non_servis, total_anomalies=0):
+def _onglet_lecture(ws, jours, total_non_servis):
     ws.title = "0. Lecture"
     _titre(ws, "Dimensionnement transport — CHU de Nantes")
     lignes = [
@@ -105,14 +103,13 @@ def _onglet_lecture(ws, jours, total_non_servis, total_anomalies=0):
     for i, t in enumerate(lignes, 1):
         ws.cell(row=2 + i, column=1, value=t)
     r = 2 + len(lignes) + 1
-    if total_non_servis == 0 and total_anomalies == 0:
+    if total_non_servis == 0:
         c = ws.cell(row=r, column=1,
                     value="✓ Solution VALIDE : tous les flux du périmètre sont planifiés.")
         c.fill = _FILL_OK; c.font = Font(bold=True)
     else:
         c = ws.cell(row=r, column=1,
-                    value=f"✗ Solution NON VALIDE : {total_non_servis} flux non servi(s), "
-                          f"{total_anomalies} anomalie(s) technique(s). "
+                    value=f"✗ Solution NON VALIDE : {total_non_servis} flux non servi(s). "
                           f"Voir l'onglet « 7. Flux NON servis » : chaque ligne indique la "
                           f"CONTRAINTE BLOQUANTE et, si c'est un paramètre réglable, comment la lever.")
         c.fill = _FILL_ALERTE; c.font = Font(bold=True, color="FFFFFF")
@@ -343,11 +340,10 @@ def _onglet_controles(ws, res, params):
 
     for jour in res:
         postes = res[jour]["postes"]
-        audit = res[jour].get("audit", {})
         # amplitude
-        invalides = [p.id for p in postes if abs(p.amplitude - amplitude) > 1e-6]
-        ligne(jour, f"Amplitude des postes = {amplitude:.0f} min", not invalides,
-              "Tous conformes" if not invalides else f"Non conformes : {', '.join(invalides)}")
+        depass = [p.id for p in postes if p.amplitude > amplitude + 1e-6]
+        ligne(jour, f"Amplitude des postes ≤ {amplitude:.0f} min", not depass,
+              "Tous conformes" if not depass else f"Dépassements : {', '.join(depass)}")
         # pause
         sans_pause = [p.id for p in postes
                       if sum(e.duree for e in p.etapes if e.type == "PAUSE") + 1e-6 < pause_req]
@@ -378,12 +374,6 @@ def _onglet_controles(ws, res, params):
         ns = res[jour].get("non_servis", [])
         ligne(jour, "Flux non servis", not ns,
               "Aucun" if not ns else f"{len(ns)} flux — voir onglet 7")
-        ligne(jour, "Capacité maximale des véhicules respectée",
-              not any("occupation véhicule" in a for a in audit.get("anomalies", [])),
-              f"Maximum paramétré : {audit.get('taux_occupation_max_vehicule', 0):.0%}")
-        ligne(jour, "Audit technique final", audit.get("nb_anomalies", 0) == 0,
-              "Aucune anomalie" if audit.get("nb_anomalies", 0) == 0
-              else " | ".join(audit.get("anomalies", [])))
     _largeurs(ws, [10, 38, 14, 70])
 
 
@@ -406,8 +396,6 @@ def _onglet_indicateurs(ws, res):
         ("Taux de km à vide (%)", "taux_km_vide"),
         ("Taux chargé / roulage (%)", "taux_charge_global"),
         ("Occupation moyenne (%)", "occupation_moyenne"),
-        ("Postes occupés à moins de 80 %", "nb_postes_sous_80"),
-        ("Solution valide", "solution_valide"),
         ("Pic véhicules à quai", "pic_quais"),
         ("Temps de calcul (s)", "temps_calcul_s"),
     ]
